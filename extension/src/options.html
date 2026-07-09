@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Boss Find 设置与诊断</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div>
+          <h1>Boss Find 设置与诊断</h1>
+          <p>主弹窗只保留采集操作；后端配置、任务队列、采集质量、异常事件和待补 JD 放在这里集中查看。</p>
+        </div>
+        <button id="refreshDiagnostics" type="button">刷新诊断</button>
+      </header>
+
+      <section class="layout">
+        <section class="card">
+          <div class="card-title">
+            <h2>同步配置</h2>
+            <span id="status" class="status"></span>
+          </div>
+          <label class="checkbox-row">
+            <input id="autoSync" type="checkbox">
+            <span>采集后自动同步到后端</span>
+          </label>
+          <label>
+            <span>后端地址</span>
+            <input id="backendUrl" type="url" spellcheck="false">
+          </label>
+          <label>
+            <span>同步路径</span>
+            <input id="syncPath" type="text" spellcheck="false">
+          </label>
+          <label>
+            <span>Bearer Token</span>
+            <input id="token" type="password" spellcheck="false">
+          </label>
+          <div class="grid">
+            <label>
+              <span>最大本地缓存岗位数</span>
+              <input id="maxCachedJobs" type="number" min="50" max="2000" step="50">
+            </label>
+            <label>
+              <span>最多补齐岗位</span>
+              <input id="crawlMaxJobs" type="number" min="1" max="100" step="1">
+            </label>
+            <label>
+              <span>自动点击间隔(ms)</span>
+              <input id="crawlDelayMs" type="number" min="800" max="8000" step="100">
+            </label>
+          </div>
+          <button id="save" class="primary" type="button">保存设置</button>
+        </section>
+
+        <section class="card">
+          <div class="card-title">
+            <h2>浏览器任务</h2>
+            <span id="browserTaskFailures" class="status">暂无失败任务</span>
+          </div>
+          <div class="metric-grid">
+            <div><strong id="browserTaskQueued">0</strong><span>待处理</span></div>
+            <div><strong id="browserTaskRunning">0</strong><span>执行中</span></div>
+            <div><strong id="browserTaskSucceeded">0</strong><span>成功</span></div>
+            <div><strong id="browserTaskFailed">0</strong><span>失败</span></div>
+          </div>
+          <div id="browserTaskRecent" class="list compact-list">暂无任务记录</div>
+        </section>
+
+        <section class="card">
+          <div class="card-title">
+            <h2>当前页队列治理</h2>
+            <span id="currentPageTaskStatus" class="status">尚未记录 BOSS 页面</span>
+          </div>
+          <p id="currentPageUrl" class="note">从弹窗打开或采集过 BOSS 页面后，这里会按最近页面过滤任务。</p>
+          <div class="metric-grid">
+            <div><strong id="currentPageQueued">0</strong><span>待处理</span></div>
+            <div><strong id="currentPageRunning">0</strong><span>执行中</span></div>
+            <div><strong id="currentPageFailed">0</strong><span>失败</span></div>
+            <div><strong id="currentPageCanceled">0</strong><span>已取消</span></div>
+          </div>
+          <div class="button-row">
+            <button id="requeueCurrentPage" class="secondary" type="button">恢复当前页失败任务</button>
+            <button id="cancelCurrentPage" class="danger" type="button">取消当前页待处理任务</button>
+          </div>
+          <div id="currentPageTaskRecent" class="list compact-list">暂无当前页任务</div>
+        </section>
+
+        <section class="card">
+          <div class="card-title">
+            <h2>采集质量</h2>
+            <span id="qualityStatus" class="status">尚未读取质量报告</span>
+          </div>
+          <div class="metric-grid three">
+            <div><strong id="qualityDescriptionCoverage">--</strong><span>JD 覆盖</span></div>
+            <div><strong id="qualityRequiredCoverage">--</strong><span>字段完整</span></div>
+            <div><strong id="qualityInvalidJobs">--</strong><span>无效项</span></div>
+          </div>
+          <div id="qualityEvents" class="note">无异常摘要</div>
+        </section>
+
+        <section class="card wide">
+          <div class="card-title">
+            <h2>岗位筛选</h2>
+            <span id="screeningStatus" class="status">尚未读取筛选数据</span>
+          </div>
+          <div class="metric-grid three">
+            <div><strong id="screeningCandidateCount">--</strong><span>待筛选</span></div>
+            <div><strong id="screeningResultCount">--</strong><span>已筛选</span></div>
+            <div><strong id="agentRunCount">--</strong><span>Agent 运行</span></div>
+          </div>
+          <div class="button-row">
+            <button id="refreshScreening" class="secondary" type="button">刷新筛选</button>
+            <button id="runRulesBatchScreening" class="primary" type="button">规则批量筛选</button>
+          </div>
+          <div class="risk-gate-panel">
+            <label class="checkbox-row">
+              <input id="riskGateEnabled" type="checkbox">
+              <span>启用 JD 风险门禁</span>
+            </label>
+            <label>
+              <span>不想去的方向</span>
+              <input id="excludedDirections" type="text" spellcheck="false" placeholder="销售、直播、保险">
+            </label>
+            <div class="button-row">
+              <button id="runRiskGateRescreen" class="secondary" type="button">按新风险规则重筛</button>
+            </div>
+            <p class="note">命中高风险方向的岗位会直接跳过，不再计算岗位适配分。</p>
+          </div>
+          <div class="screening-grid">
+            <div>
+              <div class="list-heading">待筛选候选</div>
+              <div id="screeningCandidates" class="list compact-list">暂无待筛选岗位</div>
+            </div>
+            <div>
+              <div class="list-heading">最近筛选结果</div>
+              <div id="screeningResults" class="list compact-list">暂无筛选结果</div>
+            </div>
+            <div>
+              <div class="list-heading">最近 Agent 运行</div>
+              <div id="agentRuns" class="list compact-list">暂无运行记录</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card wide">
+          <div class="card-title">
+            <h2>ProfileAgent 职业经历上下文</h2>
+            <span id="careerContextStatus" class="status">尚未读取职业经历上下文</span>
+          </div>
+          <p class="note">用于把已上传简历、已确认经历和待追问信息整理为本地 `career_agent_context.md`；不会确认待定事实，也不会触发 BOSS 页面动作。</p>
+          <div class="metric-grid three">
+            <div><strong id="careerContextExists">--</strong><span>文件状态</span></div>
+            <div><strong id="careerContextBytes">--</strong><span>字节</span></div>
+            <div><strong id="careerContextQuestionCount">--</strong><span>待追问</span></div>
+          </div>
+          <div class="button-row">
+            <button id="refreshCareerContext" class="secondary" type="button">刷新上下文</button>
+            <button id="generateCareerContext" class="primary" type="button">生成 career_agent_context.md</button>
+            <button id="generateCareerContextWithAnswers" class="secondary" type="button">带回答重新生成</button>
+          </div>
+          <div class="detail-grid career-context-grid">
+            <section>
+              <div class="list-heading">文件与运行结果</div>
+              <div id="careerContextMeta" class="detail-section">暂无文件信息</div>
+            </section>
+            <section>
+              <div class="list-heading">待追问问题</div>
+              <div id="careerContextQuestions" class="detail-section">暂无待追问问题</div>
+            </section>
+          </div>
+          <div class="detail-panel">
+            <div class="card-title">
+              <h3>ProfileAgent 追问回答</h3>
+              <span id="careerContextAnswerStatus" class="status">回答只用于重新生成上下文，不会确认事实库</span>
+            </div>
+            <div id="careerContextAnswerForm" class="answer-form">暂无可回答问题</div>
+          </div>
+          <div class="detail-panel">
+            <div class="card-title">
+              <h3>待确认事实草稿</h3>
+              <span id="profileFactDraftStatus" class="status">回答可生成待确认草稿，确认后才进入事实库</span>
+            </div>
+            <div class="button-row">
+              <button id="generateProfileFactDrafts" class="secondary" type="button">用当前回答生成事实草稿</button>
+              <button id="refreshProfileFactDrafts" class="secondary" type="button">刷新待确认草稿</button>
+              <button id="regenerateCareerContextAfterFacts" class="secondary" type="button">事实变更后重新生成上下文</button>
+            </div>
+            <p id="careerContextFreshnessStatus" class="note">确认或拒绝事实草稿后，建议重新生成职业上下文。</p>
+            <div id="profileFactDrafts" class="list compact-list">暂无待确认事实草稿</div>
+          </div>
+          <pre id="careerContextPreview" class="preview career-context-preview">暂无 career_agent_context.md</pre>
+        </section>
+
+        <section class="card wide">
+          <div class="card-title">
+            <h2>简历定制与审核</h2>
+            <span id="resumeStatus" class="status">尚未读取简历数据</span>
+          </div>
+          <p class="note">这里仅生成本地 DOCX 草稿并写入审核记录；不会上传简历、打招呼或投递。</p>
+          <div class="metric-grid three">
+            <div><strong id="resumeCandidateCount">--</strong><span>可定制</span></div>
+            <div><strong id="resumeVersionCount">--</strong><span>简历版本</span></div>
+            <div><strong id="resumeAuditCount">--</strong><span>审核记录</span></div>
+            <div><strong id="resumeFitEvaluationCount">--</strong><span>Fit checks</span></div>
+            <div><strong id="resumeClaimVerificationCount">--</strong><span>Claim checks</span></div>
+          </div>
+          <div class="button-row">
+            <button id="refreshResume" class="secondary" type="button">刷新简历</button>
+            <button id="runSelectedResumeWorkflow" class="primary" type="button">一键跑简历闭环</button>
+            <button id="prepareRulesResume" class="primary" type="button">规则生成简历</button>
+            <button id="evaluateResumeFit" class="secondary" type="button">Evaluate JD fit</button>
+            <button id="verifyResumeClaims" class="secondary" type="button">Verify claims</button>
+            <button id="reviseResumeFromChecks" class="secondary" type="button">Revise from checks</button>
+            <button id="auditRulesResume" class="secondary" type="button">规则审核草稿</button>
+          </div>
+          <div class="diagnostic-grid">
+            <div>
+              <div class="list-heading">可定制候选</div>
+              <div id="resumeCandidates" class="list compact-list">暂无可定制岗位</div>
+            </div>
+            <div>
+              <div class="list-heading">最近简历版本</div>
+              <div id="resumeVersions" class="list compact-list">暂无简历版本</div>
+            </div>
+            <div>
+              <div class="list-heading">最近审核记录</div>
+              <div id="resumeAudits" class="list compact-list">暂无审核记录</div>
+            </div>
+            <div>
+              <div class="list-heading">Recent JD fit checks</div>
+              <div id="resumeFitEvaluations" class="list compact-list">No fit evaluations</div>
+            </div>
+            <div>
+              <div class="list-heading">Recent claim checks</div>
+              <div id="resumeClaimVerifications" class="list compact-list">No claim verifications</div>
+            </div>
+          </div>
+          <div class="detail-panel" id="resumeDetailPanel">
+            <div class="card-title">
+              <h3 id="resumeDetailTitle">简历详情</h3>
+              <span id="resumeDetailStatus" class="status">选择简历版本查看详情</span>
+            </div>
+            <div class="button-row">
+              <button id="toggleResumeEditor" class="secondary" type="button">编辑当前简历</button>
+              <button id="saveResumeRevision" class="primary" type="button" disabled>保存为新版本</button>
+              <button id="approveResumeLocal" class="secondary" type="button" disabled>本地审批通过</button>
+            </div>
+            <div id="resumeEditor" class="editor-panel" hidden>
+              <div class="editor-grid">
+                <label>
+                  <span>求职摘要</span>
+                  <textarea id="resumeEditSummary" rows="5" spellcheck="true"></textarea>
+                </label>
+                <label>
+                  <span>技能，逗号或换行分隔</span>
+                  <textarea id="resumeEditSkills" rows="5" spellcheck="false"></textarea>
+                </label>
+                <label>
+                  <span>项目/经历要点，每行一条，空行分隔不同项目</span>
+                  <textarea id="resumeEditProjects" rows="8" spellcheck="true"></textarea>
+                </label>
+                <label>
+                  <span>奖项/证书，每行一条</span>
+                  <textarea id="resumeEditAwards" rows="5" spellcheck="true"></textarea>
+                </label>
+              </div>
+              <label>
+                <span>编辑原因</span>
+                <input id="resumeEditReason" type="text" spellcheck="true" placeholder="例如：压缩摘要，突出项目成果">
+              </label>
+              <p class="note">保存会创建新的简历版本并重新渲染本地 DOCX，不覆盖旧版本；证据映射沿用原版本，不能在这里新增无证据经历。</p>
+            </div>
+            <div class="detail-grid">
+              <section>
+                <div class="list-heading">简历字段</div>
+                <div id="resumeFieldPreview" class="detail-section">暂无简历字段</div>
+              </section>
+              <section>
+                <div class="list-heading">修改摘要</div>
+                <div id="resumeDiffSummary" class="detail-section">暂无修改摘要</div>
+              </section>
+              <section>
+                <div class="list-heading">证据映射</div>
+                <div id="resumeSourceMapping" class="detail-section compact-list">暂无证据映射</div>
+              </section>
+              <section>
+                <div class="list-heading">审核风险</div>
+                <div id="resumeAuditRisk" class="detail-section">暂无审核记录</div>
+              </section>
+              <section>
+                <div class="list-heading">JD fit evaluation</div>
+                <div id="resumeFitDetail" class="detail-section">No fit evaluation</div>
+              </section>
+              <section>
+                <div class="list-heading">Claim verification</div>
+                <div id="resumeClaimDetail" class="detail-section">No claim verification</div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="card wide">
+          <div class="card-title">
+            <h2>打招呼 dry-run</h2>
+            <span id="greetingStatus" class="status">尚未读取打招呼草稿</span>
+          </div>
+          <p class="note">这里只生成待确认的打招呼文本，并创建 `SEND_GREETING` dry-run 任务；不会在 BOSS 页面发送。</p>
+          <div class="button-row">
+            <button id="refreshGreeting" class="secondary" type="button">刷新草稿</button>
+            <button id="prepareGreetingDryRun" class="primary" type="button">生成打招呼 dry-run</button>
+          </div>
+          <div class="diagnostic-grid two">
+            <div>
+              <div class="list-heading">最近草稿</div>
+              <div id="greetingMessages" class="list compact-list">暂无打招呼草稿</div>
+            </div>
+            <div>
+              <div class="list-heading">dry-run 任务</div>
+              <div id="greetingTasks" class="list compact-list">暂无 SEND_GREETING 任务</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-title">
+            <h2>最近异常</h2>
+            <span id="recentEventCount" class="badge">0</span>
+          </div>
+          <div id="recentEvents" class="list">暂无异常事件</div>
+        </section>
+
+        <section class="card">
+          <div class="card-title">
+            <h2>待补 JD</h2>
+            <span id="missingDescriptionCount" class="badge">0</span>
+          </div>
+          <p class="note">这里是数据库缺 JD 提示；BOSS 页面实际加载到对应岗位后才可自动补齐。</p>
+          <div id="missingDescriptions" class="list">暂无待补岗位</div>
+        </section>
+
+        <section class="card wide">
+          <div class="card-title">
+            <h2>Workflow progress</h2>
+            <span id="workflowStatus" class="status">Not loaded</span>
+          </div>
+          <div class="metric-grid three">
+            <div><strong id="workflowOpenErrorCount">--</strong><span>Open errors</span></div>
+            <div><strong id="workflowEventCount">--</strong><span>Recent events</span></div>
+            <div><strong id="workflowTimelineApplicationId">--</strong><span>Timeline app</span></div>
+          </div>
+          <div class="button-row">
+            <button id="refreshWorkflow" class="secondary" type="button">Refresh workflow logs</button>
+          </div>
+          <div class="workflow-grid">
+            <div>
+              <div class="list-heading">Open workflow errors</div>
+              <div id="workflowErrors" class="list compact-list">No open workflow errors</div>
+            </div>
+            <div>
+              <div class="list-heading">Recent workflow events</div>
+              <div id="workflowEvents" class="list compact-list">No workflow events</div>
+            </div>
+          </div>
+          <div class="detail-panel">
+            <div class="card-title">
+              <h3>Application timeline</h3>
+              <span id="workflowTimelineStatus" class="status">Select an application event to inspect the timeline</span>
+            </div>
+            <div id="workflowTimeline" class="list timeline-list">No timeline loaded</div>
+          </div>
+        </section>
+
+        <section class="card wide">
+          <div class="card-title">
+            <h2>最近采集</h2>
+            <button id="clearCache" class="secondary" type="button">清空缓存</button>
+          </div>
+          <pre id="preview" class="preview">暂无数据</pre>
+        </section>
+      </section>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Resume to Word"
+  short_description: "Turn career context and a JD into a two-page Word resume."
+  default_prompt: "Generate a JD-tailored Word resume from my career context, prioritizing education, internships, and project evidence."

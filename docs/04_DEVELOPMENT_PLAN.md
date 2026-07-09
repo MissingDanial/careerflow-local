@@ -1,0 +1,1424 @@
+# JoB_Find 分阶段开发计划
+
+本文是当前项目的主开发路线图。最新决策：在继续数据库、Agent、简历生成之前，先完成 BOSS 浏览器执行层的技术选型 POC。原因是项目最大不确定性不在数据库和 Agent，而在 BOSS 登录态、页面交互、打招呼、沟通解锁、简历投递这些浏览器执行问题。
+
+截至 2026-07-05，M1 已经收敛出主路径：Chrome Extension 是 BOSS 主执行器；Firecrawl 降级为 scrape-only 辅助候选；LocalPlaywright 不作为主执行器，只保留为后续用户确认后的文件上传/投递入口实验候选。
+
+## 0. 开发原则
+
+- 先验证 BOSS 浏览器执行器，再投入业务层实现。
+- 后端工作流和 Agent 层不要绑定某一个浏览器执行框架。
+- BOSS 层通过 `BrowserExecutor` 抽象承载，下面可以挂多个 adapter。
+- Chrome Extension 作为 BOSS 主执行器，依赖用户正常浏览器登录态和内容脚本读取可见页面。
+- Firecrawl 仅作为 scrape-only 辅助候选，不承载 BOSS 主交互。
+- Local Playwright 不作为 BOSS 主执行器；后续只在用户确认的文件上传/投递入口实验中评估。
+- Agent 输出必须结构化、可校验、可回放。
+- 自动投递默认关闭；任何真实对外动作都必须可审计、可停止。
+- 遇到验证码、登录失效、页面风控或选择器失效时暂停，不绕过。
+
+## 1. 当前基线
+
+当前已经存在：
+
+- Chrome Manifest V3 插件：`extension/`
+- Node 本地后端：`server/`
+- 岗位采集、自动打开详情补齐 JD、自动同步后端
+- SQLite 本地库：`server/data/boss_find.sqlite3`
+- 文档体系：PRD、架构、Agent workflow、BOSS 平台逻辑
+
+当前不足：
+
+- Chrome Extension 还需要更严格过滤非岗位入口，例如 `/gongsi/` 公司页。
+- application 状态机、browser_tasks 队列和 ScreeningAgent 最小闭环已落地，但还没有 ResumeAgent/AuditAgent 编排。
+- 简历原文抽取和事实草稿已落地，但还没有完整 ProfileAgent 追问 UI。
+- 没有简历版本管理。
+- 没有打招呼、沟通状态、投递解锁和投递执行闭环。
+
+## 2. 阶段总览
+
+| 阶段 | 名称 | 目标 |
+|---|---|---|
+| M0 | 文档和边界收敛 | 清理无效文档，明确当前架构和路线图 |
+| M1 | BrowserExecutor 技术选型 POC | 已收敛：Chrome Extension 承担 BOSS 主执行器 |
+| M2 | SQLite 本地入库 | 在执行器路线明确后，建立岗位资料库 |
+| M3 | BOSS 采集质量闭环 | 基于选定执行器稳定列表、详情、搜索上下文、去重和诊断 |
+| M4 | 工作流状态机 | 建立 applications、browser_tasks、browser_events |
+| M5 | 用户画像与真实经历库 | 上传简历、解析、补全经历库和边界 |
+| M6 | Agent 岗位筛选 | 根据岗位、公司、用户规则输出评分和 shortlist |
+| M7 | 简历定制与审核 | 生成岗位版简历，独立审核真实性和风险 |
+| M8 | 打招呼与沟通解锁 POC | 验证 Firecrawl 或 fallback 是否能低人工介入完成沟通动作 |
+| M9 | 投递执行 POC 与复盘 | 验证投递入口、简历上传/选择、投递结果记录 |
+
+## 3. M0 文档和边界收敛
+
+### 目标
+
+把项目从“临时采集插件”收敛为“本地求职工作流系统”的清晰路线，并明确技术选型 POC 前置。
+
+### 交付物
+
+- README 项目入口。
+- PRD、技术架构、Agent workflow、BOSS 平台逻辑文档。
+- 当前开发计划。
+- 删除重复、过时、和当前代码严重冲突的文档。
+
+### 验收标准
+
+- 新读者能从 README 理解当前能运行什么、未来要做什么。
+- 文档不再同时推荐互相冲突的 MVP 路线。
+- BOSS 层约束有独立文档承载。
+- 开发计划明确 M1 先做 BrowserExecutor 技术选型。
+
+## 4. M1 BrowserExecutor 技术选型 POC
+
+### 目标
+
+在真实或准真实 BOSS 场景中验证浏览器执行层可行性，决定后续 M2/M8/M9 的主执行器。不要在这个阶段先做 SQLite、Agent 或简历生成。
+
+### 候选执行器
+
+```text
+BrowserExecutor
+  |-- FirecrawlAdapter       优先验证
+  |-- ChromeExtensionAdapter 当前原型和 fallback
+  `-- LocalPlaywrightAdapter 文件上传/复杂动作兜底
+```
+
+### POC 任务
+
+#### POC-1 登录态与 profile
+
+验证 Firecrawl 是否能：
+
+- 打开 BOSS 登录页或已登录页。
+- 通过 persistent profile 保存 cookies/localStorage/session。
+- 在后续任务中复用登录态。
+- 遇到登录失效时返回明确状态，而不是静默失败。
+
+验收：
+
+- 能复用登录态打开 BOSS 搜索页。
+- 失败时能判断 `LOGIN_REQUIRED` 或 `CAPTCHA_REQUIRED`。
+
+#### POC-2 M2 岗位和 JD 获取
+
+验证 Firecrawl 是否能：
+
+- 打开指定搜索页。
+- 等待列表渲染。
+- 读取岗位卡片。
+- 逐个打开详情或点击列表项。
+- 抽取完整 JD。
+- 输出结构化 JSON。
+
+验收：
+
+- 一次任务至少获取 10 个有效岗位。
+- 至少 8 个岗位有完整或可用 JD。
+- 任务输出包含 title、company、salary、location、detail_url、description。
+- 失败项有明确原因。
+
+#### POC-3 M7 打招呼动作
+
+验证 Firecrawl 是否能：
+
+- 打开岗位详情或聊天入口。
+- 定位打招呼输入/按钮。
+- 填入由后端提供的 greeting 文本。
+- 在“发送前”停住或以 dry-run 模式验证按钮状态。
+- 在用户明确允许时执行发送并返回页面结果。
+
+验收：
+
+- 能稳定定位打招呼入口。
+- 能填入文本。
+- 默认不自动发送。
+- 发送动作有明确用户授权开关。
+
+#### POC-4 M8/M9 投递入口与文件上传
+
+验证 Firecrawl 是否能：
+
+- 检测是否已解锁简历投递。
+- 找到投递/上传/选择简历入口。
+- 判断 BOSS 在线简历、附件简历、上传文件三种路径。
+- 验证能否上传本地生成的 DOCX/PDF。
+
+验收：
+
+- 能判断 `RESUME_LOCKED` 或 `RESUME_UNLOCKED`。
+- 能定位投递入口。
+- 文件上传路径必须 POC 成功后才能把 Firecrawl 作为 M9 主执行器。
+- 如果文件上传不稳定，M9 使用 LocalPlaywrightAdapter。
+
+### M1 交付物
+
+- `docs/07_BROWSER_EXECUTOR_POC.md`
+- `docs/08_FIRECRAWL_DECISION.md`
+- 最小 `BrowserExecutor` 接口草案：`server/src/browser-executor/types.js`。
+- FirecrawlAdapter POC 脚本：`server/src/browser-executor/firecrawl-adapter.js`、`server/src/browser-executor/firecrawl-tasks.js`、`scripts/m1-firecrawl-poc.js`。
+- POC 结果记录：成功、失败、阻塞点、下一步决策。
+
+### M1 决策门
+
+M1 结束必须给出明确决策：
+
+| 决策 | 条件 | 后续 |
+|---|---|---|
+| Firecrawl 主执行器 | POC-1/2/3 成功，POC-4 可行或有清晰路径 | M3/M8/M9 优先 FirecrawlAdapter |
+| Firecrawl + LocalPlaywright 混合 | M2/M7 成功，文件上传或投递不稳定 | M3/M8 Firecrawl，M9 LocalPlaywright |
+| Chrome Extension 主执行器 | Firecrawl 登录态或风控不可接受 | 强化现有 Extension |
+| LocalPlaywright 主执行器 | Firecrawl hosted/self-host 不适合，但本地自动化可行 | 建 LocalPlaywrightAdapter |
+
+### M1 当前阶段性结论
+
+截至当前 POC：
+
+- Firecrawl API key 已配置成功。
+- Firecrawl profile 持久化自检通过，证明 Firecrawl profile 和 interact 基础链路可用。
+- Firecrawl scrape-only 对 `m.zhipin.com` 可返回可读 markdown，说明普通内容抓取能力存在。
+- 但 BOSS profile-check / interact 路径出现 `ERR_ABORTED` 或最终落到 `about:blank`，尚不能证明 Firecrawl 能承载 BOSS 登录态、点击详情、打招呼和投递入口检测。
+- Firecrawl profile 同时写入会有 writer lock，后续 Firecrawl 辅助任务必须串行。
+- LocalPlaywright POC 能检测到本机 Edge 并打开受控浏览器，但 BOSS 将受控 profile 引导到登录/安全验证页。
+- 用户完成登录后，受控浏览器出现登录界面失效、浏览器闪烁并自动关闭的现象；这被视为 BOSS 风控或受控浏览器不稳定信号，M1 不再继续把 LocalPlaywright 作为主执行器推进。
+- Chrome Extension 已经从真实 BOSS 页面同步出 33 条岗位，其中 15 条带可用 JD、30 条符合岗位形态，满足 M1 采集和 JD 阈值。
+
+当前决策：
+
+```text
+Firecrawl = scrape-only 辅助候选
+ChromeExtensionAdapter = BOSS 主执行器
+LocalPlaywrightAdapter = 后续文件上传/投递入口实验候选，不走 M1 主路径
+```
+
+除非后续 Firecrawl 能在 BOSS profile-check 上读到真实岗位页面并稳定执行 interact，否则不要把 Firecrawl 作为 BOSS 主执行器。
+
+M1 收尾命令：
+
+```powershell
+npm run poc:firecrawl:report
+npm run poc:local:report
+npm run poc:extension:report
+```
+
+预期结论：
+
+- `poc:firecrawl:report` 输出 `scrape_only_candidate`。
+- `poc:local:report` 输出 `local_playwright_not_primary_candidate`。
+- `poc:extension:report` 输出 `chrome_extension_primary_candidate`。
+
+### M1 停止线
+
+- 不做验证码绕过。
+- 不绕过登录。
+- 不做反检测、指纹伪装或隐藏请求重放。
+- 不在未确认前真实发送打招呼或投递。
+- 不为 POC 大规模触发 BOSS 动作。
+
+## 5. M2 SQLite 本地入库
+
+### 目标
+
+将当前 `server/data/jobs.json` 升级为 SQLite 本地数据库，为后续状态机和 Agent 层提供稳定数据基础。
+
+当前实现采用 Node.js `node:sqlite` 的 `DatabaseSync`，避免在 Windows 本地原型阶段引入 `better-sqlite3`/`sqlite3` 的 native 安装和编译成本。Node 当前仍会输出 ExperimentalWarning，后续如果要发布给更多用户，可以再切换到 `better-sqlite3` 或封装兼容层。
+
+### 交付物
+
+- SQLite 数据文件：`server/data/boss_find.sqlite3`。
+- 数据库初始化逻辑：`server/src/sqlite-store.js`。
+- `POST /api/jobs/sync` 已改为 upsert 到 SQLite。
+- 保留 `GET /api/jobs` 和 `GET /api/jobs.csv`。
+- 新增 `GET /api/stats`。
+- 首次启动会从旧 `jobs.json` 导入历史数据，并过滤非岗位入口。
+
+### 建议表
+
+- `capture_batches`：已实现。
+- `companies`：已实现。
+- `jobs`：已实现。
+- `job_snapshots`：已实现。
+- `job_tags`：已实现。
+- `job_welfare`：已实现。
+
+### 验收标准
+
+- 扩展同步后，岗位写入 SQLite。
+- 重复同步同一岗位不会产生重复主记录。
+- JD 更完整时能更新主记录，同时保留 snapshot。
+- CSV 导出仍可用。
+- `npm run check` 通过。
+- `npm run m2:sqlite:smoke` 通过。
+
+当前验证结果：
+
+- 旧 `server/data/jobs.json` 已导入 SQLite。
+- 主库有效岗位为 30 条，带 JD 岗位为 15 条。
+- 非岗位噪声为 0 条。
+- `job_snapshots` 已记录导入快照。
+
+## 6. M3 BOSS 采集质量闭环
+
+### 目标
+
+基于 M1 选定的执行器，让“岗位及岗位描述资料获取”稳定可诊断，达到 Agent 可用的数据质量。
+
+### 交付物
+
+- 采集批次上下文：城市、关键词、岗位类型、搜索 URL。
+- 列表采集字段质量统计。
+- 自动详情补齐任务结果统计。
+- selector diagnostics 或执行器 diagnostics。
+- 无效岗位过滤和重复 URL 归一化。
+
+当前已实现：
+
+- 扩展同步 payload 携带 `pages[*].diagnostics`、`selectorCounts`、`searchContext` 和页面登录/验证码状态。
+- SQLite 新增 `capture_quality`，记录每批 `validJobs`、`describedJobs`、`descriptionCoverage`、`requiredFieldCoverage`、缺失字段统计和 selector counts。
+- SQLite 新增 `browser_events`，记录 `LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`SELECTOR_CHANGED` 等浏览器侧事件。
+- 后端新增 `GET /api/quality`。
+- 后端新增 `GET /api/events`，可按时间倒序读取最近浏览器异常事件。
+- 后端新增 `GET /api/jobs/missing-descriptions`，形成 description 不足岗位的只读待补 JD 队列。
+- 后端新增 `GET /api/jobs/keys`，返回已入库岗位 key；扩展启动自动补齐前会合并后端已完成 JD key 和本地缓存 key，减少刷新 BOSS 页面后的重复点击。
+- 验证脚本：`npm run m3:quality:smoke`。
+- 扩展设置详细页新增“采集质量”面板，展示 JD 覆盖率、字段完整率、无效项、异常摘要、最近异常事件列表和待补 JD 岗位预览；popup 只保留主操作和简要状态。
+- 自动补齐描述改为可续跑逻辑：从扩展缓存读取已有 JD 岗位，跳过已补齐和本次已尝试岗位，并在 BOSS 列表没有新目标时滚动触发懒加载。
+- 自动补齐弹窗新增过程诊断：显示可见岗位、待点击目标、已跳过数量、滚动次数、最后动作和最后处理岗位，用于定位 BOSS 懒加载停滞、重复跳过或详情采集失败。
+- 自动补齐新增阻塞态：检测到登录失效、验证码/安全验证或疑似选择器漂移时暂停任务，标记 blocked/blockingReason，并交给用户处理，不继续滚动或点击。
+- 验证脚本：`npm run m3:popup:smoke`。
+- 验证脚本：`npm run m3:events:smoke`。
+- 验证脚本：`npm run m3:missing:smoke`。
+- 验证脚本：`npm run m3:autocrawl:smoke`。
+- 验证脚本：`npm run m3:keys:smoke`。
+
+### 验收标准
+
+- 当前 BOSS 搜索条件下可采集至少 10 条有效岗位。
+- 每条有效岗位尽量包含 title、company、salary、location、detail_url。
+- 自动补齐后，目标岗位有 description；重复点击自动补齐时不会回到第一个已补齐岗位重跑。
+- 选择器或交互失败时后端能看到诊断事件。
+- 数据库中 description 不足的岗位能形成待补 JD 队列，供下一步补齐任务使用。
+- 不执行真实打招呼、上传简历、投递动作。
+
+当前真实库基线：
+
+- 有效岗位 30 条。
+- 带 JD 岗位 15 条。
+- JD 覆盖率 50%。
+- 必需字段覆盖率 100%。
+- 非岗位噪声 0 条。
+
+## 7. M4 工作流状态机
+
+### 目标
+
+把岗位从“数据库记录”升级为“可推进的求职工作流”。
+
+### 交付物
+
+- `applications` 表。
+- `application_events` 表。
+- `browser_tasks` 表。
+- `browser_events` 表。
+- 状态转移服务。
+- 调试接口。
+
+当前已实现的最小切片：
+
+- SQLite 新增 `applications` 与 `application_events`。
+- 岗位同步时自动创建 application。
+- 无完整 JD 的岗位进入 `LIST_CAPTURED`，补齐 JD 后推进到 `DETAIL_CAPTURED`。
+- 后端新增 `GET /api/applications` 与 `GET /api/application-events`。
+- 后端新增 `POST /api/applications/:id/transition`，所有后续 Agent 和浏览器任务都应通过受控状态转移推进 application，不直接改表。
+- 验证脚本：`npm run m4:applications:smoke`。
+- SQLite 新增 `browser_tasks`，用于记录发送给 Chrome Extension/BrowserExecutor 的任务意图和执行结果。
+- 后端新增 `GET /api/browser-tasks`、`POST /api/browser-tasks`、`GET /api/browser-tasks/:id`、`POST /api/browser-tasks/:id/transition`。
+- 后端新增 `POST /api/browser-tasks/claim`，原子领取一个 `QUEUED` 任务并推进到 `RUNNING`，避免扩展重复处理同一任务。
+- 浏览器任务状态先收敛为 `QUEUED`、`RUNNING`、`SUCCEEDED`、`FAILED`、`CANCELED`；任务类型先覆盖 `CAPTURE_DETAIL`、`SEND_GREETING`、`REFRESH_CONVERSATION`、`CHECK_RESUME_UNLOCK`、`UPLOAD_RESUME`、`SUBMIT_APPLICATION`。
+- Chrome Extension popup 收敛为“开始岗位信息采集 / 暂停 / 重试”三个主操作；“开始”和“重试”把当前页采集、同步、入队和当前页 `CAPTURE_DETAIL` 队列处理串成一个用户触发动作。
+- 原有任务诊断、采集质量、最近异常、待补 JD 和最近采集预览迁移到设置详细页。
+- `POST /api/browser-tasks/claim` 支持按 `sourceUrl/pageUrl` 过滤，避免当前页面误领取其它 BOSS 页面或历史页面生成的任务。
+- 后端创建任务时会尝试用 payload 的 `jobId/detailUrl/sourceKey` 自动绑定 application，并跳过同一 application + taskType 下仍处于 `QUEUED/RUNNING` 的重复任务。
+- 后端新增 `GET /api/browser-tasks/diagnostics`，汇总任务 `QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELED` 计数、失败原因分布、最近任务和最近失败任务。
+- `CAPTURE_DETAIL` 失败会带结构化 `errorCode`，当前覆盖 `LOGIN_REQUIRED`、`SECURITY_CHECK`、`SELECTOR_CHANGED`、`JOB_NOT_VISIBLE`、`DETAIL_EMPTY`、`TASK_PAGE_MISMATCH`、`BROWSER_TASK_FAILED`。
+- 浏览器任务 transition 到 `FAILED` 时会自动写入 `browser_events`，用于复盘 BOSS 页面层问题。
+- Chrome Extension popup 只展示任务简要状态；设置详细页展示待处理、执行中、成功、失败、最近失败原因和最近任务记录。
+- M4.6 新增当前页队列治理：`GET /api/browser-tasks` 和 `GET /api/browser-tasks/diagnostics` 支持 `sourceUrl/pageUrl` 过滤，设置详细页可以单独查看最近 BOSS 页面的待处理、执行中、失败、已取消任务。
+- M4.6 新增 `POST /api/browser-tasks/cancel` 与 `POST /api/browser-tasks/requeue`，用于显式取消当前页 `QUEUED/RUNNING` 任务、恢复当前页 `FAILED/CANCELED` 任务；该操作只改任务状态，不删除历史任务和失败结果。
+- M4.6 调整 popup “重试”语义：优先恢复当前页失败/取消的 `CAPTURE_DETAIL` 任务并继续处理；如果没有可恢复任务，再重新扫描当前可见岗位并生成新任务。
+- `SEND_GREETING`、`UPLOAD_RESUME`、`SUBMIT_APPLICATION` 等真实动作当前仍不自动执行，必须等后续 dry-run、审批和安全停止线补齐。
+- 验证脚本：`npm run m4:browser-tasks:smoke`。
+- 验证脚本：`npm run m4:extension-task:smoke`。
+- 验证脚本：`npm run m4:queue-hygiene:smoke`。
+
+### 建议状态
+
+```text
+DISCOVERED
+LIST_CAPTURED
+DETAIL_CAPTURED
+SCORED
+SHORTLISTED
+RESUME_DRAFTED
+RESUME_AUDITED
+GREETING_READY
+GREETING_SENT
+CHAT_OPENED
+RESUME_UNLOCKED
+SUBMISSION_READY
+SUBMITTED
+SKIPPED
+NEEDS_USER_REVIEW
+NEEDS_MANUAL_ACTION
+FAILED
+```
+
+### 验收标准
+
+- 新岗位导入后能自动创建或关联 application。
+- 详情补齐后状态能到 `DETAIL_CAPTURED`。
+- 错误能进入 `NEEDS_MANUAL_ACTION` 或 `FAILED`。
+- 每次状态变化可追溯。
+- 浏览器任务能入队、查询、从 `QUEUED` 推进到 `RUNNING`/`SUCCEEDED`/`FAILED`，并保留 result/error。
+- Chrome Extension 能手动领取一个 `CAPTURE_DETAIL` 任务并回写结果；真实打招呼、上传和投递仍不自动执行。
+- 失败任务能形成可读诊断和 `browser_events`，用于判断是登录、安全校验、selector、当前页不可见还是 JD 为空。
+- 当前页队列可以单独诊断、取消待处理任务、恢复失败任务；跨页面历史队列不会被当前页面误处理。
+
+## 8. M5 用户画像与真实经历库
+
+### 目标
+
+建立简历改写的事实边界，避免 Agent 编造经历。
+
+### 交付物
+
+- 简历上传接口。
+- DOCX/PDF 文本提取。
+- 用户基础画像表。
+- 真实经历库表。
+- ProfileAgent 对话式补全。
+- 禁止扩写/允许改写规则。
+
+当前 M5.1 已实现的最小切片：
+
+- SQLite 新增 `candidate_profiles`、`resume_sources`、`profile_experiences`、`profile_skills`、`profile_constraints`。
+- 后端新增 `GET /api/profile` 与 `PUT /api/profile`，用于维护用户目标、摘要、所在地和求职方向。
+- 后端新增 `GET/POST /api/profile/resume-sources`，支持 JSON/纯文本简历导入，保存原始文本、解析结果占位和 metadata。
+- 后端新增 `GET/POST /api/profile/experiences`，保存真实经历事实、技能、证据、允许改写和禁止声称内容。
+- 后端新增 `GET/POST /api/profile/skills` 与 `GET/POST /api/profile/constraints`，把技能熟练度和简历改写边界结构化。
+- `GET /api/stats` 新增 profile/resume/experience/skill/constraint 计数。
+- 验证脚本：`npm run m5:profile:smoke`。
+
+M5.1 暂不做：
+
+- DOCX/PDF 文件解析。
+- 自动从简历生成完整经历库。
+- ProfileAgent 追问。
+- 任何简历自动改写。
+
+### 验收标准
+
+- 用户可上传基础简历。
+- 系统可提取文本并生成经历库草稿。
+- ProfileAgent 能提出缺失问题。
+- 用户确认后，经历事实可被 ResumeAgent 引用。
+
+M5.1 当前验收：
+
+- 用户画像可读写。
+- 原始简历文本可入库。
+- 经历事实、技能和禁止声称内容可结构化保存。
+- 后续 Agent 能从 `GET /api/profile` 读取事实库作为输入。
+
+M5.2 已实现的最小切片：
+
+- 新增 `server/src/resume-extractor.js`，封装简历文件文本抽取和文件大小/类型校验。
+- 新增 `POST /api/profile/resume-sources/extract`，接收 `{ fileName, contentBase64, metadata? }`，支持 `.docx`、`.pdf`、`.txt`、`.md`。
+- DOCX 使用 `mammoth.extractRawText`，PDF 使用 `unpdf.extractText`；抽取结果保存到既有 `resume_sources`，不新增表。
+- `parsed_json` 记录抽取状态、文本长度、PDF 页数和 warnings；`metadata_json.extraction` 记录 extractor、原始文件名、文件大小和抽取时间。
+- 验证脚本：`npm run m5:resume:smoke`。
+
+M5.2 暂不做：
+
+- multipart/form-data 上传 UI。
+- DOC/PPT/XLS/图片 OCR。
+- 自动把简历文本拆成真实经历库；后续必须经过 ProfileAgent 追问和用户确认。
+- 自动生成或改写投递简历。
+
+M5.2 当前验收：
+
+- DOCX/PDF/TXT 简历可抽取文本并入库。
+- 不支持的文件类型会被拒绝。
+- `GET /api/stats` 能反映新入库 resume source 数量。
+
+M5.3 已实现的最小切片：
+
+- 新增 `profile_fact_drafts` 表，承载从简历原文生成但尚未确认的事实草稿。
+- 新增 `server/src/profile-draft-generator.js`，用保守启发式从简历原文识别 experience、skill 和 question 草稿；它不是最终 ProfileAgent，只是给后续追问提供初始材料。
+- 新增 `POST /api/profile/resume-sources/:id/drafts`，从指定 resume source 生成待确认草稿，并按 resume source、类型、标题和证据文本去重。
+- 新增 `GET /api/profile/fact-drafts`、`GET /api/profile/fact-drafts/:id`、`POST /api/profile/fact-drafts/:id/confirm`、`POST /api/profile/fact-drafts/:id/reject`。
+- 确认 `experience` 草稿后写入 `profile_experiences`；确认 `skill` 草稿后写入 `profile_skills`；`question` 草稿只能 reject 或后续由 ProfileAgent 消化，不能直接进入事实库。
+- `GET /api/profile` 返回 `pendingFactDrafts`，`GET /api/stats` 新增 `factDraftCount` 和 `pendingFactDraftCount`。
+- SQLite schema version 升级到 4。
+- 验证脚本：`npm run m5:drafts:smoke`。
+
+M5.3 暂不做：
+
+- LLM ProfileAgent 对话。
+- 自动确认草稿。
+- 把草稿直接交给 ResumeAgent 使用。
+- 复杂中文简历版式解析和跨段落语义合并。
+
+M5.3 当前验收：
+
+- 已入库简历原文可生成待确认草稿。
+- 重复生成不会创建重复草稿。
+- 草稿确认后才会进入正式经历/技能库。
+- 草稿拒绝会保留状态和原因。
+
+## 9. M6 Agent 岗位筛选
+
+### 目标
+
+基于完整 JD、公司信息、用户规则和经历库，对岗位进行匹配评分和风险识别。
+
+### 交付物
+
+- ScreeningAgent 输入输出 Schema。
+- 硬条件过滤规则。
+- 匹配分、风险分、推荐等级。
+- 评分证据和风险证据。
+- shortlist 审批入口。
+
+当前 M6.1 已实现的最小切片：
+
+- 新增 `server/src/screening-agent.js`，先提供规则评分基线，并支持可选 OpenAI-compatible LLM 评分。
+- 新增 `server/src/model-client.js`，从环境变量或 `gpt5.5.txt` 读取模型配置；默认支持 Responses API，也保留 Chat Completions 兼容路径。
+- SQLite schema version 升级到 5。
+- 新增 `agent_runs` 表，记录 Agent 名称、application、step、输入摘要、输出、错误码、错误信息、fallback 标记和执行时间。
+- 新增 `screenings` 表，记录 match score、risk score、recommendation、硬条件、匹配点、风险点、简历策略、置信度和 provider。
+- 新增 `POST /api/applications/:id/screen`，对单个 application 执行 ScreeningAgent，并把结果写入 `screenings`。
+- 新增 `GET /api/screenings` 和 `GET /api/agent-runs`。
+- `mode:rules` 使用确定性规则评分；`mode:auto` 在模型不可用时降级规则评分并留痕；`mode:llm` 不静默降级，失败会记录 agent run 并把 application 推进到 `NEEDS_USER_REVIEW`。
+- ScreeningAgent 当前只推进 application 到 `SCORED`、`SHORTLISTED`、`SKIPPED` 或 `NEEDS_USER_REVIEW`，不触发简历生成、打招呼或投递。
+- 验证脚本：`npm run m6:screening:smoke`。
+
+当前 M6.3 已实现的风险门禁切片：
+
+- 新增 `server/src/job-risk-gate.js`，在岗位适配评分和 LLM 评分前先判断 JD 是否命中用户排斥方向。
+- `profile_constraints.rule_type` 新增 `excluded_direction`，用于记录用户不想去的方向，例如销售、直播、保险、房产、客服或自定义方向。
+- `POST /api/applications/:id/screen` 支持通过 `userRules.excludedDirections` 临时传入排斥方向。
+- 命中高风险门禁时直接生成 `provider = risk_gate` 的 screening：`matchScore = 0`、`riskScore = 100`、`recommendation = skip`，application 推进到 `SKIPPED`，不再计算岗位适配情况。
+- 命中的方向、关键词和 JD 片段写入 `screenings.metadata.riskGate`，便于设置页、timeline 和后续调试查看。
+- 批量筛选支持 `riskGateOnly`：只判断新排斥方向是否命中，命中才写入 `risk_gate/skip` 并跳过岗位；未命中不重新计算岗位适配分，也不改写原 application 状态。
+- 验证脚本：`npm run m6:risk-gate:smoke`。
+
+M6.1 暂不做：
+
+- 批量筛选 UI。
+- LangGraph 编排。
+- ResumeAgent 自动接续。
+- 自动打招呼、上传简历或投递。
+
+### 验收标准
+
+- 至少 10 个岗位能输出结构化评分。
+- 硬条件失败默认跳过。
+- 用户明确排斥方向命中高风险时，必须在适配评分前跳过。
+- 公司信息不足时输出不确定性，而不是臆测。
+- ScreeningAgent 不直接触发简历生成或投递。
+
+M6.1 当前验收：
+
+- 单个 application 可通过 API 触发筛选。
+- 规则评分结果可落库并推进状态。
+- agent run 可回放。
+- 强制 LLM 且配置缺失时会失败留痕，并转入 `NEEDS_USER_REVIEW`。
+- `npm run check` 和 `npm run m6:screening:smoke` 通过。
+
+当前 M6.2 已实现的最小切片：
+
+- 新增 `GET /api/screening-candidates`，默认返回 `DETAIL_CAPTURED`、JD 长度达标且尚未筛选的 application。
+- 新增 `POST /api/applications/screen-batch`，支持按候选列表或显式 `applicationIds` 顺序筛选一批 application。
+- 批量筛选默认 `mode:rules`，避免误触发批量 LLM 调用；只有显式传 `mode:auto` 或 `mode:llm` 才会使用模型路径。
+- 批量筛选支持 `continueOnError`，失败项会保留结构化错误和 failed agent run，不阻断已成功项落库。
+- 验证脚本：`npm run m6:screening-batch:smoke`。
+
+M6.2 暂不做：
+
+- 后台异步批量队列。
+- 并发模型调用。
+- 根据筛选结果自动生成简历。
+
+M6.2 当前验收：
+
+- 可查询待筛选候选。
+- 可批量规则筛选并写入 `screenings`/`agent_runs`。
+- 已筛选岗位默认不会重复进入候选列表。
+- 批量强制 LLM 失败时能逐项失败留痕。
+- `npm run m6:screening-batch:smoke` 通过。
+
+当前 M6.3 已实现的最小切片：
+
+- 扩展设置详细页新增“岗位筛选”卡片，展示待筛选候选、最近筛选结果和最近 Agent 运行记录。
+- 扩展后台新增 `GET_SCREENING_CANDIDATES`、`GET_SCREENINGS`、`GET_AGENT_RUNS` 和 `SCREEN_APPLICATION_BATCH` 代理消息。
+- 设置页可手动触发“规则批量筛选”，固定默认 `mode:rules`，避免从扩展侧误触发批量 LLM 调用。
+- 设置页新增 JD 风险门禁配置：用户可开启门禁、输入“销售、直播”等排斥方向，并点击“按新风险规则重筛”。该按钮会保存门禁设置，并用 `riskGateOnly:true`、`includeAlreadyScreened:true` 重扫 `DETAIL_CAPTURED/SCORED/SHORTLISTED/NEEDS_USER_REVIEW`，只排除命中风险门禁的岗位。
+- 验证脚本：`npm run m6:options-screening:smoke`。
+
+M6.3 暂不做：
+
+- 筛选结果人工审批流。
+- 分页、排序、筛选条件编辑。
+- 从筛选结果直接进入简历生成。
+- 任何 BOSS 页面打招呼、投递或上传动作。
+
+M6.3 当前验收：
+
+- 设置页能看到筛选候选、结果和 agent run。
+- 批量规则筛选能从扩展消息链路触发并回看结果。
+- 扩展侧不暴露 LLM API Key。
+- `npm run check` 和 `npm run m6:options-screening:smoke` 通过。
+
+## 10. M7 简历定制与审核
+
+### 目标
+
+为 shortlist 岗位生成岗位版简历，并用独立审核 Agent 阻断虚假或高风险内容。
+
+### 交付物
+
+- ResumeAgent。
+- AuditAgent。
+- 固定 DOCX 模板。
+- DOCX/PDF 输出。
+- diff 摘要。
+- 简历版本表。
+- 审核结果表。
+
+### 验收标准
+
+- 推荐岗位能生成 DOCX/PDF。
+- 简历不超过 2 页。
+- diff 能说明修改了哪些模块。
+- AuditAgent 能识别 unsupported claims。
+- 审核失败会阻断后续动作。
+
+当前 M7.1 已实现的最小切片：
+
+- 新增 `server/src/resume-agent.js`，规则模式下根据已确认经历库、技能库、筛选结果和 JD 生成结构化岗位版简历。
+- 新增 `server/src/audit-agent.js`，规则模式下检查 source mapping、unsupported claims、页数估算、筛选推荐和真实性风险。
+- 新增 `server/src/document-renderer.js`，复用现有 MIT `docx` 依赖生成固定结构 DOCX。
+- 新增 `resume_versions` 和 `resume_audits` 表，schema version 升级到 6。
+- 新增 `POST /api/applications/:id/prepare-resume`、`GET /api/resume-versions`、`GET /api/resume-versions/:id`、`POST /api/resume-versions/:id/audit`、`GET /api/resume-audits`、`GET /api/resume-audits/:id`。
+- `prepare-resume` 只推进到 `RESUME_DRAFTED`，审核通过只推进到 `RESUME_AUDITED`；不会触发打招呼、上传或投递。
+- 验证脚本：`npm run m7:resume-audit:smoke`。
+
+M7.1 暂不做：
+
+- PDF 导出。
+- Word 模板占位符编辑器。
+- LLM 版本 ResumeAgent/AuditAgent。
+- 审批 UI。
+- 根据审核结果自动打招呼、上传或投递。
+
+M7.1 当前验收：
+
+- 推荐岗位可生成结构化简历版本并落库。
+- 可生成本地 DOCX 文件。
+- AuditAgent 能审核并写入 audit 记录。
+- application 最远只进入 `RESUME_AUDITED`。
+- `npm run check` 和 `npm run m7:resume-audit:smoke` 通过。
+
+当前 M7.2 已实现的最小切片：
+
+- 新增 `GET /api/resume-candidates`，默认返回 `SHORTLISTED`、最新 screening 推荐为 `auto_prepare`、JD 长度达标且尚未生成简历版本的 application。
+- 扩展后台新增 `GET_RESUME_CANDIDATES`、`GET_RESUME_VERSIONS`、`GET_RESUME_AUDITS`、`PREPARE_RESUME` 和 `AUDIT_RESUME` 代理消息。
+- 扩展设置详细页新增“简历定制与审核”卡片，展示可定制候选、最近简历版本和最近审核记录。
+- 设置页可手动触发“规则生成简历”和“规则审核草稿”；扩展侧固定 `mode:rules`，生成简历时固定 `renderDocx:true`。
+- 验证脚本：`npm run m7:options-resume:smoke`。
+
+M7.2 暂不做：
+
+- 简历内容编辑器。
+- 人工审批流。
+- 自动选择多个候选批量生成简历。
+- LLM 版 ResumeAgent/AuditAgent 从扩展侧触发。
+- 任何 BOSS 页面打招呼、上传简历或投递动作。
+
+M7.2 当前验收：
+
+- 设置页能看到简历候选、版本和审核记录。
+- 设置页可以从第一个可定制候选生成本地 DOCX 简历版本。
+- 设置页可以审核第一个未审核草稿并刷新状态。
+- 扩展侧不持有模型 API Key，不触发浏览器投递任务。
+- `npm run check`、`npm run m7:resume-audit:smoke` 和 `npm run m7:options-resume:smoke` 通过。
+
+当前 M7.3 已实现的最小切片：
+
+- 扩展后台新增 `GET_RESUME_VERSION` 和 `GET_RESUME_AUDIT` 详情读取消息。
+- 设置详细页的最近简历版本和最近审核记录支持点击查看详情。
+- 简历详情面板展示 `resume_fields`、项目/经历要点、技能、`diff_summary`、`compression_notes`、`source_mapping`、`unsupported_claims` 和最新审核风险。
+- 生成简历后自动打开新版本详情；审核草稿后自动打开审核详情。
+- 验证脚本：`npm run m7:options-detail:smoke`。
+
+M7.3 暂不做：
+
+- 简历字段编辑。
+- 审批通过/拒绝按钮。
+- 多版本 diff 对比。
+- PDF 预览。
+- 任何 BOSS 页面打招呼、上传简历或投递动作。
+
+M7.3 当前验收：
+
+- 用户能从设置页查看生成简历的正文结构和证据映射。
+- 用户能从设置页查看审核风险和阻断原因。
+- 详情查看只读，不改变 application 状态。
+- `npm run check` 和 `npm run m7:options-detail:smoke` 通过。
+
+当前 M7.4 已实现的最小切片：
+
+- 新增 `POST /api/resume-versions/:id/revise`，允许基于已有简历版本做受限本地编辑，保存为新的 `resume_versions` 记录。
+- 受限编辑范围只包含求职摘要、技能、项目/经历 bullet、奖项/证书和编辑原因；source mapping、经历元数据、公司/项目事实不在前端编辑器中开放。
+- 保存修订版后重新渲染本地 DOCX，旧版本不覆盖，`metadata.revisedFromVersionId` 保留版本来源。
+- 新增 `POST /api/resume-versions/:id/approve-local`，只允许对 `APPROVED` 简历版本做本地审批。
+- 本地审批写入 `metadata.localApproval` 和 `RESUME_LOCALLY_APPROVED` application event，最多把 application 推进到 `GREETING_READY`。
+- 本地审批不会创建 `SEND_GREETING`、`UPLOAD_RESUME` 或 `SUBMIT_APPLICATION` browser task。
+- 扩展后台新增 `REVISE_RESUME` 和 `APPROVE_RESUME_LOCAL`，设置详细页新增简历编辑器和“本地审批通过”按钮。
+- 验证脚本：`npm run m7:resume-approval:smoke`。
+
+M7.4 暂不做：
+
+- 多版本可视化 diff。
+- PDF 预览或导出。
+- 使用 LLM 自动改写用户手动输入。
+- 真实 BOSS 打招呼、上传简历或投递动作。
+
+M7.4 当前验收：
+
+- 用户能在设置页基于当前简历版本编辑摘要、技能、项目 bullet 和奖项。
+- 保存后生成新版本并重新渲染 DOCX，旧版本仍可追溯。
+- 只有审核通过的版本能本地审批。
+- 本地审批只推进到 `GREETING_READY`，并确认没有生成浏览器动作任务。
+- `npm run check`、`npm run m7:options-detail:smoke` 和 `npm run m7:resume-approval:smoke` 通过。
+
+## 11. M8 打招呼与沟通解锁
+
+### 目标
+
+把 BOSS 的真实流程建模出来：先打招呼，再根据聊天或按钮状态判断是否解锁投递。
+
+### 执行器策略
+
+- 如果 M1 证明 Firecrawl 可行，优先用 FirecrawlAdapter。
+- 如果 Firecrawl 只能采集但不能稳定执行沟通动作，使用 ChromeExtensionAdapter 或 LocalPlaywrightAdapter。
+- 默认 dry-run，不真实发送。
+
+### 交付物
+
+- MessageAgent。
+- `conversations` 表。
+- `messages` 表。
+- 打招呼任务。
+- 沟通状态刷新任务。
+- 投递解锁检测。
+
+### 验收标准
+
+- 对 shortlist 岗位能生成结构化打招呼语。
+- 默认停在发送前确认点。
+- 用户确认后可以由执行器发送。
+- 发送成功/失败有事件记录。
+- 系统能识别或记录是否进入可投递状态。
+
+当前 M8.1 已实现的最小切片：
+
+- 新增规则版 `server/src/message-agent.js`，基于岗位、最新筛选、已审批简历版本和已确认画像生成 BOSS 打招呼草稿。
+- 新增 `conversations` 和 `messages` 表，schema version 升级到 7。
+- 新增 `GET /api/messages` 和 `POST /api/applications/:id/prepare-greeting`。
+- `prepare-greeting` 只接受 `APPROVED` 且已有 `metadata.localApproval.approved` 的简历版本；不会绕过 M7 审核和本地审批。
+- 生成草稿后创建 `SEND_GREETING` browser task，但 payload 固定 `dryRun:true`、`requiresUserConfirmation:true`。
+- application 仍停在 `GREETING_READY`；不会推进到 `GREETING_SENT`，也不会创建 `UPLOAD_RESUME` 或 `SUBMIT_APPLICATION`。
+- 扩展后台新增 `GET_MESSAGES` 和 `PREPARE_GREETING`；设置详细页新增“打招呼 dry-run”卡片，展示最近草稿和 dry-run 任务。
+- 验证脚本：`npm run m8:greeting-dry-run:smoke`。
+
+M8.1 暂不做：
+
+- 在 BOSS 页面填入或发送打招呼语。
+- 读取聊天记录或检测投递解锁状态。
+- 批量生成或批量发送。
+- 频率限制、冷却时间和每日上限。
+- LLM 版 MessageAgent。
+
+M8.1 当前验收：
+
+- 只有已本地审批的审核通过简历版本可以生成打招呼草稿。
+- 草稿写入 `messages`，并有对应 `conversations` 记录。
+- 只创建 `SEND_GREETING` dry-run browser task。
+- 不改变 `GREETING_READY` 之后的状态，不创建上传或投递任务。
+- `npm run check` 和 `npm run m8:greeting-dry-run:smoke` 通过。
+
+当前 M8.2 已实现的最小切片：
+
+- Chrome Extension content script 已接入 `SEND_GREETING` dry-run 执行路径。
+- 设置详细页新增 `Run SEND_GREETING dry-run` 动态入口，可从已打开的 BOSS 标签页领取 `SEND_GREETING` 任务并发送给 content script。
+- content script 会先校验当前 BOSS 页面、登录/安全验证状态和岗位匹配；不匹配时以 `PAGE_MISMATCH`、`LOGIN_REQUIRED`、`SECURITY_CHECK` 等失败码回写。
+- 页面侧只允许发送前填入验证：尝试找到安全聊天入口和输入框，填入草稿并高亮输入框/发送按钮；不会点击发送按钮。
+- `SEND_GREETING` 任务 payload 增加 `jobId/title/company/detailUrl/sourceUrl`，便于按当前 BOSS 页领取和诊断。
+- 验证脚本：`npm run m8:extension-send-greeting:smoke`。
+
+M8.2 暂不做：
+
+- 真实点击发送。
+- 绕过验证码、登录失效、风控或 F1/DevTools 限制。
+- 批量打招呼、频率控制、每日上限。
+- 聊天记录读取、对方回复检测、投递解锁检测。
+
+M8.2 当前验收：
+
+- `SEND_GREETING` dry-run 可以进入页面侧执行链路。
+- 失败必须 fail closed，并有结构化错误码和诊断。
+- dry-run 成功只代表“文本已填入且发送按钮可见”，不会推进 application 到 `GREETING_SENT`。
+- `npm run check`、`npm run m8:greeting-dry-run:smoke` 和 `npm run m8:extension-send-greeting:smoke` 通过。
+
+当前 M8.3 已实现的最小切片：
+
+- 新增 `GET /api/conversations`，用于查看 `conversations` 只读刷新后的状态快照。
+- `transitionBrowserTask` 在 `REFRESH_CONVERSATION` / `CHECK_RESUME_UNLOCK` 成功后，会把页面只读结果写入 `conversations.metadata.lastResult`。
+- `REFRESH_CONVERSATION` 明确读到会话已打开时，可把 application 从 `GREETING_READY` 或 `GREETING_SENT` 推进到 `CHAT_OPENED`；这不等于记录真实 `GREETING_SENT`。
+- `CHECK_RESUME_UNLOCK` 明确读到简历/投递入口已解锁时，可把 application 从 `CHAT_OPENED` 推进到 `RESUME_UNLOCKED`。
+- 扩展设置详细页动态新增 `Queue REFRESH_CONVERSATION`、`Queue CHECK_RESUME_UNLOCK` 和 `Run read-only BOSS task`，复用 browser task 队列和 `RUN_BROWSER_TASK` 通道。
+- content script 对两类任务只读 DOM，检测页面不匹配、登录失效、安全验证，并返回 `readOnly.noRealBossAction=true`、`clicked/uploaded/submitted=false`。
+- 验证脚本：`npm run m8:read-only-conversation:smoke`。
+
+M8.3 暂不做：
+
+- 真实点击发送。
+- 真实上传简历、选择附件简历或点击投递。
+- 把 `RESUME_UNLOCKED` 自动推进到 `SUBMISSION_READY`。
+- 自动判断对方回复语义或批量跟进。
+
+M8.3 当前验收：
+
+- 只读任务可以排队、领取、发送到 BOSS content script 并回写结果。
+- 会话/解锁快照可通过 `GET /api/conversations` 读取。
+- 只读证据最多推进到 `CHAT_OPENED` / `RESUME_UNLOCKED`，不创建上传或投递任务。
+- `npm run check`、M8.1/M8.2 smoke 和 `npm run m8:read-only-conversation:smoke` 通过。
+
+当前 M8.4 已实现的最小切片：
+
+- `REFRESH_CONVERSATION` 成功回写后，会把 `conversation.messages` 和 `conversation.recentMessages` 归档到 `messages`。
+- 归档消息的 `channel` 为 `boss_chat`，`status` 为 `CAPTURED`，`provider` 为 `browser_executor`，metadata 记录 `browserTaskId`、`sourceTimestamp` 和 `readOnly:true`。
+- 消息按方向、文本和页面时间戳去重，避免多次刷新重复入库。
+- `GET /api/messages` 现在同时可看到 MessageAgent 草稿和页面只读聊天快照。
+- 验证脚本仍为 `npm run m8:read-only-conversation:smoke`，已增加消息归档和去重断言。
+
+M8.4 暂不做：
+
+- 完整 IM 历史同步。
+- 消息语义判断和自动跟进。
+- 用聊天内容直接触发上传或投递。
+
+当前 M8.5 已实现的最小切片：
+
+- 新增后端规则判定 `communicationAssessment`，写入 `conversations.metadata`。
+- 基于已归档 `boss_chat/CAPTURED` 和 `boss_greeting` 消息识别 `RESUME_REQUESTED`、`RECRUITER_REPLIED`、`WAITING_FOR_REPLY`、`CHAT_OPENED_NO_MESSAGES`、`CONVERSATION_UNKNOWN`。
+- `RESUME_REQUESTED` 优先级最高，可由对方消息里的简历请求关键词或页面简历入口已解锁触发。
+- 扩展设置详细页会在会话列表显示沟通状态标签，例如“对方要求简历”“对方已回复”“等待对方回复”。
+- 验证脚本仍为 `npm run m8:read-only-conversation:smoke`，已覆盖简历请求和等待回复两类判定。
+
+M8.5 暂不做：
+
+- LLM 语义分类。
+- 自动跟进话术生成。
+- 基于 `RESUME_REQUESTED` 自动上传或投递。
+- 频率控制和冷却策略。
+
+当前 M8.6 已实现的最小切片：
+
+- 新增 `nextActionRecommendation`，写入 `conversations.metadata`。
+- 基于 `communicationAssessment`、当前 application 状态和 `resumeUnlock` 生成下一步建议。
+- 当前建议覆盖 `PREPARE_RESUME_UPLOAD_DRY_RUN`、`REVIEW_RECRUITER_REPLY`、`WAIT_FOR_REPLY`、`REFRESH_CONVERSATION_LATER`、`REFRESH_CONVERSATION`。
+- 每条建议包含 `priority`、`reason`、`requiresUserConfirmation`、`noRealBossAction`、`allowedTaskTypes`、`blockedTaskTypes`。
+- 扩展设置详细页会展示下一步建议标签。
+- 验证脚本仍为 `npm run m8:read-only-conversation:smoke`，已覆盖简历请求 -> 上传 dry-run 建议、等待回复 -> 等待建议。
+
+M8.6 暂不做：
+
+- 创建 `UPLOAD_RESUME` browser task。
+- 创建 `SUBMIT_APPLICATION` browser task。
+- 自动发送跟进消息。
+- 每日频控和冷却队列。
+
+## 12. M9 投递执行与复盘
+
+### 目标
+
+在用户确认或严格规则允许下完成投递，并形成可复盘记录。
+
+当前 M9.1-M9.5 已实现的前置切片：
+
+- Chrome Extension content script 接入 `UPLOAD_RESUME` dry-run。
+- 设置详细页新增 `Queue UPLOAD_RESUME dry-run`，复用 browser task 队列和 `Run read-only BOSS task` 执行入口。
+- dry-run 只检测上传/选择简历入口、`input[type=file]`、accept 类型、候选按钮和页面诊断。
+- dry-run 结果写入 browser task result、`UPLOAD_RESUME_DRY_RUN` application event 和 `conversations.metadata.lastUploadDryRun`。
+- dry-run 明确返回 `fileSelected:false`、`uploaded:false`、`submitted:false`、`noRealBossAction:true`。
+- 验证脚本：`npm run m9:upload-resume-dry-run:smoke`。
+- Chrome Extension content script 接入 `SUBMIT_APPLICATION` dry-run。
+- 设置详细页新增 `Queue SUBMIT_APPLICATION dry-run`，并通过 `Run read-only BOSS task` 领取和运行。
+- dry-run 只检测投递/确认候选、锁定信号、确认弹窗线索和页面匹配状态。
+- dry-run 结果写入 browser task result、`SUBMIT_APPLICATION_DRY_RUN` application event 和 `conversations.metadata.lastSubmitDryRun`。
+- dry-run 明确返回 `clickedSubmit:false`、`confirmed:false`、`submitted:false`、`uploaded:false`、`noRealBossAction:true`，不会推进到 `SUBMISSION_READY` 或 `SUBMITTED`。
+- 验证脚本：`npm run m9:submit-application-dry-run:smoke`。
+- 后端新增 `submissionReadiness` gate，把 `lastUploadDryRun`、`lastSubmitDryRun`、`communicationAssessment` 和 `resumeUnlock` 合并成 `READY_FOR_MANUAL_REVIEW`、`INSUFFICIENT_EVIDENCE` 或 `BLOCKED`。
+- 每次上传/投递 dry-run 成功回写后写入 `SUBMISSION_READINESS_ASSESSED` application event，并更新 `nextActionRecommendation`。
+- 扩展设置页会展示投递准备度和“复核投递准备度/处理投递阻断”建议。
+- 验证脚本：`npm run m9:submission-readiness:smoke`。
+- 后端新增 `GET /api/submission-readiness`，从 conversations metadata 派生投递准备复核队列。
+- 队列支持按 `READY_FOR_MANUAL_REVIEW`、`INSUFFICIENT_EVIDENCE`、`BLOCKED` 或 `ALL` 过滤。
+- 扩展后台代理 `GET_SUBMISSION_READINESS_QUEUE`，设置详细页展示最近投递准备复核项。
+- 验证脚本：`npm run m9:submission-readiness-queue:smoke`。
+- 后端新增 `POST /api/submission-readiness/:applicationId/review`，本地写入投递准备复核决策。
+- 决策包括 `APPROVED_FOR_MANUAL_EXECUTION`、`REFRESH_REQUIRED` 和 `BLOCKED`，写入 `conversations.metadata.submissionReadinessReview` 和 `SUBMISSION_READINESS_REVIEWED` application event。
+- 扩展设置页在投递准备复核队列中提供“本地复核通过 / 需要刷新 / 阻断”动作。
+- 验证脚本：`npm run m9:submission-readiness-review:smoke`。
+
+M9.5 暂不做：
+
+- 设置 input 文件。
+- 点击上传按钮。
+- 创建真实上传任务。
+- 点击投递。
+- 确认投递弹窗。
+- 将 application 推进到 `SUBMISSION_READY` 或 `SUBMITTED`。
+- 用 readiness 自动触发真实上传或真实投递。
+- 在复核队列里直接执行真实上传/投递。
+- 让 `APPROVED_FOR_MANUAL_EXECUTION` 自动推进 `SUBMISSION_READY`。
+- Native Messaging / Playwright 文件选择。
+
+### 执行器策略
+
+- 如果 Firecrawl 文件上传 POC 成功，可继续用 FirecrawlAdapter。
+- 如果 Firecrawl 文件上传不稳定，M9 使用 LocalPlaywrightAdapter。
+- Chrome Extension 可作为人工辅助和状态读取 fallback。
+
+### 交付物
+
+- 投递审批界面或接口。
+- 投递任务。
+- 简历选择/上传流程。
+- 投递结果事件。
+- CSV/Excel 导出。
+- 失败重试和人工处理入口。
+
+### 验收标准
+
+- 用户确认后能完成一次投递记录闭环。
+- 每次投递有完整 application event。
+- 失败能看到明确错误码。
+- 可导出投递记录。
+
+## 13. 推荐实施顺序
+
+1. 完成 M0 文档收敛。
+2. 开始 M1 BrowserExecutor POC。
+3. 验证 Firecrawl 登录态/profile。
+4. 验证 Firecrawl 采集 10 个岗位和 JD。
+5. 验证 Firecrawl 打招呼 dry-run。
+6. 验证投递入口和文件上传路径。
+7. 根据 M1 决策门确定主执行器。
+8. 做 SQLite 入库。
+9. 做采集质量闭环。
+10. 做状态机。
+11. 做用户画像和经历库。
+12. 做 Agent 筛选、简历生成、审核。
+13. 做打招呼、沟通解锁、投递执行。
+
+## 14. 当前下一步
+
+当前 M1-M8.1 已完成主路线验证、工作流队列、简历原文抽取、待确认事实草稿、单条/批量岗位筛选、简历生成与审核、扩展设置页的简历详情查看、受限本地编辑、本地审批，以及打招呼 dry-run 草稿和任务。下一步应继续做：
+
+```text
+Chrome Extension 领取 SEND_GREETING dry-run 并在页面侧做发送前定位/填入验证
+-> 用户确认后再允许单条真实发送
+-> 沟通状态/投递解锁检测 POC
+```
+
+后端任务队列只表达“要浏览器做什么”，真实 BOSS 页面动作仍由用户已登录的 Chrome Extension 执行；验证码、登录失效、风控提示必须暂停并交给用户处理。
+
+## M10.1 WorkflowOrchestrator 编排计划
+
+当前 M9 已完成到本地投递准备复核决策。M10.1 的目标是先建立后端可解释编排计划，而不是立即放开真实上传或真实投递。
+
+交付物：
+- `server/src/workflow-orchestrator.js`: 确定性规划器，读取已有证据，输出阶段状态、下一步动作、阻断原因和证据摘要。
+- `GET /api/applications/:id/workflow-plan`: 只读计划。
+- `POST /api/applications/:id/workflow-plan`: 将计划持久化为 `agent_runs`，agentName 为 `WorkflowOrchestrator`。
+- `scripts/m10-workflow-orchestrator-smoke.js`: 从筛选、简历、审计、本地审批、打招呼 dry-run、会话证据、上传/投递 dry-run 到本地 readiness review 的计划链路验证。
+
+当前边界：
+- 不创建真实 `SEND_GREETING_REAL`、`UPLOAD_RESUME_REAL`、`SUBMIT_APPLICATION_REAL`。
+- 不由编排计划自动创建 browser task。
+- 不推进 application 到 `SUBMISSION_READY` 或 `SUBMITTED`。
+- 浏览器插件仍只负责 BOSS 页面任务；LLM key 仍只在后端。
+
+验收标准：
+- `npm run m10:workflow-orchestrator:smoke` 通过。
+- `npm run check` 包含 `server/src/workflow-orchestrator.js` 和 M10 smoke。
+- 持久化 workflow plan 只增加 `agent_runs`，不增加 browser task，不改变 application status。
+
+M10 后续计划：
+- M10.2 增加简历/JD 适配评估节点：`JDRequirementExtractor`、`ResumeFitEvaluator`。
+- M10.3 增加真实性与投递策略节点：`ClaimVerifier`、`SubmissionPolicyGate`。
+- M10.4 已引入 LangGraph.js，把 ScreeningAgent -> ResumeAgent -> ResumeFitEvaluator -> ClaimVerifier -> ResumeRevisionAgent -> re-check -> AuditAgent 的本地简历闭环迁移成显式图。
+
+## M10.2a Career Context / ProfileAgent 前置层
+
+用户提供的 `career-retrospective-to-job` 初稿已经收敛为项目内 skill：`.agents/skills/career-retrospective-to-job/`。
+
+目标不是直接生成投递简历，而是在 ResumeAgent 之前建立更稳定的职业上下文：
+
+```text
+用户上传简历 / 项目材料 / 补充访谈
+-> career-retrospective-to-job
+-> career_agent_context.md
+-> PENDING profile_fact_drafts / missing questions
+-> 用户确认或拒绝
+-> profile_experiences / profile_skills / profile_constraints
+-> ScreeningAgent / ResumeAgent / AuditAgent
+```
+
+交付物：
+
+- `.agents/skills/career-retrospective-to-job/SKILL.md`：触发条件、规则和工作流。
+- `references/context_template.md`：`career_agent_context.md` 模板。
+- `references/interview_questions.md`：分轮追问问题。
+- `references/role_clusters.md`：岗位族群判断参考。
+- `references/resume_boundaries.md`：简历真实性和禁止声称规则。
+- `examples/career_agent_context.example.md`：示例上下文。
+- `scripts/m10-career-skill-smoke.js`：检查 skill 文件和文档契约。
+
+边界：
+
+- `career_agent_context.md` 是事实源候选和策略上下文，不是正式事实库。
+- `PENDING` 草稿仍不能被 ResumeAgent 使用。
+- 任何新经历、技能、指标或边界都必须经过 confirm/reject 后才能进入正式表。
+- 该切片不新增数据库表，不改变 application 状态，不创建 BOSS browser task。
+
+验收：
+
+- `npm run m10:career-skill:smoke` 通过。
+- `npm run check` 包含 `scripts/m10-career-skill-smoke.js`。
+- README、Agent workflow、开发计划和开源复用文档都明确 `career-retrospective-to-job` 的位置和边界。
+## M10.2d ProfileAgent Career Context Persistence
+
+Goal: make the first ProfileAgent step executable and inspectable before adding a full chat UI.
+
+Delivered:
+
+- New deterministic module: `server/src/profile-agent.js`.
+- New APIs:
+  - `POST /api/profile/career-context`
+  - `GET /api/profile/career-context`
+- Default local output: `server/data/career_context/career_agent_context.md`.
+- The generator reads resume sources, confirmed experiences, skills, constraints, pending fact drafts, and optional user answers.
+- The API records `agent_runs` and `workflow_events`; missing questions are visible as warning workflow errors.
+- No schema migration is required for this slice.
+- Smoke test: `scripts/m10-profile-agent-smoke.js`.
+
+Acceptance:
+
+- A profile bundle can produce a normal Chinese `career_agent_context.md`.
+- Pending fact drafts are represented as `expression-risk` context, not confirmed facts.
+- `POST /api/profile/career-context` writes the local file and returns missing questions.
+- `GET /api/profile/career-context` reads the generated file.
+- Agent run, workflow event, and warning/error observability records are persisted.
+- No application status is changed, no browser task is created, and no BOSS action is triggered.
+- `npm run m10:profile-agent:smoke` passes.
+- `npm run check` includes `server/src/profile-agent.js` and `scripts/m10-profile-agent-smoke.js`.
+
+Boundary:
+
+- This slice does not implement ProfileAgent chat UI.
+- This slice does not call an LLM.
+- This slice does not auto-confirm resume-derived facts.
+- This slice does not feed pending facts into ResumeAgent as confirmed evidence.
+
+## M10.2e ProfileAgent Settings UI
+
+Goal: make the ProfileAgent career-context step usable from the Chrome Extension settings page without touching BOSS pages.
+
+Delivered:
+
+- Background proxy messages:
+  - `GET_CAREER_CONTEXT`
+  - `GENERATE_CAREER_CONTEXT`
+- Settings page panel: `ProfileAgent 职业经历上下文`.
+- The panel can refresh the current `career_agent_context.md`, generate a new local file, show file metadata, preview markdown, and list missing questions.
+- The panel can render missing questions as answer textareas and call ProfileAgent with `{ id, answer }` entries through `带回答重新生成`.
+- After generation, the page refreshes workflow errors/events so open questions remain visible in the correction queue.
+- Static smoke test: `scripts/m10-options-profile-agent-smoke.js`.
+
+Acceptance:
+
+- User can generate/read `server/data/career_context/career_agent_context.md` from extension settings.
+- Missing questions are visible in the ProfileAgent panel.
+- User can answer missing questions and regenerate `career_agent_context.md`; answered question IDs are removed from the next missing-question list.
+- Workflow warnings/errors are refreshed after generation.
+- The extension does not confirm `PENDING profile_fact_drafts`.
+- The extension does not advance application status.
+- The extension does not create `browser_tasks` or trigger any BOSS page/content-script action.
+- `npm run m10:options-profile-agent:smoke` passes.
+- `npm run check` includes `scripts/m10-options-profile-agent-smoke.js`.
+
+Next after this slice:
+
+- Add a true ProfileAgent Q&A surface that lets the user answer missing questions.
+- Keep confirmation of extracted facts as an explicit backend/profile action, not as a side effect of generating markdown.
+- Feed only confirmed profile facts into JD scoring and resume generation.
+
+## M10.2f Profile Fact Confirmation
+
+Goal: let ProfileAgent Q&A answers become reviewable profile facts without bypassing the existing confirmation boundary.
+
+Delivered:
+
+- New backend API:
+  - `POST /api/profile/career-context/fact-drafts`
+- `server/src/services/profile-service.js` owns answer-to-draft generation and `PROFILE_FACT_DRAFTS_GENERATED` workflow events.
+- `server/src/sqlite-store.js` exposes generic `createProfileFactDrafts(input)` and keeps `createProfileFactDraftsFromResumeSource` as a resume-source wrapper.
+- Answer mapping:
+  - target roles -> `constraint` draft
+  - excluded/risk directions -> `constraint` draft
+  - skills -> `skill` drafts
+  - project/experience answers -> `experience` draft
+- Duplicates are skipped for both resume-source drafts and ProfileAgent answer drafts with no `resume_source_id`.
+- Smoke test: `scripts/m10-profile-fact-confirmation-smoke.js`.
+- The ProfileAgent settings UI now has a `待确认事实草稿` panel that can:
+  - generate fact drafts from current answer textareas
+  - refresh pending drafts
+  - confirm/reject each draft explicitly
+  - refresh workflow logs after generation or review actions
+- Mocked browser UI smoke test: `scripts/m10-options-profile-facts-ui-smoke.js`.
+
+Acceptance:
+
+- ProfileAgent answers can generate `PENDING profile_fact_drafts`.
+- Re-running the same answers skips duplicates.
+- `POST /api/profile/fact-drafts/:id/confirm` still writes confirmed facts into the formal profile tables.
+- `POST /api/profile/fact-drafts/:id/reject` rejects drafts without writing facts.
+- Workflow logs expose `PROFILE_FACT_DRAFTS_GENERATED`.
+- `npm run m10:profile-facts:smoke` passes.
+- `npm run m10:options-profile-facts:smoke` passes.
+- `npm run m10:options-profile-facts-ui:smoke` passes.
+- `npm run check` includes `scripts/m10-profile-fact-confirmation-smoke.js`.
+- `npm run check` includes `scripts/m10-options-profile-facts-smoke.js`.
+- `npm run check` includes `scripts/m10-options-profile-facts-ui-smoke.js`.
+
+Boundary:
+
+- This slice does not auto-confirm answer-derived facts.
+- This slice does not run JD screening, resume generation, browser tasks, BOSS actions, upload, or submission.
+
+## M10.2g Editable Fact Confirmation / Context Refresh
+
+Goal: make ProfileAgent answer-derived facts usable before they become resume evidence, without forcing users to accept raw generated drafts.
+
+Delivered:
+
+- Settings page fact draft cards render editable fields before confirmation:
+  - `experience`: title, role, facts, skills
+  - `skill`: name, category, proficiency
+  - `constraint`: ruleType, content, severity
+- Confirm sends edited `content` through the existing `POST /api/profile/fact-drafts/:id/confirm` payload.
+- Confirm/reject marks career context as stale instead of silently treating the old markdown as current.
+- `事实变更后重新生成上下文` runs `POST /api/profile/career-context` from the settings page and clears the stale warning after success.
+- The Playwright UI smoke validates edited confirm payloads, stale context warning, regeneration, and no BOSS/browser task side effects.
+
+Acceptance:
+
+- User can edit a pending draft before confirming it into formal profile facts.
+- Confirm payload includes the edited fields.
+- Confirm/reject does not trigger BOSS actions, JD screening, resume generation, upload, or submission.
+- Career context stale state is visible after fact changes.
+- `npm run m10:options-profile-facts-ui:smoke` passes.
+- `npm run check` includes the UI smoke syntax check.
+
+## M10.2b Observability Hooks / Error Correction
+
+Goal: make backend execution progress, warnings, and errors inspectable and correctable before expanding agent orchestration.
+
+Deliverables:
+
+- SQLite schema v8 adds `workflow_events`.
+- `agent_runs` start/finish/failure now write durable workflow events.
+- `browser_tasks` queue/claim/transition/failure/cancel/requeue now write durable workflow events.
+- `screenApplicationsBatch` writes batch start, per-item success/failure, and final summary progress.
+- Persisted `WorkflowOrchestrator` plans write plan start/success progress records.
+- New APIs:
+  - `GET /api/applications/:id/timeline`
+  - `GET /api/workflow-events`
+  - `GET /api/workflow-errors`
+  - `POST /api/workflow-errors/:id/resolve`
+- `GET /api/stats` exposes `workflowEventCount` and `openWorkflowErrorCount`.
+
+Acceptance:
+
+- Timeline can show application event, agent run, browser task, workflow progress, and failure records for a single application.
+- Error queue exposes unresolved warning/error records with source type, source id, message, error code, and metadata.
+- Resolving or ignoring an error is explicit and does not retry work or change application/browser task state.
+- `npm run m10:observability:smoke` passes.
+- `npm run check` includes `scripts/m10-observability-smoke.js`.
+
+Boundary:
+
+- This milestone adds observability only.
+- It does not introduce LangGraph.
+- It does not create real `SEND_GREETING`, `UPLOAD_RESUME`, or `SUBMIT_APPLICATION` actions.
+- It does not bypass BOSS login, captcha, security checks, or Chrome Extension execution boundaries.
+
+## M10.2c Extension Observability UI
+
+Goal: make the M10.2b observability hooks visible and correctable from the Chrome Extension settings page.
+
+Deliverables:
+
+- Extension background proxies:
+  - `GET_WORKFLOW_EVENTS`
+  - `GET_WORKFLOW_ERRORS`
+  - `GET_APPLICATION_TIMELINE`
+  - `RESOLVE_WORKFLOW_ERROR`
+- Settings page `Workflow progress` panel:
+  - open workflow error count
+  - recent workflow event count
+  - open workflow error list
+  - recent workflow event list
+  - per-application timeline view
+  - explicit `RESOLVED` / `IGNORED` actions
+- Static smoke test: `scripts/m10-options-observability-smoke.js`.
+
+Acceptance:
+
+- Main diagnostics refresh also refreshes workflow errors and events.
+- A workflow error can load its application timeline.
+- A workflow error can be marked `RESOLVED` or `IGNORED`.
+- Resolving or ignoring an error does not create browser tasks, rerun agents, or advance application state.
+- `npm run m10:options-observability:smoke` passes.
+- `npm run check` includes `scripts/m10-options-observability-smoke.js`.
+
+Boundary:
+
+- This is UI and background proxy wiring only.
+- It does not add a new UI dependency.
+- It does not retry work implicitly.
+- It does not create real `SEND_GREETING`, `UPLOAD_RESUME`, or `SUBMIT_APPLICATION` actions.
+
+## M10.3a Resume/JD Fit Evaluation
+
+Goal: make "does the generated resume match this JD" a testable backend node before AuditAgent and before any delivery workflow.
+
+Deliverables:
+
+- New deterministic agent: `server/src/resume-fit-evaluator.js`.
+- SQLite schema v9 table: `resume_fit_evaluations`.
+- New APIs:
+  - `POST /api/resume-versions/:id/evaluate-fit`
+  - `GET /api/resume-fit-evaluations`
+  - `GET /api/resume-fit-evaluations/:id`
+- `GET /api/stats` includes `resumeFitEvaluationCount`.
+- `WorkflowOrchestrator` adds `RESUME_FIT_EVALUATION` between `RESUME_DRAFT` and `RESUME_AUDIT`.
+- `scripts/m10-resume-fit-evaluator-smoke.js` validates store, API, workflow plan, stats, agent run, and workflow events.
+- Chrome Extension settings page exposes recent fit evaluations, an `Evaluate JD fit` action, and a resume-detail fit result panel.
+- `scripts/m10-options-resume-fit-smoke.js` validates the extension/background wiring and the no-browser-task boundary.
+
+Acceptance:
+
+- JD requirements are extracted into structured skill/responsibility items.
+- A resume version receives coverage score, fit level, coverage items, blockers, and revision recommendations.
+- Fit evaluation is persisted and list/read APIs work.
+- Agent run and workflow event are recorded.
+- Application status remains unchanged after fit evaluation.
+- No browser task is created and no BOSS action is triggered.
+- `npm run m10:resume-fit:smoke` passes.
+- `npm run m10:options-resume-fit:smoke` passes.
+- `npm run check` includes the evaluator and smoke script.
+
+Boundary:
+
+- This slice does not replace `AuditAgent`; it only checks JD coverage.
+- This slice does not verify claim truthfulness; `AuditAgent` and later `ClaimVerifier` remain responsible for source-backed truth checks.
+- This slice does not approve submission readiness.
+- This slice does not introduce LangGraph.
+
+## M10.3b Claim Verification
+
+Goal: make "is the generated resume source-backed and safe to audit" a testable backend node between ResumeFitEvaluator and AuditAgent.
+
+Deliverables:
+
+- New deterministic agent: `server/src/claim-verifier.js`.
+- SQLite schema v10 table: `resume_claim_verifications`.
+- New APIs:
+  - `POST /api/resume-versions/:id/verify-claims`
+  - `GET /api/resume-claim-verifications`
+  - `GET /api/resume-claim-verifications/:id`
+- `GET /api/stats` includes `resumeClaimVerificationCount`.
+- `WorkflowOrchestrator` adds `RESUME_CLAIM_VERIFICATION` between `RESUME_FIT_EVALUATION` and `RESUME_AUDIT`.
+- Chrome Extension settings page exposes recent claim checks, a `Verify claims` action, and a resume-detail claim verification panel.
+- `scripts/m10-claim-verifier-smoke.js` validates store, API, workflow plan, stats, agent run, and workflow events.
+- `scripts/m10-options-claim-verifier-smoke.js` validates the extension/background wiring and the no-browser-task boundary.
+
+Acceptance:
+
+- Resume claims are extracted from summary, skills, projects, awards, and project bullets.
+- Each claim is classified as `SUPPORTED`, `WEAK`, `UNSUPPORTED`, or `NEEDS_USER_CONFIRMATION`.
+- Unsupported and high-impact unconfirmed claims produce recommendations.
+- The workflow blocks AuditAgent until claim verification exists and has no blocking unsupported claims.
+- Application status remains unchanged after claim verification.
+- No browser task is created and no BOSS action is triggered.
+- `npm run m10:claim-verifier:smoke` passes.
+- `npm run m10:options-claim-verifier:smoke` passes.
+- `npm run check` includes the verifier and smoke scripts.
+
+Boundary:
+
+- This slice does not make final submission decisions.
+- This slice does not use pending profile fact drafts.
+- This slice does not auto-edit the resume; revision remains a separate step.
+- This slice does not introduce LangGraph.
+
+## M10.3c Resume Revision From Checks
+
+Goal: make the "revise after fit/claim checks" loop local, auditable, and testable before adding LangGraph or any delivery automation.
+
+Deliverables:
+
+- New deterministic agent: `server/src/resume-revision-agent.js`.
+- New API:
+  - `POST /api/resume-versions/:id/revise-from-checks`
+- Reuse the existing `resume_versions` table instead of adding a new schema table.
+- `createResumeVersion` now supports a no-status-change creation path for checked revisions.
+- `WorkflowOrchestrator` routes `REVISE_RESUME_FOR_JD_FIT` and `REVISE_OR_CONFIRM_RESUME_CLAIMS` to `/revise-from-checks`.
+- Chrome Extension settings page exposes `Revise from checks` and opens the newly created version.
+- `scripts/m10-resume-revision-agent-smoke.js` validates store, API, workflow plan, agent run, workflow event, no browser task, and no application status advancement.
+- `scripts/m10-options-resume-revision-smoke.js` validates extension/background wiring and the no-browser-task boundary.
+
+Acceptance:
+
+- A checked revision creates a new resume version and preserves the old version.
+- Revision metadata links to the base resume version, fit evaluation, and claim verification.
+- Unsupported claims can be removed; weak or unconfirmed claims can be softened.
+- Missing JD evidence can only be surfaced from confirmed local profile facts or skills.
+- The workflow requires the new version to be re-evaluated and re-verified before audit.
+- Application status remains unchanged after revision.
+- No browser task is created and no BOSS action is triggered.
+- `npm run m10:resume-revision:smoke` passes.
+- `npm run m10:options-resume-revision:smoke` passes.
+- `npm run check` includes the revision agent and smoke scripts.
+
+Boundary:
+
+- This slice does not introduce LangGraph.
+
+## M10.4 LangGraph Resume Workflow
+
+Goal: introduce LangGraph only after the resume fit, claim verification, and revision nodes have stable persisted contracts.
+
+Delivered:
+
+- Added official `@langchain/langgraph` dependency.
+- Added `server/src/resume-workflow-graph.js`.
+- Added backend API:
+  - `POST /api/applications/:id/resume-workflow-graph`
+- Graph flow:
+
+```text
+load_context
+-> screen_application
+-> prepare_resume
+-> evaluate_fit
+-> verify_claims
+-> decide_revision
+   |-- revise_resume -> evaluate_fit -> verify_claims -> decide_revision
+   `-- audit_resume
+```
+
+Rules:
+
+- Graph orchestration remains local-first and backend-owned.
+- Graph does not create BOSS browser tasks.
+- Graph does not send greetings, upload files, or submit applications.
+- `UNSUPPORTED` claims block audit until revision removes them or `maxRevisions` is exhausted.
+- `NEEDS_USER_CONFIRMATION` claims can continue to audit as risk evidence, but they remain visible for manual review.
+
+Document rendering:
+
+- `DocumentRenderer` now records optional `photoPath` and `referenceDocxPath` in render metadata.
+- Generated DOCX can include a local photo.
+- Exact Word template cloning is not implemented; the current scope is a stable local DOCX output flow with reference-template metadata.
+
+Validation:
+
+```powershell
+npm run check
+npm run m10:langgraph-resume:smoke
+npm run m10:options-resume-workflow:smoke
+```
+
+Sample validation now uses an embedded anonymous career context by default. Private validation files can be injected locally with:
+
+- `BOSS_FIND_SAMPLE_CAREER_CONTEXT`
+- `BOSS_FIND_SAMPLE_REFERENCE_DOCX`
+- `BOSS_FIND_SAMPLE_PHOTO`
+
+Those private files are local-only and must not be committed.
+
+Latest verified result:
+
+- Graph completed.
+- Final application status reached `RESUME_AUDITED`.
+- Agent runs included `ScreeningAgent`, `ResumeAgent`, `ResumeFitEvaluator`, `ClaimVerifier`, `ResumeRevisionAgent`, and `AuditAgent`.
+- DOCX output was generated with photo/reference metadata.
+- Workflow events captured graph and node progress.
+
+Current M10.5 delivered settings-page entry:
+
+- Chrome Extension background proxies `RUN_RESUME_WORKFLOW_GRAPH` to `POST /api/applications/:id/resume-workflow-graph`.
+- Settings page adds `一键跑简历闭环`; if a resume detail is selected it uses that application, otherwise it uses the first eligible resume candidate.
+- Screening candidates, screening results, and resume candidates expose per-row `一键简历闭环` actions, so the user can run the loop for a selected job.
+- The action refreshes resume diagnostics, screening diagnostics, workflow errors/events, and application timeline, then opens the generated resume version detail when available.
+- Errors are written by graph/node telemetry to `workflow_events` and become visible in the settings page `Workflow progress` panel.
+- The extension action does not create browser tasks, send greetings, upload files, submit applications, mark local approval, or mark submission readiness.
+
+## M10.5 Backend Service Structure
+
+Goal: reduce `server.js` growth before adding ProfileAgent fact confirmation and later submission policy logic.
+
+Delivered:
+
+- Added `server/src/services/profile-service.js`.
+  - Owns `GET/POST /api/profile/career-context` service behavior.
+  - Owns ProfileAgent agent-run logging.
+  - Owns `CAREER_CONTEXT_GENERATED` / `CAREER_CONTEXT_FAILED` workflow events.
+- Added `server/src/services/resume-workflow-service.js`.
+  - Owns `POST /api/applications/:id/resume-workflow-graph` payload mapping.
+  - Keeps generated DOCX output default under `server/data/generated_resumes`.
+- Added `server/src/server-utils.js`.
+  - Shared `httpError`, `structuredError`, and `summarizeProfileForTrace`.
+- `server.js` remains the native Node HTTP router and delegates to services.
+- No new routing framework was adopted; `router`, `find-my-way`, and similar packages were checked, but migration cost is not justified for this slice.
+- Static smoke test: `scripts/m10-backend-structure-smoke.js`.
+
+Acceptance:
+
+- Existing ProfileAgent and LangGraph API contracts remain unchanged.
+- `server.js` no longer owns the moved `generateCareerContext` implementation.
+- `server.js` no longer builds `runResumeWorkflowGraph` options inline.
+- New service files are included in `npm run check`.
+- `npm run m10:backend-structure:smoke` passes.
+
+Next:
+
+- Extend the ProfileAgent settings UI so answered questions can submit fact drafts and let the user confirm/reject them from one place.
+- Later submission policy and real-action gates should get their own service module before adding more routes.

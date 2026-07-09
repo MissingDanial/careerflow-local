@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Boss Find 岗位同步助手",
+  "version": "0.1.0",
+  "description": "从当前登录的 BOSS 直聘页面采集已渲染岗位信息，并同步到后端存储。",
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "Boss Find"
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.zhipin.com/*",
+        "https://*.zhipin.com/*"
+      ],
+      "js": [
+        "src/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": [
+    "https://www.zhipin.com/*",
+    "https://*.zhipin.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs"
+  ],
+  "options_page": "src/options.html"
+}

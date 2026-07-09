@@ -1,0 +1,378 @@
+const AGENT_NAME = "ResumeFitEvaluator";
+
+const TECH_TERMS = [
+  "javascript",
+  "typescript",
+  "node",
+  "node.js",
+  "react",
+  "vue",
+  "python",
+  "java",
+  "go",
+  "golang",
+  "sql",
+  "sqlite",
+  "mysql",
+  "postgres",
+  "postgresql",
+  "fastapi",
+  "django",
+  "flask",
+  "chrome extension",
+  "mv3",
+  "playwright",
+  "langchain",
+  "langgraph",
+  "llm",
+  "agent",
+  "api",
+  "rest",
+  "docker",
+  "linux",
+  "git",
+  "ci",
+  "cd",
+  "excel",
+  "pdf",
+  "docx",
+  "爬虫",
+  "反爬",
+  "浏览器插件",
+  "后端",
+  "前端",
+  "数据库",
+  "自动化",
+  "简历",
+  "投递",
+  "数据采集",
+  "岗位匹配"
+];
+
+const RESPONSIBILITY_HINTS = [
+  "负责",
+  "参与",
+  "开发",
+  "设计",
+  "搭建",
+  "维护",
+  "优化",
+  "实现",
+  "协作",
+  "推进",
+  "沉淀",
+  "测试",
+  "部署",
+  "构建",
+  "采集",
+  "分析"
+];
+
+function runResumeFitEvaluator(input = {}, options = {}) {
+  const context = normalizeInput(input);
+  const mode = normalizeMode(options.mode || input.mode || "rules");
+  if (mode !== "rules") {
+    return runResumeFitEvaluator(input, { ...options, mode: "rules" });
+  }
+
+  const jdRequirements = extractJdRequirements(context.job);
+  const resumeEvidence = extractResumeEvidence(context.resumeVersion);
+  const coverageItems = jdRequirements.requirements.map((requirement) => evaluateRequirement(requirement, resumeEvidence));
+  const covered = coverageItems.filter((item) => item.status === "covered").length;
+  const weak = coverageItems.filter((item) => item.status === "weak").length;
+  const missing = coverageItems.filter((item) => item.status === "missing").length;
+  const coverageScore = coverageItems.length
+    ? Math.round(((covered + weak * 0.45) / coverageItems.length) * 100)
+    : 0;
+  const confidence = coverageItems.length >= 5 ? "medium" : coverageItems.length >= 2 ? "low" : "very_low";
+  const fitLevel = coverageScore >= 78 ? "strong" : coverageScore >= 58 ? "mixed" : "weak";
+  const blockers = coverageItems
+    .filter((item) => item.type === "skill" && item.priority === "must" && item.source === "tag" && item.status === "missing")
+    .map((item) => item.requirement)
+    .slice(0, 10);
+  const recommendations = buildRecommendations(coverageItems, context.resumeVersion);
+
+  return {
+    ok: true,
+    agent: AGENT_NAME,
+    provider: "rules",
+    fallbackUsed: false,
+    result: {
+      jdRequirements,
+      coverage: {
+        score: coverageScore,
+        fitLevel,
+        confidence,
+        covered,
+        weak,
+        missing,
+        total: coverageItems.length,
+        items: coverageItems
+      },
+      blockers,
+      recommendations,
+      policy: {
+        canProceedToAudit: coverageScore >= 55 && blockers.length === 0,
+        requiresResumeRevision: coverageScore < 75 || weak > 0 || missing > 0,
+        noRealBossAction: true,
+        noApplicationStatusChange: true
+      },
+      metadata: {
+        method: "rules",
+        resumeVersionId: context.resumeVersion.id || null,
+        applicationId: context.application.id || context.resumeVersion.applicationId || null,
+        requirementCount: coverageItems.length
+      }
+    }
+  };
+}
+
+function extractJdRequirements(job = {}) {
+  const description = multiline(job.description || "");
+  const title = text(job.title || "");
+  const tags = normalizeStringArray(job.tags);
+  const lines = description
+    .split(/\r?\n|[。；;]+/g)
+    .map(text)
+    .filter((line) => line.length >= 3)
+    .slice(0, 80);
+  const tagRequirements = unique(tags).map((item) => ({
+    type: "skill",
+    requirement: item,
+    priority: "must",
+    source: "tag"
+  }));
+  const inferredSkillRequirements = unique(TECH_TERMS
+    .filter((term) => containsLoose(description, term) || containsLoose(title, term))
+    .filter((term) => !tags.some((tag) => containsLoose(tag, term) || containsLoose(term, tag))))
+    .map((item) => ({
+      type: "skill",
+      requirement: item,
+      priority: "should",
+      source: "keyword"
+    }));
+  const responsibilityRequirements = lines
+    .filter((line) => RESPONSIBILITY_HINTS.some((hint) => line.includes(hint)))
+    .slice(0, 8)
+    .map((line) => ({
+      type: "responsibility",
+      requirement: line,
+      priority: /必须|精通|熟悉|要求|需要/.test(line) ? "must" : "should",
+      source: "description"
+    }));
+  const fallbackRequirements = !tagRequirements.length && !inferredSkillRequirements.length && !responsibilityRequirements.length && description
+    ? lines.slice(0, 5).map((line) => ({
+      type: "description",
+      requirement: line,
+      priority: "should",
+      source: "description"
+    }))
+    : [];
+  const requirements = uniqueRequirements([
+    ...tagRequirements,
+    ...inferredSkillRequirements,
+    ...responsibilityRequirements,
+    ...fallbackRequirements
+  ]).slice(0, 30);
+  return {
+    title,
+    descriptionLength: description.length,
+    requirements
+  };
+}
+
+function extractResumeEvidence(resumeVersion = {}) {
+  const fields = resumeVersion.resumeFields || {};
+  const skills = normalizeStringArray(fields.skills);
+  const projects = Array.isArray(fields.projects) ? fields.projects : [];
+  const summary = multiline(fields.summary || "");
+  const projectEvidence = projects.flatMap((project, projectIndex) => {
+    const title = text(project?.title || "");
+    const projectSkills = normalizeStringArray(project?.skills);
+    const bullets = normalizeStringArray(project?.bullets);
+    return [
+      ...projectSkills.map((item) => ({
+        field: `projects[${projectIndex}].skills`,
+        text: item,
+        source: "project_skill",
+        title
+      })),
+      ...bullets.map((item, bulletIndex) => ({
+        field: `projects[${projectIndex}].bullets[${bulletIndex}]`,
+        text: item,
+        source: "project_bullet",
+        title
+      }))
+    ];
+  });
+  return [
+    ...skills.map((item, index) => ({
+      field: `skills[${index}]`,
+      text: item,
+      source: "skill"
+    })),
+    ...(summary ? [{
+      field: "summary",
+      text: summary,
+      source: "summary"
+    }] : []),
+    ...projectEvidence
+  ].filter((item) => item.text);
+}
+
+function evaluateRequirement(requirement, evidenceItems) {
+  const scored = evidenceItems
+    .map((evidence) => ({
+      evidence,
+      score: scoreEvidence(requirement.requirement, evidence.text)
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score);
+  const best = scored[0];
+  const status = best?.score >= 0.72 ? "covered" : best?.score >= 0.35 ? "weak" : "missing";
+  return {
+    ...requirement,
+    status,
+    score: best ? Math.round(best.score * 100) : 0,
+    evidenceField: best?.evidence.field || "",
+    evidenceText: best?.evidence.text || ""
+  };
+}
+
+function scoreEvidence(requirement, evidence) {
+  const req = text(requirement).toLowerCase();
+  const ev = text(evidence).toLowerCase();
+  if (!req || !ev) {
+    return 0;
+  }
+  if (ev.includes(req) || req.includes(ev)) {
+    return 1;
+  }
+  const reqTokens = tokenSet(req);
+  const evTokens = tokenSet(ev);
+  if (!reqTokens.size || !evTokens.size) {
+    return 0;
+  }
+  const overlap = Array.from(reqTokens).filter((token) => evTokens.has(token)).length;
+  return overlap / Math.max(1, Math.min(reqTokens.size, 8));
+}
+
+function buildRecommendations(items, resumeVersion) {
+  const missing = items.filter((item) => item.status === "missing").slice(0, 8);
+  const weak = items.filter((item) => item.status === "weak").slice(0, 8);
+  const recommendations = [];
+  if (missing.length) {
+    recommendations.push(...missing.map((item) => ({
+      type: "add_or_surface_evidence",
+      requirement: item.requirement,
+      reason: "No matching confirmed resume evidence was found.",
+      allowedAction: "Only add this if the profile fact library has confirmed evidence."
+    })));
+  }
+  if (weak.length) {
+    recommendations.push(...weak.map((item) => ({
+      type: "strengthen_existing_evidence",
+      requirement: item.requirement,
+      evidenceField: item.evidenceField,
+      reason: "A weak match exists, but wording should be tightened against the JD.",
+      allowedAction: "Rewrite only within existing source mapping and confirmed facts."
+    })));
+  }
+  if (!recommendations.length) {
+    recommendations.push({
+      type: "keep_current_resume",
+      requirement: "",
+      reason: `Resume version #${resumeVersion.id || ""} covers the extracted JD requirements well.`.trim(),
+      allowedAction: "Proceed to audit and local approval gates."
+    });
+  }
+  return recommendations.slice(0, 12);
+}
+
+function normalizeInput(input = {}) {
+  return {
+    application: normalizeObject(input.application),
+    job: normalizeJob(input.job || {}),
+    resumeVersion: normalizeResumeVersion(input.resumeVersion || input.resume_version || {})
+  };
+}
+
+function normalizeJob(job = {}) {
+  return {
+    id: Number(job.id || 0),
+    title: text(job.title || ""),
+    description: multiline(job.description || ""),
+    tags: normalizeStringArray(job.tags)
+  };
+}
+
+function normalizeResumeVersion(resumeVersion = {}) {
+  return {
+    id: Number(resumeVersion.id || 0),
+    applicationId: Number(resumeVersion.applicationId || resumeVersion.application_id || 0),
+    status: text(resumeVersion.status || ""),
+    resumeFields: normalizeObject(resumeVersion.resumeFields || resumeVersion.resume_fields)
+  };
+}
+
+function normalizeMode(value) {
+  const mode = text(value).toLowerCase();
+  return new Set(["rules", "auto", "llm"]).has(mode) ? mode : "rules";
+}
+
+function normalizeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map(text).filter(Boolean).slice(0, 120);
+}
+
+function uniqueRequirements(requirements) {
+  const seen = new Set();
+  const output = [];
+  for (const item of requirements) {
+    const key = `${item.type}:${text(item.requirement).toLowerCase()}`;
+    if (!item.requirement || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
+}
+
+function unique(values) {
+  return Array.from(new Set(values.map(text).filter(Boolean)));
+}
+
+function tokenSet(value) {
+  return new Set(text(value)
+    .toLowerCase()
+    .split(/[^a-z0-9\u4e00-\u9fa5+#.]+/g)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2));
+}
+
+function containsLoose(haystack, needle) {
+  const left = text(haystack).toLowerCase();
+  const right = text(needle).toLowerCase();
+  return Boolean(left && right && (left.includes(right) || right.includes(left)));
+}
+
+function text(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function multiline(value) {
+  return String(value || "").replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ").trim();
+}
+
+module.exports = {
+  AGENT_NAME,
+  extractJdRequirements,
+  runResumeFitEvaluator
+};

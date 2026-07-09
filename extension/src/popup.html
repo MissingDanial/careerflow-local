@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Boss Find</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="header">
+        <div>
+          <h1>岗位信息采集</h1>
+          <p id="pageStatus">等待检测当前页面</p>
+        </div>
+        <button id="openOptions" class="icon-button" type="button" title="设置与详情" aria-label="设置与详情">
+          <span aria-hidden="true">⚙</span>
+        </button>
+      </header>
+
+      <section class="actions" aria-label="岗位采集操作">
+        <button id="startCollection" class="primary" type="button">开始岗位信息采集</button>
+        <button id="pauseCollection" type="button">暂停</button>
+        <button id="retryCollection" type="button">重试</button>
+      </section>
+
+      <section class="status-card" aria-live="polite">
+        <div class="status-row">
+          <span id="browserTaskStatus">浏览器任务未开始</span>
+          <span id="browserTaskCount">0</span>
+        </div>
+        <div class="progress-track">
+          <div id="crawlProgressBar" class="progress-bar"></div>
+        </div>
+        <div class="summary-grid">
+          <div>
+            <strong id="jobCount">0</strong>
+            <span>岗位</span>
+          </div>
+          <div>
+            <strong id="descCount">0</strong>
+            <span>完整 JD</span>
+          </div>
+          <div>
+            <strong id="browserTaskFailed">0</strong>
+            <span>失败</span>
+          </div>
+        </div>
+        <p id="browserTaskFailures" class="task-failures">暂无失败任务</p>
+      </section>
+
+      <section class="detail-link">
+        <button id="openOptionsSecondary" class="link-button" type="button">查看设置、诊断和待补 JD</button>
+      </section>
+
+      <div class="visually-hidden" aria-hidden="true">
+        <input id="autoSync" type="checkbox">
+        <input id="backendUrl" type="url">
+        <input id="syncPath" type="text">
+        <input id="token" type="password">
+        <input id="crawlDelayMs" type="number">
+        <input id="crawlMaxJobs" type="number">
+        <button id="capture" type="button"></button>
+        <button id="sync" type="button"></button>
+        <button id="autoCrawl" type="button"></button>
+        <button id="stopAutoCrawl" type="button"></button>
+        <button id="queueVisibleDetails" type="button"></button>
+        <button id="runBrowserTask" type="button"></button>
+        <button id="runCurrentPageQueue" type="button"></button>
+        <button id="processVisibleDetails" type="button"></button>
+        <button id="clearCache" type="button"></button>
+        <button id="refreshQuality" type="button"></button>
+        <span id="browserTaskQueued">0</span>
+        <span id="browserTaskRunning">0</span>
+        <span id="browserTaskSucceeded">0</span>
+        <span id="browserTaskDetail"></span>
+        <span id="crawlProgressText"></span>
+        <span id="crawlProgressCount"></span>
+        <span id="crawlVisibleTargets"></span>
+        <span id="crawlPendingTargets"></span>
+        <span id="crawlSkippedTargets"></span>
+        <span id="crawlScrollCount"></span>
+        <span id="crawlLastAction"></span>
+        <span id="crawlLastJobTitle"></span>
+        <span id="pageCount">0</span>
+        <span id="qualityDescriptionCoverage"></span>
+        <span id="qualityRequiredCoverage"></span>
+        <span id="qualityInvalidJobs"></span>
+        <span id="qualityStatus"></span>
+        <span id="qualityEvents"></span>
+        <span id="recentEventCount"></span>
+        <span id="recentEvents"></span>
+        <span id="missingDescriptionCount"></span>
+        <span id="missingDescriptions"></span>
+        <pre id="preview"></pre>
+      </div>
+
+      <footer id="status" class="status">打开 BOSS 直聘岗位列表后开始采集。</footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
