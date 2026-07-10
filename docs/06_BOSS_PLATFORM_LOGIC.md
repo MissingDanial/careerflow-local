@@ -280,6 +280,40 @@ Human review -> 决定是否进入任何真实外部动作 POC
 ```
 
 后续如果实现自动上传或自动投递，必须新增独立 POC、独立开关、独立事件记录和失败恢复策略，不能复用 M10.1 的计划 API 直接执行。
+
+## M11.3 Local Execution Package Boundary
+
+M11.3 新增 `GET/POST /api/applications/:id/execution-package`，作用是把本地投递前证据打成一个可审计执行包，不是自动投递器。
+
+`POST` 会额外在后端数据目录写入 `execution_packages/*.json` 和 `execution_packages/*.md`。这些文件是本地审计归档，供投递前人工检查和后续纠错使用。
+
+执行包可以包含：
+
+- 岗位标题、公司、detail URL 和 JD 长度。
+- 已审核且本地审批通过的 DOCX 简历路径。
+- DOCX render QA 摘要。
+- 最近一次 AuditAgent、ResumeFitEvaluator、ClaimVerifier 摘要。
+- MessageAgent 打招呼草稿。
+- `SEND_GREETING`、`UPLOAD_RESUME`、`SUBMIT_APPLICATION` 的 dry-run 证据。
+- `submissionReadiness` 和 `submissionReadinessReview`。
+- 阻断项和手动步骤。
+
+执行包必须保持：
+
+- `noRealBossAction: true`
+- `createsBrowserTasks: false`
+- `noBrowserTaskCreated: true`
+- `realActionsBlocked: ["SEND_GREETING_REAL", "UPLOAD_RESUME_REAL", "SUBMIT_APPLICATION_REAL"]`
+
+明确不允许：
+
+- 不点击发送。
+- 不选择或上传文件。
+- 不点击确认或投递。
+- 不创建新的 BOSS browser task。
+- 不把 application 状态推进到 `SUBMITTED`。
+
+因此 M11.3 只解决“闭环证据是否齐全、用户下一步该怎么手动执行”的问题，不解决真实自动投递。
 ## M10.2b Observability and BOSS boundary
 
 M10.2b adds `workflow_events`, timeline APIs, and an error queue. This is an audit and correction layer, not a BOSS execution layer.
@@ -384,3 +418,80 @@ ResumeFitEvaluator / ClaimVerifier blocks audit
 -> ClaimVerifier reruns on the new version
 -> AuditAgent only after those gates pass
 ```
+
+## M11.4 Execution Package Review Boundary
+
+M11.4 keeps the execution-package layer local and review-only. It adds validation and an explicit package review event, but it does not unlock BOSS automation.
+
+Allowed:
+
+- Validate that the execution package preserves `noRealBossAction`, `createsBrowserTasks: false`, and `noBrowserTaskCreated`.
+- Validate that `SEND_GREETING_REAL`, `UPLOAD_RESUME_REAL`, and `SUBMIT_APPLICATION_REAL` remain blocked.
+- Validate local evidence: DOCX approval, DOCX QA, audit approval, greeting draft, dry-run evidence, submission readiness, local readiness approval, and archive files.
+- Record `EXECUTION_PACKAGE_REVIEWED` with `APPROVED_FOR_MANUAL_EXECUTION`, `REFRESH_REQUIRED`, or `BLOCKED`.
+- Show validation failures and review actions in the Chrome Extension settings page.
+
+Not allowed:
+
+- It must not click BOSS send.
+- It must not upload or select a local resume file in BOSS.
+- It must not confirm or submit an application.
+- It must not create browser tasks.
+- It must not advance application status.
+- It must not mark anything as submitted.
+
+Approval rule:
+
+`APPROVED_FOR_MANUAL_EXECUTION` is accepted only when the package is ready and validation passes. If the package has blockers, missing archives, or any safety-contract failure, the approval attempt is recorded as blocked and must be corrected upstream.
+
+## M11.5 Manual Execution Checklist Boundary
+
+M11.5 records local manual progress after an approved execution package. It is a ledger, not a BOSS executor.
+
+Allowed:
+
+- Read the current execution package checklist.
+- Show package review state, blockers, and manual steps in the settings page.
+- Record a package-derived step as `DONE`, `SKIPPED`, `FAILED`, `BLOCKED`, or `NEEDS_REFRESH`.
+- Store the record as `EXECUTION_CHECKLIST_STEP_RECORDED` in `workflow_events`.
+- Keep a local progress count for review and correction.
+
+Not allowed:
+
+- It must not open or control BOSS pages.
+- It must not click BOSS send.
+- It must not select, upload, or confirm a resume file.
+- It must not submit an application.
+- It must not create browser tasks.
+- It must not change application status.
+- It must not mark the application as submitted.
+
+Gate:
+
+Checklist progress can be recorded only after the package review accepted `APPROVED_FOR_MANUAL_EXECUTION`. A checklist record is evidence for the local user workflow only; it is not proof that BOSS accepted a submission unless later user-supplied evidence is added.
+
+## M12 Submission Evidence Boundary
+
+M12 records local evidence about what the current BOSS page appears to show after manual execution. It is not a BOSS executor and it is not proof of a successful platform-side application unless the user confirms the outcome.
+
+Allowed:
+
+- Read visible DOM text from the currently logged-in BOSS page.
+- Reuse existing read-only snapshots for conversation state, resume unlock state, upload dry-run state, and submit dry-run state.
+- Classify the visible result as `MANUAL_SUBMISSION_CONFIRMED`, `GREETING_SENT_CONFIRMED`, `RESUME_UPLOAD_CONFIRMED`, `BLOCKED_BY_BOSS`, `NEEDS_USER_ACTION`, or `UNKNOWN`.
+- Record `SUBMISSION_EVIDENCE_RECORDED` in `workflow_events`.
+- Show the latest evidence in the extension settings page.
+
+Not allowed:
+
+- It must not click BOSS buttons.
+- It must not send a greeting.
+- It must not select, upload, or confirm a resume file.
+- It must not submit an application.
+- It must not create browser tasks.
+- It must not change application status.
+- It must not mark the application as submitted.
+
+Operational note:
+
+If BOSS shows login, captcha, security verification, job closed, or abnormal access signals, the result should be recorded as `BLOCKED_BY_BOSS` or `NEEDS_USER_ACTION` and handed back to the user for correction.

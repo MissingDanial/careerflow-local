@@ -567,3 +567,326 @@ Boundary:
 - It does not own BOSS browser actions.
 - It does not create `SEND_GREETING`, `UPLOAD_RESUME`, or `SUBMIT_APPLICATION` tasks.
 - It does not bypass the existing local approval and dry-run gates.
+
+## M11.1 Resume template registry reuse check
+
+M11.1 coding started with reuse checks for DOCX resume template generation and template engines:
+
+- Existing `docx@9.7.1`: MIT, GitHub `dolanmiu/docx`. Selected for this slice because the repo already uses it successfully for local DOCX rendering, it needs no new data model, and it keeps template behavior inside auditable JavaScript.
+- `docxtemplater@3.69.0`: MIT, GitHub `open-xml-templating/docxtemplater`. Useful when filling real Word `.docx` templates with placeholders. Rejected for now because M11.1 needs a stable section contract and render metadata before adding a second template syntax and template-file lifecycle.
+- `docx-templates@4.15.0`: MIT, GitHub `guigrpa/docx-templates`. Useful for report-style Word templates. Rejected for now for the same reason: the project does not yet need external template authoring, and adding it would make resume source mapping harder to inspect.
+- `@mohtasham/md-to-docx`, `markdown-docx`, `remark-docx`, and HTML-to-DOCX packages are useful for Markdown/HTML conversion, but they do not directly solve the required resume section policy: education first, project evidence second, no standalone summary/skills section by default, and metadata recorded per render.
+
+Selected approach:
+
+- Do not add a dependency.
+- Keep `docx` as the rendering library.
+- Add `server/src/resume-template-registry.js` as the local template registry.
+- Make `resume-to-word-campus-product-v1` the default template and bind it to `.agents/skills/resume-to-word/SKILL.md`.
+- Keep `boss-find-fixed-docx-v1` as a legacy compatibility template.
+- Expose the registry through `GET /api/resume-templates`; the extension loads select options from this endpoint and passes the chosen key as `renderOptions.templateName`.
+- Validate with `npm run m11:resume-template:smoke`.
+
+Boundary:
+
+- M11.1 does not clone arbitrary Word templates.
+- M11.1 does not add PDF export.
+- M11.1 does not add a visual template editor.
+- Future template-file support can introduce `docxtemplater` or `docx-templates` after the registry/API contract is stable.
+- `slim-select`, `tom-select`, React select libraries, and `webextension-polyfill` were not adopted for the settings selector. A native `<select>` backed by the backend registry is enough and avoids adding a build/runtime dependency to the MV3 extension.
+
+## M11.2 DOCX render QA reuse check
+
+M11.2 coding started with reuse checks for validating generated DOCX output after render:
+
+- Existing `mammoth@1.12.0`: BSD-2-Clause, GitHub `mwilliamson/mammoth.js`. Selected because the repo already uses it for DOCX text extraction, and its raw-text extraction API is exactly what render QA needs: verify that the generated Word file can be opened as text and contains the expected section contract.
+- `docx-preview`: useful for browser-side DOCX-to-HTML preview. Rejected for backend render QA because the current need is not a visual preview surface; it is a deterministic server-side text/heading/policy check after `docx` writes the file.
+- `officeparser@7.2.3`: MIT, broad Office parser/generator that can parse many file types and produce richer AST/output. Rejected for this slice because M11.2 only needs DOCX raw text and heading checks; adopting a broader parser would increase migration surface without improving the immediate QA contract.
+- ZIP-level packages such as `adm-zip` / `yauzl`: useful for inspecting `.docx` internals but rejected because they would force this project to hand-roll WordprocessingML parsing for headings and text extraction.
+
+Selected approach:
+
+- Reuse existing `mammoth.extractRawText`.
+- Add `server/src/resume-render-qa.js` as a narrow QA module.
+- Persist QA results in existing `resume_versions.renderMetadata.renderQuality`; no schema change.
+- Surface the same metadata in the extension resume detail page.
+- Let `AuditAgent` block only hard render failures, while keeping content completeness warnings visible for correction.
+
+Validation:
+
+```powershell
+npm run m11:render-qa:smoke
+npm run m10:langgraph-resume:smoke
+```
+
+Sources checked:
+
+- [mammoth.js](https://github.com/mwilliamson/mammoth.js/)
+- [docx-preview npm](https://www.npmjs.com/package/docx-preview)
+- [officeParser](https://github.com/harshankur/officeParser)
+
+## M11.3 Local execution package reuse check
+
+M11.3 coding started with reuse checks for workflow execution packaging and durable orchestration:
+
+- `@langchain/langgraph@1.4.7`: already in the repo and useful for the resume-generation graph. Rejected for the execution package slice because this step only assembles already persisted evidence and records one workflow event; no graph transitions or retries are needed.
+- `@hatchet-dev/typescript-sdk@1.24.3`: mature background task orchestration. Rejected because the execution package must not create jobs/tasks or introduce an external worker/runtime.
+- `@convex-dev/workflow@0.4.4`: durable Convex workflow component. Rejected because it requires Convex runtime semantics and would move this local-first SQLite slice away from the existing backend.
+- `@dbos-inc/dbos-sdk@4.23.6`, `durable-functions@3.4.0`, `@dapr/durabletask-js@1.0.0`, and `@aws/durable-execution-sdk-js@2.1.0`: useful for durable execution, cloud/server workflow engines, or external workflow runners. Rejected because M11.3 is a local read/prepare artifact, not a long-running distributed execution.
+- `jsonfile@6.2.1`, `comment-json@5.0.0`, and `eta@4.6.0`: useful for generalized JSON file helpers or templating. Rejected because Node's built-in `fs.writeFileSync` plus a small Markdown renderer is enough for this fixed local archive, and adding a template engine would expand the surface without improving control.
+
+Current choice:
+
+- Reuse existing `getApplicationWorkflowSnapshot`, `planApplicationWorkflow`, browser-task dry-run evidence, conversations metadata, and `workflow_events`.
+- Add a narrow `ExecutionPackageService` with no new dependency and no schema change.
+- Write JSON and Markdown archives with built-in `fs` so each prepared package is locally inspectable.
+- Integrate via direct backend endpoints and the existing Chrome Extension background proxy.
+
+Validation:
+
+```powershell
+npm run m11:execution-package:smoke
+```
+
+## M11.4 Execution package validation reuse check
+
+M11.4 coding started with reuse checks for schema and package validation:
+
+- `ajv@8.20.0`: mature JSON Schema validator, MIT, GitHub `ajv-validator/ajv`. Rejected for now because the execution package contract is a small local business-safety object, and the important rules are semantic checks such as "must not create browser tasks", "real actions remain blocked", and "archive files exist".
+- `jsonschema@1.5.0`: established JSON Schema validator, MIT, GitHub `tdegrunt/jsonschema`. Rejected for the same reason: the current validation surface is not primarily generic JSON Schema shape validation.
+- `z-schema@12.4.0`: current JSON Schema validator with broad draft support. Rejected because adding a dependency would not reduce the handwritten BOSS safety checks.
+- Error-formatting helpers such as `better-ajv-errors` / `@segment/ajv-human-errors` were not adopted because the current UI needs short business failure codes rather than generalized schema error prose.
+
+Selected approach:
+
+- Do not add a dependency.
+- Add `validateExecutionPackage` as a narrow pure function inside `ExecutionPackageService`.
+- Validate root fields, safety flags, blocked real actions, ready-package evidence, and local archive file existence.
+- Store validation output in execution-package responses and workflow event metadata.
+- Add `POST /api/applications/:id/execution-package/review` using the existing `workflow_events` table instead of adding a review table.
+
+Future trigger to adopt Ajv:
+
+- If execution packages become externally shared artifacts or versioned public contracts, move the shape checks to JSON Schema and keep BOSS safety checks as custom semantic validators.
+
+Validation:
+
+```powershell
+npm run m11:execution-package:smoke
+```
+
+## M11.5 Manual execution checklist reuse check
+
+M11.5 coding started with reuse checks for checklist/progress/state-machine helpers:
+
+- `xstate` / `@xstate/fsm`: mature finite-state-machine tooling. Rejected for this slice because the checklist is not a new workflow engine; it is a small ledger over already prepared package steps.
+- `javascript-state-machine`, `finity`, and `little-state-machine`: useful for local state machines. Rejected because adding another state layer would duplicate existing `workflow_events` and `WorkflowOrchestrator` responsibilities.
+- `@editorjs/checklist`: useful for rich-text checklist editing. Rejected because the extension needs fixed package-derived steps, not user-authored document blocks.
+- `@zag-js/progress` and UI progress packages: useful for reusable UI widgets. Rejected because the MV3 settings page already uses simple DOM rendering and needs no component runtime.
+
+Selected approach:
+
+- Do not add a dependency.
+- Reuse existing `manualSteps` from the execution package.
+- Reuse `workflow_events` as the durable ledger.
+- Add narrow service methods `readChecklist` and `recordChecklistStep`.
+- Keep all records local and marked `noRealBossAction`, `createsBrowserTasks: false`, and `noBrowserTaskCreated`.
+
+Validation:
+
+```powershell
+npm run m11:execution-package:smoke
+```
+
+## M12 Submission evidence reuse check
+
+M12 coding started with reuse checks for page result/status detection and evidence recording:
+
+- `webextension-polyfill`: mature Promise wrapper for Chrome/Firefox extension APIs. Rejected because this MV3 extension already uses direct `chrome.*` APIs and adding a polyfill would not improve result classification.
+- Generic MutationObserver/page-monitor examples from GitHub: useful for detecting text changes, but rejected because M12 only needs an explicit user-triggered read of the current BOSS page, not background monitoring.
+- Readability/DOM text extraction helpers: useful for article extraction, but rejected because BOSS result detection depends on short business signals, existing conversation/upload/submit dry-run snapshots, and blocker diagnostics rather than article text parsing.
+- NLP/full-text packages from npm search: rejected because the status vocabulary is small and must stay explainable for audit logs.
+
+Selected approach:
+
+- Do not add a dependency.
+- Reuse the existing content script DOM access, page diagnostics, conversation snapshot, resume unlock snapshot, upload dry-run snapshot, and submit dry-run snapshot.
+- Reuse `workflow_events` as the durable evidence ledger instead of creating a new table in this slice.
+- Keep all records marked `noRealBossAction: true`, `createsBrowserTasks: false`, and `noBrowserTaskCreated: true`.
+
+Validation:
+
+```powershell
+npm run m12:submission-evidence:smoke
+```
+
+## M13.1 Repository quality and CI reuse check
+
+M13.1 coding started with GitHub/npm reuse checks for Node CI and test-script orchestration:
+
+- `actions/checkout@v6`: selected as the official GitHub repository checkout action.
+- `actions/setup-node@v6`: selected as the official Node.js setup action, with Node.js 24 and npm dependency caching.
+- `npm-run-all2`: maintained cross-platform npm-script orchestration and useful when a project needs parallel or wildcard script execution. Rejected for this slice because the repository needs deterministic sequential smoke execution, fail-fast output, and explicit tier membership checks; a small built-in Node runner covers those requirements without another dependency.
+- Node's built-in `child_process.spawnSync`: selected for syntax and tier runners because it works with the existing individual npm scripts and preserves their exit codes and output.
+- Playwright's installed Chromium executable: reused by `findBrowserExecutable()` after the CI workflow installs Chromium, while retaining local Chrome/Edge discovery for Windows development.
+
+Integration:
+
+- Direct GitHub Actions usage in `.github/workflows/ci.yml`.
+- No new npm package.
+- `scripts/check-js-syntax.js` discovers JavaScript files.
+- `scripts/test-tiers.js` is the source of truth for smoke test ownership.
+- `scripts/run-test-tier.js` runs tiers sequentially.
+- `scripts/m13-repository-baseline-smoke.js` validates repository invariants and that every milestone smoke is assigned exactly once.
+
+Validation:
+
+```powershell
+npm run check
+npm run test:baseline
+npm run test:ci
+```
+
+Sources checked:
+
+- [actions/checkout](https://github.com/actions/checkout)
+- [actions/setup-node](https://github.com/actions/setup-node)
+- [npm-run-all2](https://github.com/bcomnes/npm-run-all2)
+
+## M13.2 SQLite migration reuse check
+
+M13.2 coding started with reuse checks for ordered SQLite migrations and backup/recovery:
+
+- `umzug`: mature framework-agnostic migration runner with custom storage support. Rejected because this repository would still need a custom synchronous `node:sqlite` storage adapter, backup lifecycle, and failure restoration around it.
+- `knex`: mature SQL query builder with migration CLI. Rejected because it requires adding Knex plus a supported SQLite driver and would replace more of the current direct `DatabaseSync` access than this migration slice needs.
+- Node.js `node:sqlite`: selected because it is already the repository database runtime and keeps initialization synchronous.
+- SQLite `VACUUM INTO`: selected for pre-migration backups because it creates a consistent standalone SQLite database while the source connection is open.
+- `PRAGMA user_version`: retained as the runtime compatibility version; `schema_migrations` adds names, checksums, status, duration, and timestamps for auditability.
+
+Selected approach:
+
+- Do not add an npm dependency.
+- Store ordered SQL under `server/migrations/`.
+- Validate a contiguous `001` through current `SCHEMA_VERSION` sequence before changing a database.
+- Reject migration files that manage their own transaction or `user_version`.
+- Execute each migration in `BEGIN IMMEDIATE`, record SHA-256 checksum, then advance `user_version`.
+- Back up an existing database before pending migrations or migration-history bootstrap.
+- Restore the backup on failure and keep the backup file for inspection.
+
+Validation:
+
+```powershell
+npm run m2:sqlite:smoke
+npm run m13:sqlite-migrations:smoke
+npm run test:ci
+```
+
+Sources checked:
+
+- [Node.js SQLite](https://nodejs.org/api/sqlite.html)
+- [SQLite VACUUM INTO](https://sqlite.org/lang_vacuum.html#vacuuminto)
+- [SQLite user_version](https://sqlite.org/pragma.html#pragma_user_version)
+- [Umzug](https://github.com/sequelize/umzug)
+- [Knex migrations](https://knexjs.org/guide/migrations.html)
+
+## M13.3 Immutable workflow input reuse check
+
+M13.3 coding started with GitHub/npm checks for LangGraph persistence, SQLite checkpointing, and event stores:
+
+- Official LangGraph persistence/checkpointing: useful for thread state, interrupts, time travel, and resuming graph execution. Not adopted in M13.3 because this slice needs a business audit record of the exact profile/JD/version manifest before any node runs.
+- `@langchain/langgraph-checkpoint-sqlite`: official SQLite checkpointer candidate. Deferred because graph replay can re-execute downstream nodes and their side effects, while the current requirement is a read-only comparison replay that must not create screenings, resumes, audits, files, or browser tasks.
+- `evtstore`: SQLite-backed Node event store candidate. Rejected because introducing a second event-store abstraction would duplicate the existing `workflow_events`, direct `node:sqlite` runtime, and ordered migration system.
+- Existing `node:sqlite`, `job_snapshots`, `agent_runs`, and LangGraph node functions: selected for direct reuse.
+
+Selected approach:
+
+- Do not add an npm dependency.
+- Keep business input snapshots separate from future LangGraph runtime checkpoints.
+- Add `profile_snapshots`, `workflow_runs`, and `workflow_input_snapshots` through migration 011.
+- Reuse `job_snapshots` for workflow-owned JD snapshots.
+- Attach one immutable manifest to every graph `agent_run`.
+- Store only sanitized model configuration metadata.
+- Implement `POST /api/workflow-runs/:id/replay` as an in-memory dry replay with output comparison and zero persistent writes.
+
+Validation:
+
+```powershell
+npm run m13:workflow-inputs:smoke
+npm run m10:langgraph-resume:smoke
+npm run test:ci
+```
+
+Sources checked:
+
+- [LangGraph persistence](https://docs.langchain.com/oss/javascript/langgraph/persistence)
+- [LangGraph replay](https://docs.langchain.com/oss/javascript/langgraph/use-time-travel)
+- [LangGraph SQLite checkpointer](https://www.npmjs.com/package/@langchain/langgraph-checkpoint-sqlite)
+- [evtstore](https://www.npmjs.com/package/evtstore)
+
+## M13.4 Application transition reuse check
+
+M13.4 coding started with GitHub/npm checks for JavaScript state-machine runtimes:
+
+- `xstate@5.32.4`: mature MIT statechart/actor runtime with active maintenance and strong fit for complex in-memory orchestration. Rejected for this slice because the hard requirement is SQLite-transactional evidence ownership, idempotency keys, task expiry, and callback leases; adopting XState would not replace those persistence rules and would duplicate the existing explicit transition map.
+- `javascript-state-machine@3.1.0`: smaller finite-state-machine package. Rejected because its maintenance is substantially older and it still does not provide database evidence validation, transactional event writes, or browser-task lease semantics.
+- Existing explicit transition map, ordered migrations, `node:sqlite`, `application_events`, and `workflow_events`: selected for direct reuse.
+
+Selected approach:
+
+- Do not add an npm dependency.
+- Move the existing application graph into one `ApplicationTransitionService`.
+- Keep transition policy synchronous and transaction-owned by the existing SQLite store.
+- Validate typed evidence against persisted rows before changing state.
+- Add application-scoped idempotency keys through migration 012.
+- Add browser task expiry, attempts, and claim tokens in the same migration.
+- Make the extension return the current claim token with every task completion callback.
+- Treat identical terminal callbacks as successful no-op replay and conflicting/stale callbacks as HTTP 409.
+
+Validation:
+
+```powershell
+npm run m13:application-transitions:smoke
+npm run test:workflow
+npm run test:ci
+```
+
+Sources checked:
+
+- [XState](https://github.com/statelyai/xstate)
+- [XState npm](https://www.npmjs.com/package/xstate)
+- [javascript-state-machine](https://github.com/jakesgordon/javascript-state-machine)
+- [javascript-state-machine npm](https://www.npmjs.com/package/javascript-state-machine)
+
+## M13.5 Agent evaluation reuse check
+
+M13.5 coding started with GitHub/npm searches for `LLM evaluation`, `agent evaluation`, `TypeScript eval`, and local fixture runners. Metadata was checked on 2026-07-10:
+
+- `promptfoo/promptfoo` (`promptfoo@0.121.18`, 23k+ GitHub stars): the most mature general candidate, with provider orchestration, assertions, red-team checks, and reports. Rejected for the M13.5 core because the npm package has a large dependency surface and the project would still need custom cross-case ranking, claim-evidence ownership, Audit consistency, input hashing, and version-manifest logic.
+- `confident-ai/deepeval` (`deepeval@0.1.31`, 16k+ GitHub stars): mature Python ecosystem and active project, but the TypeScript package is comparatively new and brings OpenAI, telemetry, Sentry, and reporting dependencies. It is better suited to later LLM-as-judge evaluation than the no-key deterministic CI baseline.
+- `langchain-ai/langsmith-sdk` (`langsmith@0.8.1`, 900+ GitHub stars): integrates naturally with LangGraph and is a strong later option for hosted datasets, traces, and model comparisons. Rejected for the required baseline because its main value depends on an external service, while M13.5 must remain local, anonymous, and runnable without credentials.
+- `mattpocock/evalite` (`evalite@0.19.0`, 1.6k+ GitHub stars): the closest TypeScript code-first candidate. Rejected because it would add Vitest, Fastify, and native `better-sqlite3` beside the repository's existing Node 24 runner and `node:sqlite` stack, while all business scorers still require custom code.
+- Existing production Agent functions, version constants, built-in `crypto`, JSON fixtures, and the M13 test-tier runner: selected for direct reuse.
+
+Selected approach:
+
+- Do not add an npm dependency for the deterministic baseline.
+- Store anonymous, versioned fixtures under `evaluation/fixtures/`.
+- Call production `JobRiskGate`, `ScreeningAgent`, `ResumeAgent`, `ResumeFitEvaluator`, `ClaimVerifier`, and `AuditAgent` directly in rules mode.
+- Produce local JSON and Markdown reports with dataset SHA-256, provider/model mode, graph/prompt/agent versions, thresholds, metrics, and failed sample IDs.
+- Keep the dataset/report contract framework-neutral so a later promptfoo, DeepEval, or LangSmith adapter can consume the same cases for live-model evaluation.
+
+Validation:
+
+```powershell
+npm run agent:evaluate
+npm run m13:agent-evaluation:smoke
+npm run test:agents
+npm run test:ci
+```
+
+Sources checked:
+
+- [promptfoo](https://github.com/promptfoo/promptfoo)
+- [DeepEval](https://github.com/confident-ai/deepeval)
+- [LangSmith SDK](https://github.com/langchain-ai/langsmith-sdk)
+- [Evalite](https://github.com/mattpocock/evalite)

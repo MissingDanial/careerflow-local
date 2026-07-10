@@ -36,6 +36,13 @@ body {
   margin-bottom: 20px;
 }
 
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 h1,
 h2,
 p {
@@ -124,7 +131,8 @@ label {
   gap: 12px;
 }
 
-input {
+input,
+select {
   width: 100%;
   height: 38px;
   padding: 0 11px;
@@ -136,7 +144,8 @@ input {
   outline: none;
 }
 
-input:focus {
+input:focus,
+select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.14);
 }
@@ -172,7 +181,25 @@ button {
   cursor: pointer;
 }
 
+.button-link {
+  display: inline-flex;
+  min-width: 112px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  text-decoration: none;
+}
+
 button:hover {
+  border-color: #b7c4d8;
+  background: #f9fbff;
+}
+
+.button-link:hover {
   border-color: #b7c4d8;
   background: #f9fbff;
 }
@@ -216,6 +243,17 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.inline-setting-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: end;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfdff;
 }
 
 .risk-gate-panel {
@@ -428,6 +466,14 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
+.profile-agent-portal {
+  scroll-margin-top: 18px;
+}
+
+.profile-agent-update-panel textarea {
+  min-height: 118px;
+}
+
 .detail-section {
   min-height: 86px;
   max-height: 320px;
@@ -439,6 +485,57 @@ button:disabled {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.execution-package-panel {
+  margin-top: 12px;
+}
+
+.execution-package-detail {
+  max-height: 360px;
+}
+
+.execution-checklist-detail {
+  max-height: 420px;
+}
+
+.submission-evidence-detail {
+  max-height: 360px;
+}
+
+.execution-package-detail.warn {
+  border-color: #f5b5b5;
+  background: #fff8f8;
+}
+
+.execution-checklist-detail.warn,
+.submission-evidence-detail.warn {
+  border-color: #f5b5b5;
+  background: #fff8f8;
+}
+
+.checklist-step {
+  display: grid;
+  gap: 6px;
+  padding: 8px 0;
+  border-top: 1px solid #edf2f7;
+}
+
+.checklist-step:first-of-type {
+  border-top: 0;
+}
+
+.checklist-actions button {
+  min-width: 74px;
+}
+
+.button-row.compact {
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.hidden {
+  display: none !important;
 }
 
 .detail-row {
@@ -529,6 +626,7 @@ button:disabled {
   }
 
   .grid,
+  .inline-setting-row,
   .screening-grid,
   .diagnostic-grid,
   .workflow-grid,

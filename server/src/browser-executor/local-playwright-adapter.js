@@ -146,6 +146,8 @@ function normalizePageCode(code) {
 
 function findBrowserExecutable() {
   const candidates = [
+    process.env.LOCAL_CHROME_PATH,
+    getPlaywrightChromiumExecutable(),
     process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe"),
     process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, "Google", "Chrome", "Application", "chrome.exe"),
     process.env["PROGRAMFILES(X86)"] && path.join(process.env["PROGRAMFILES(X86)"], "Google", "Chrome", "Application", "chrome.exe"),
@@ -159,6 +161,14 @@ function findBrowserExecutable() {
     }
   }
   return "";
+}
+
+function getPlaywrightChromiumExecutable() {
+  try {
+    return chromium.executablePath();
+  } catch {
+    return "";
+  }
 }
 
 function parsePossibleJson(value) {

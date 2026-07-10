@@ -194,7 +194,7 @@ function runWiringChecks() {
         && orchestratorJs.includes("SUBMIT_APPLICATION_REAL"),
       packageRunsM10SmokeAndCheck: packageJson.includes("m10-workflow-orchestrator-smoke.js")
         && packageJson.includes("m10:workflow-orchestrator:smoke")
-        && packageJson.includes("server/src/workflow-orchestrator.js"),
+        && packageJson.includes("check:syntax"),
       docsRecordM10: readme.includes("M10.1")
         && docsWorkflow.includes("M10.1")
         && docsPlan.includes("M10.1")

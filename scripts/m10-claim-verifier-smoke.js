@@ -172,17 +172,18 @@ function runWiringChecks() {
   const packageJson = read("package.json");
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
+  const migrationSql = read("server/migrations/010_resume_claim_verifications.sql");
   const verifierJs = read("server/src/claim-verifier.js");
   const workflowJs = read("server/src/workflow-orchestrator.js");
   return {
     checks: {
-      packageChecksClaimVerifier: packageJson.includes("server/src/claim-verifier.js")
+      packageChecksClaimVerifier: packageJson.includes("check:syntax")
         && packageJson.includes("scripts/m10-claim-verifier-smoke.js")
         && packageJson.includes("m10:claim-verifier:smoke"),
       serverExposesClaimEndpoints: serverJs.includes("/api/resume-claim-verifications")
         && serverJs.includes("/verify-claims")
         && serverJs.includes("runClaimVerifier"),
-      storeDefinesClaimSchema: storeJs.includes("CREATE TABLE IF NOT EXISTS resume_claim_verifications")
+      storeDefinesClaimSchema: migrationSql.includes("CREATE TABLE IF NOT EXISTS resume_claim_verifications")
         && storeJs.includes("resumeClaimVerificationCount")
         && storeJs.includes("createResumeClaimVerification"),
       verifierKeepsNoRealBossBoundary: verifierJs.includes("noRealBossAction: true")

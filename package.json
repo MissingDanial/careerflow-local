@@ -4,7 +4,15 @@
   "private": true,
   "description": "Boss Zhipin job capture Chrome extension with a local sync backend.",
   "scripts": {
-    "check": "node --check extension/src/background.js && node --check extension/src/content.js && node --check extension/src/popup.js && node --check extension/src/options.js && node --check server/src/server.js && node --check server/src/server-utils.js && node --check server/src/services/profile-service.js && node --check server/src/services/resume-workflow-service.js && node --check server/src/sqlite-store.js && node --check server/src/resume-extractor.js && node --check server/src/profile-draft-generator.js && node --check server/src/profile-agent.js && node --check server/src/model-client.js && node --check server/src/job-risk-gate.js && node --check server/src/screening-agent.js && node --check server/src/resume-agent.js && node --check server/src/audit-agent.js && node --check server/src/resume-fit-evaluator.js && node --check server/src/claim-verifier.js && node --check server/src/resume-revision-agent.js && node --check server/src/message-agent.js && node --check server/src/workflow-orchestrator.js && node --check server/src/resume-workflow-graph.js && node --check server/src/document-renderer.js && node --check server/src/browser-executor/types.js && node --check server/src/browser-executor/firecrawl-adapter.js && node --check server/src/browser-executor/firecrawl-tasks.js && node --check server/src/browser-executor/local-playwright-adapter.js && node --check scripts/m1-firecrawl-poc.js && node --check scripts/m1-firecrawl-report.js && node --check scripts/m1-local-playwright-poc.js && node --check scripts/m1-local-playwright-report.js && node --check scripts/m1-extension-report.js && node --check scripts/m2-sqlite-smoke.js && node --check scripts/m3-quality-smoke.js && node --check scripts/m3-popup-smoke.js && node --check scripts/m3-events-smoke.js && node --check scripts/m3-missing-descriptions-smoke.js && node --check scripts/m3-autocrawl-resume-smoke.js && node --check scripts/m3-job-keys-smoke.js && node --check scripts/m4-applications-smoke.js && node --check scripts/m4-browser-tasks-smoke.js && node --check scripts/m4-extension-task-smoke.js && node --check scripts/m4-queue-hygiene-smoke.js && node --check scripts/m5-profile-smoke.js && node --check scripts/m5-resume-extract-smoke.js && node --check scripts/m5-profile-drafts-smoke.js && node --check scripts/m6-screening-smoke.js && node --check scripts/m6-batch-screening-smoke.js && node --check scripts/m6-risk-gate-smoke.js && node --check scripts/m6-options-screening-smoke.js && node --check scripts/m7-resume-audit-smoke.js && node --check scripts/m7-options-resume-smoke.js && node --check scripts/m7-options-detail-smoke.js && node --check scripts/m7-resume-approval-smoke.js && node --check scripts/m8-greeting-dry-run-smoke.js && node --check scripts/m8-extension-send-greeting-smoke.js && node --check scripts/m8-read-only-conversation-smoke.js && node --check scripts/m9-upload-resume-dry-run-smoke.js && node --check scripts/m9-submit-application-dry-run-smoke.js && node --check scripts/m9-submission-readiness-smoke.js && node --check scripts/m9-submission-readiness-queue-smoke.js && node --check scripts/m9-submission-readiness-review-smoke.js && node --check scripts/m10-workflow-orchestrator-smoke.js && node --check scripts/m10-career-skill-smoke.js && node --check scripts/m10-profile-agent-smoke.js && node --check scripts/m10-options-profile-agent-smoke.js && node --check scripts/m10-backend-structure-smoke.js && node --check scripts/m10-profile-fact-confirmation-smoke.js && node --check scripts/m10-options-profile-facts-smoke.js && node --check scripts/m10-options-profile-facts-ui-smoke.js && node --check scripts/m10-observability-smoke.js && node --check scripts/m10-options-observability-smoke.js && node --check scripts/m10-resume-fit-evaluator-smoke.js && node --check scripts/m10-options-resume-fit-smoke.js && node --check scripts/m10-claim-verifier-smoke.js && node --check scripts/m10-options-claim-verifier-smoke.js && node --check scripts/m10-resume-revision-agent-smoke.js && node --check scripts/m10-options-resume-revision-smoke.js && node --check scripts/m10-options-resume-workflow-smoke.js && node --check scripts/m10-langgraph-resume-flow-smoke.js",
+    "check": "node scripts/check-js-syntax.js",
+    "check:syntax": "node scripts/check-js-syntax.js",
+    "test:profile": "node scripts/run-test-tier.js profile",
+    "test:agents": "node scripts/run-test-tier.js agents",
+    "test:extension": "node scripts/run-test-tier.js extension",
+    "test:workflow": "node scripts/run-test-tier.js workflow",
+    "test:baseline": "node scripts/run-test-tier.js baseline",
+    "test:ci": "node scripts/run-test-tier.js ci",
+    "agent:evaluate": "node scripts/run-agent-evaluation.js",
     "poc:firecrawl": "node scripts/m1-firecrawl-poc.js",
     "poc:firecrawl:report": "node scripts/m1-firecrawl-report.js",
     "poc:local": "node scripts/m1-local-playwright-poc.js",
@@ -58,7 +66,16 @@
     "m10:resume-revision:smoke": "node scripts/m10-resume-revision-agent-smoke.js",
     "m10:options-resume-revision:smoke": "node scripts/m10-options-resume-revision-smoke.js",
     "m10:langgraph-resume:smoke": "node scripts/m10-langgraph-resume-flow-smoke.js",
-    "m10:options-resume-workflow:smoke": "node scripts/m10-options-resume-workflow-smoke.js"
+    "m10:options-resume-workflow:smoke": "node scripts/m10-options-resume-workflow-smoke.js",
+    "m11:resume-template:smoke": "node scripts/m11-resume-template-smoke.js",
+    "m11:render-qa:smoke": "node scripts/m11-render-qa-smoke.js",
+    "m11:execution-package:smoke": "node scripts/m11-execution-package-smoke.js",
+    "m12:submission-evidence:smoke": "node scripts/m12-submission-evidence-smoke.js",
+    "m13:repository-baseline:smoke": "node scripts/m13-repository-baseline-smoke.js",
+    "m13:sqlite-migrations:smoke": "node scripts/m13-sqlite-migrations-smoke.js",
+    "m13:workflow-inputs:smoke": "node scripts/m13-workflow-input-snapshots-smoke.js",
+    "m13:application-transitions:smoke": "node scripts/m13-application-transition-invariants-smoke.js",
+    "m13:agent-evaluation:smoke": "node scripts/m13-agent-evaluation-smoke.js"
   },
   "engines": {
     "node": ">=24"

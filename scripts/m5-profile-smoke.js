@@ -232,6 +232,7 @@ async function runApiChecks(dataDir) {
 function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
+  const migrationSql = read("server/migrations/005_candidate_profile.sql");
   const packageJson = read("package.json");
   return {
     checks: {
@@ -240,9 +241,9 @@ function runWiringChecks() {
       serverExposesFactLibraryEndpoints: serverJs.includes("/api/profile/experiences")
         && serverJs.includes("/api/profile/skills")
         && serverJs.includes("/api/profile/constraints"),
-      storeDefinesProfileTables: storeJs.includes("CREATE TABLE IF NOT EXISTS candidate_profiles")
-        && storeJs.includes("CREATE TABLE IF NOT EXISTS profile_experiences")
-        && storeJs.includes("CREATE TABLE IF NOT EXISTS resume_sources"),
+      storeDefinesProfileTables: migrationSql.includes("CREATE TABLE IF NOT EXISTS candidate_profiles")
+        && migrationSql.includes("CREATE TABLE IF NOT EXISTS profile_experiences")
+        && migrationSql.includes("CREATE TABLE IF NOT EXISTS resume_sources"),
       storeDefinesFactBoundaryFields: storeJs.includes("allowed_rewrites_json")
         && storeJs.includes("forbidden_claims_json")
         && storeJs.includes("evidence_text"),

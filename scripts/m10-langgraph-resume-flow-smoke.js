@@ -78,6 +78,10 @@ async function main() {
       graphRendersDocx: outputDocxExists && outputDocxBytes > 1000,
       graphEmbedsRenderMetadata: graphResult.resumeVersion?.renderMetadata?.photoPath === sample.photoPath
         && graphResult.resumeVersion?.renderMetadata?.referenceDocxPath === sample.referenceDocxPath,
+      graphUsesSkillBackedDefaultTemplate: graphResult.resumeVersion?.renderMetadata?.template === "resume-to-word-campus-product-v1"
+        && graphResult.resumeVersion?.renderMetadata?.templateSkill === "resume-to-word",
+      graphPersistsRenderQuality: graphResult.resumeVersion?.renderMetadata?.renderQuality?.ok === true
+        && graphResult.resumeAudit?.renderMetadata?.renderQualityPassed === true,
       generatedDocxHasExpectedText: outputText.includes(SAMPLE_OWNER.displayName)
         && outputText.includes("AI")
         && outputText.length > 200,

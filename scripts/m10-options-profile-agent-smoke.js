@@ -27,6 +27,11 @@ function main() {
     "refreshCareerContext",
     "generateCareerContext",
     "generateCareerContextWithAnswers",
+    "profileAgentPortal",
+    "profileAgentUserUpdate",
+    "stageProfileAgentUpdate",
+    "clearProfileAgentUpdate",
+    "profileAgentUpdateStatus",
     "careerContextStatus",
     "careerContextAnswerStatus",
     "careerContextExists",
@@ -39,7 +44,8 @@ function main() {
   ];
 
   const checks = {
-    optionsHasProfileAgentPanel: optionsHtml.includes("ProfileAgent 职业经历上下文")
+    optionsHasProfileAgentPanel: (optionsHtml.includes("ProfileAgent 职业经历上下文")
+      || optionsHtml.includes("ProfileAgent 画像入口"))
       && optionsHtml.includes("career_agent_context.md")
       && ids.every((id) => optionsHtml.includes(`id="${id}"`)),
     optionsReadsAndBindsPanel: ids.every((id) => optionsJs.includes(`getElementById("${id}")`))
@@ -63,6 +69,12 @@ function main() {
       && optionsJs.includes("includeAnswers")
       && optionsJs.includes("answers,")
       && optionsJs.includes("已回答问题会从待追问中移除"),
+    optionsHasDedicatedProfilePortal: optionsHtml.includes('id="profileAgentPortal"')
+      && optionsHtml.includes("主动补充或修改画像")
+      && optionsHtml.includes("生成待确认草稿")
+      && optionsJs.includes("stageProfileAgentUserUpdate")
+      && optionsJs.includes("readProfileAgentUserUpdateAnswer")
+      && optionsJs.includes('id: "profile_user_update"'),
     optionsRefreshesWorkflowAfterGenerate: optionsGenerateFunction.includes("refreshWorkflowDiagnostics")
       && optionsGenerateFunction.includes("catch(() => {})"),
     backgroundHandlesCareerContextMessages: backgroundJs.includes('case "GET_CAREER_CONTEXT"')

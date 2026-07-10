@@ -26,6 +26,20 @@ Use this order by default:
 
 Do not add standalone sections named `求职摘要`, `核心匹配点`, `技能关键词`, or `补充经历` by default. Convert those ideas into project ordering, project titles, and bullet wording.
 
+## Template Contract
+
+Default backend template key: `resume-to-word-campus-product-v1`.
+
+Use this template when generating a JD-tailored DOCX from the local workflow. It is intentionally narrow:
+
+- Section order: header -> education -> internships/projects -> awards.
+- Standalone `求职摘要` and `技能` sections are hidden by default.
+- Skills must be embedded in project bullets or compact project capability lines.
+- The generated DOCX must record `template`, `templateSkill`, `templateOrder`, `showSummarySection`, and `showSkillsSection` in render metadata.
+- After rendering, the workflow must attach DOCX QA metadata as `renderQuality`, including extracted headings, estimated pages, warnings, and blocking check results.
+- Use `renderOptions.templateName = "resume-to-word-campus-product-v1"` to force this layout.
+- Use `renderOptions.templateName = "boss-find-fixed-docx-v1"` only for legacy comparison or debugging.
+
 ## Header Rules
 
 - Keep contact to one compact line when possible.
@@ -93,3 +107,4 @@ Estimate page risk before finalizing. If the Word output exceeds 2 pages, revise
 - Use real bullet numbering, not manual bullet characters.
 - Keep typography simple: Microsoft YaHei or SimSun, readable 9-10.5 pt body text.
 - Validate by extracting text from the generated DOCX and checking required project names and links.
+- Treat unreadable DOCX text, wrong section order, unexpected standalone summary/skills headings in the default template, or page-limit failure as blocking render QA issues before approval.

@@ -31,7 +31,7 @@ function evaluateJobRiskGate(input = {}) {
   const matchedRules = [];
   for (const direction of excludedDirections) {
     const terms = expandDirectionTerms(direction);
-    const matchedTerms = terms.filter((term) => containsJobTerm(text, term));
+    const matchedTerms = terms.filter((term) => containsPositiveJobTerm(text, term));
     if (matchedTerms.length) {
       matchedRules.push({
         direction: direction.label,
@@ -147,12 +147,40 @@ function buildJobText(job = {}) {
   ].map(text).join("\n").toLowerCase();
 }
 
-function containsJobTerm(haystack, term) {
+function containsPositiveJobTerm(haystack, term) {
   const needle = text(term).toLowerCase();
   if (!needle || needle.length < 2) {
     return false;
   }
-  return haystack.includes(needle);
+  return findPositiveTermIndex(haystack, needle) >= 0;
+}
+
+function findPositiveTermIndex(haystack, term) {
+  const needle = text(term).toLowerCase();
+  let index = haystack.indexOf(needle);
+  while (index >= 0) {
+    if (!isNegatedOccurrence(haystack, index, needle.length)) {
+      return index;
+    }
+    index = haystack.indexOf(needle, index + needle.length);
+  }
+  return -1;
+}
+
+function isNegatedOccurrence(haystack, index, termLength) {
+  const clauseStart = Math.max(
+    haystack.lastIndexOf("\n", index - 1),
+    haystack.lastIndexOf("。", index - 1),
+    haystack.lastIndexOf("；", index - 1),
+    haystack.lastIndexOf(";", index - 1),
+    haystack.lastIndexOf("，", index - 1),
+    haystack.lastIndexOf(",", index - 1)
+  );
+  const before = haystack.slice(Math.max(clauseStart + 1, index - 24), index);
+  const after = haystack.slice(index + termLength, index + termLength + 18);
+  const negatedPrefix = /(?:不承担|不涉及|不包含|不要求|不负责|无需|无须|不需要|禁止|排除|非|无)(?:任何|相关)?[^。；;，,\n]{0,12}$/u;
+  const negatedSuffix = /^(?:岗位|方向|职责|指标|工作)?(?:除外|不在职责内|不属于岗位职责)/u;
+  return negatedPrefix.test(before) || negatedSuffix.test(after);
 }
 
 function findEvidenceSnippets(job = {}, terms = []) {
@@ -167,7 +195,7 @@ function findEvidenceSnippets(job = {}, terms = []) {
     const lowerContent = content.toLowerCase();
     for (const term of terms) {
       const lowerTerm = text(term).toLowerCase();
-      const index = lowerContent.indexOf(lowerTerm);
+      const index = findPositiveTermIndex(lowerContent, lowerTerm);
       if (index >= 0) {
         const start = Math.max(0, index - 24);
         const end = Math.min(content.length, index + lowerTerm.length + 36);

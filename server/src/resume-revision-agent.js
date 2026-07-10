@@ -1,4 +1,5 @@
 const AGENT_NAME = "ResumeRevisionAgent";
+const { DEFAULT_RESUME_TEMPLATE } = require("./resume-template-registry");
 
 function runResumeRevisionAgent(input = {}, options = {}) {
   const context = normalizeInput(input);
@@ -26,7 +27,7 @@ function runResumeRevisionAgent(input = {}, options = {}) {
       renderMetadata: {
         ...context.resumeVersion.renderMetadata,
         maxPages: 2,
-        template: "boss-find-fixed-docx-v1",
+        template: context.resumeVersion.renderMetadata?.template || DEFAULT_RESUME_TEMPLATE,
         revisedBy: AGENT_NAME
       },
       metadata: {

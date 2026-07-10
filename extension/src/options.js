@@ -19,6 +19,7 @@ const ui = {
   runRiskGateRescreen: document.getElementById("runRiskGateRescreen"),
   refreshResume: document.getElementById("refreshResume"),
   runSelectedResumeWorkflow: document.getElementById("runSelectedResumeWorkflow"),
+  resumeTemplateName: document.getElementById("resumeTemplateName"),
   prepareRulesResume: document.getElementById("prepareRulesResume"),
   evaluateResumeFit: document.getElementById("evaluateResumeFit"),
   verifyResumeClaims: document.getElementById("verifyResumeClaims"),
@@ -26,6 +27,7 @@ const ui = {
   auditRulesResume: document.getElementById("auditRulesResume"),
   refreshGreeting: document.getElementById("refreshGreeting"),
   prepareGreetingDryRun: document.getElementById("prepareGreetingDryRun"),
+  prepareExecutionPackage: document.getElementById("prepareExecutionPackage"),
   runGreetingDryRunTask: document.getElementById("runGreetingDryRunTask"),
   queueConversationRefreshTask: document.getElementById("queueConversationRefreshTask"),
   queueResumeUnlockCheckTask: document.getElementById("queueResumeUnlockCheckTask"),
@@ -34,6 +36,12 @@ const ui = {
   runReadOnlyBossTask: document.getElementById("runReadOnlyBossTask"),
   greetingConversations: document.getElementById("greetingConversations"),
   submissionReadinessQueue: document.getElementById("submissionReadinessQueue"),
+  executionPackageDetail: document.getElementById("executionPackageDetail"),
+  executionPackageReviewActions: document.getElementById("executionPackageReviewActions"),
+  executionChecklistDetail: document.getElementById("executionChecklistDetail"),
+  readSubmissionPageResult: document.getElementById("readSubmissionPageResult"),
+  recordSubmissionPageResult: document.getElementById("recordSubmissionPageResult"),
+  submissionEvidenceDetail: document.getElementById("submissionEvidenceDetail"),
   clearCache: document.getElementById("clearCache"),
   status: document.getElementById("status"),
   browserTaskQueued: document.getElementById("browserTaskQueued"),
@@ -64,6 +72,7 @@ const ui = {
   screeningResults: document.getElementById("screeningResults"),
   agentRuns: document.getElementById("agentRuns"),
   refreshCareerContext: document.getElementById("refreshCareerContext"),
+  profileAgentPortal: document.getElementById("profileAgentPortal"),
   generateCareerContext: document.getElementById("generateCareerContext"),
   generateCareerContextWithAnswers: document.getElementById("generateCareerContextWithAnswers"),
   generateProfileFactDrafts: document.getElementById("generateProfileFactDrafts"),
@@ -71,6 +80,7 @@ const ui = {
   regenerateCareerContextAfterFacts: document.getElementById("regenerateCareerContextAfterFacts"),
   careerContextStatus: document.getElementById("careerContextStatus"),
   careerContextAnswerStatus: document.getElementById("careerContextAnswerStatus"),
+  profileAgentUpdateStatus: document.getElementById("profileAgentUpdateStatus"),
   profileFactDraftStatus: document.getElementById("profileFactDraftStatus"),
   careerContextFreshnessStatus: document.getElementById("careerContextFreshnessStatus"),
   careerContextExists: document.getElementById("careerContextExists"),
@@ -79,6 +89,9 @@ const ui = {
   careerContextMeta: document.getElementById("careerContextMeta"),
   careerContextQuestions: document.getElementById("careerContextQuestions"),
   careerContextAnswerForm: document.getElementById("careerContextAnswerForm"),
+  profileAgentUserUpdate: document.getElementById("profileAgentUserUpdate"),
+  stageProfileAgentUpdate: document.getElementById("stageProfileAgentUpdate"),
+  clearProfileAgentUpdate: document.getElementById("clearProfileAgentUpdate"),
   profileFactDrafts: document.getElementById("profileFactDrafts"),
   careerContextPreview: document.getElementById("careerContextPreview"),
   resumeStatus: document.getElementById("resumeStatus"),
@@ -140,14 +153,18 @@ const state = {
   selectedResumeAudit: null,
   selectedResumeFitEvaluation: null,
   selectedResumeClaimVerification: null,
+  selectedExecutionPackage: null,
   careerContext: null,
+  careerContextFreshness: null,
   careerContextQuestions: [],
   careerContextAnswers: [],
   profileFactDrafts: [],
   careerContextNeedsRegeneration: false,
   workflowErrors: [],
   workflowEvents: [],
-  selectedTimelineApplicationId: null
+  selectedTimelineApplicationId: null,
+  selectedExecutionPackageApplicationId: null,
+  latestSubmissionPageResult: null
 };
 
 ensureGreetingDryRunControls();
@@ -205,6 +222,74 @@ function ensureGreetingDryRunControls() {
     ui.greetingTasks.parentElement.parentElement.appendChild(column);
     ui.submissionReadinessQueue = list;
   }
+  if (!ui.prepareExecutionPackage && prepareButton?.parentElement) {
+    const button = document.createElement("button");
+    button.id = "prepareExecutionPackage";
+    button.className = "secondary";
+    button.type = "button";
+    button.textContent = "Prepare execution package";
+    prepareButton.parentElement.appendChild(button);
+    ui.prepareExecutionPackage = button;
+  }
+  if (!ui.executionPackageDetail && ui.greetingTasks?.parentElement?.parentElement) {
+    const block = document.createElement("div");
+    block.className = "execution-package-panel";
+    const heading = document.createElement("div");
+    heading.className = "list-heading";
+    heading.textContent = "Local execution package";
+    const detail = document.createElement("div");
+    detail.id = "executionPackageDetail";
+    detail.className = "detail-section execution-package-detail";
+    detail.textContent = "No execution package prepared";
+    block.append(heading, detail);
+    ui.greetingTasks.parentElement.parentElement.insertAdjacentElement("afterend", block);
+    ui.executionPackageDetail = detail;
+  }
+  if (!ui.executionPackageReviewActions && ui.executionPackageDetail?.parentElement) {
+    const actions = document.createElement("div");
+    actions.id = "executionPackageReviewActions";
+    actions.className = "button-row compact hidden";
+    actions.hidden = true;
+    ui.executionPackageDetail.after(actions);
+    ui.executionPackageReviewActions = actions;
+  }
+  if (!ui.executionChecklistDetail && ui.executionPackageReviewActions?.parentElement) {
+    const heading = document.createElement("div");
+    heading.className = "list-heading";
+    heading.textContent = "Manual execution checklist";
+    const detail = document.createElement("div");
+    detail.id = "executionChecklistDetail";
+    detail.className = "detail-section execution-checklist-detail";
+    detail.textContent = "No execution checklist loaded";
+    ui.executionPackageReviewActions.after(heading, detail);
+    ui.executionChecklistDetail = detail;
+  }
+  if (!ui.submissionEvidenceDetail && ui.executionChecklistDetail?.parentElement) {
+    const heading = document.createElement("div");
+    heading.className = "list-heading";
+    heading.textContent = "Submission evidence";
+    const actions = document.createElement("div");
+    actions.className = "button-row compact";
+    const readButton = document.createElement("button");
+    readButton.id = "readSubmissionPageResult";
+    readButton.className = "secondary";
+    readButton.type = "button";
+    readButton.textContent = "Read current BOSS result";
+    const recordButton = document.createElement("button");
+    recordButton.id = "recordSubmissionPageResult";
+    recordButton.className = "secondary";
+    recordButton.type = "button";
+    recordButton.textContent = "Record result evidence";
+    const detail = document.createElement("div");
+    detail.id = "submissionEvidenceDetail";
+    detail.className = "detail-section submission-evidence-detail";
+    detail.textContent = "No submission evidence recorded";
+    actions.append(readButton, recordButton);
+    ui.executionChecklistDetail.after(heading, actions, detail);
+    ui.readSubmissionPageResult = readButton;
+    ui.recordSubmissionPageResult = recordButton;
+    ui.submissionEvidenceDetail = detail;
+  }
 }
 
 document.addEventListener("DOMContentLoaded", init);
@@ -218,10 +303,13 @@ ui.refreshCareerContext.addEventListener("click", () => refreshCareerContextDiag
 ui.generateCareerContext.addEventListener("click", () => generateCareerContext({ includeAnswers: false }));
 ui.generateCareerContextWithAnswers.addEventListener("click", () => generateCareerContext({ includeAnswers: true }));
 ui.generateProfileFactDrafts.addEventListener("click", generateProfileFactDraftsFromAnswers);
+ui.stageProfileAgentUpdate.addEventListener("click", stageProfileAgentUserUpdate);
+ui.clearProfileAgentUpdate.addEventListener("click", clearProfileAgentUserUpdate);
 ui.refreshProfileFactDrafts.addEventListener("click", () => refreshProfileFactDrafts());
 ui.regenerateCareerContextAfterFacts.addEventListener("click", () => generateCareerContext({ includeAnswers: true, afterFactChange: true }));
 ui.refreshResume.addEventListener("click", () => refreshResumeDiagnostics());
 ui.runSelectedResumeWorkflow.addEventListener("click", () => runResumeWorkflowForSelectedApplication());
+ui.resumeTemplateName.addEventListener("change", saveResumeTemplateSelection);
 ui.prepareRulesResume.addEventListener("click", prepareRulesResume);
 ui.evaluateResumeFit.addEventListener("click", evaluateSelectedResumeFit);
 ui.verifyResumeClaims.addEventListener("click", verifySelectedResumeClaims);
@@ -229,12 +317,15 @@ ui.reviseResumeFromChecks.addEventListener("click", reviseSelectedResumeFromChec
 ui.auditRulesResume.addEventListener("click", auditRulesResume);
 ui.refreshGreeting.addEventListener("click", () => refreshGreetingDiagnostics());
 ui.prepareGreetingDryRun.addEventListener("click", prepareGreetingDryRun);
+ui.prepareExecutionPackage.addEventListener("click", () => prepareExecutionPackageForSelectedApplication());
 ui.runGreetingDryRunTask.addEventListener("click", runGreetingDryRunTask);
 ui.queueConversationRefreshTask.addEventListener("click", () => queueReadOnlyBossTask("REFRESH_CONVERSATION"));
 ui.queueResumeUnlockCheckTask.addEventListener("click", () => queueReadOnlyBossTask("CHECK_RESUME_UNLOCK"));
 ui.queueResumeUploadDryRunTask.addEventListener("click", () => queueReadOnlyBossTask("UPLOAD_RESUME"));
 ui.queueSubmitApplicationDryRunTask.addEventListener("click", () => queueReadOnlyBossTask("SUBMIT_APPLICATION"));
 ui.runReadOnlyBossTask.addEventListener("click", runReadOnlyBossTask);
+ui.readSubmissionPageResult.addEventListener("click", () => readSubmissionPageResult());
+ui.recordSubmissionPageResult.addEventListener("click", () => recordSubmissionPageResult());
 ui.toggleResumeEditor.addEventListener("click", toggleResumeEditor);
 ui.saveResumeRevision.addEventListener("click", saveResumeRevision);
 ui.approveResumeLocal.addEventListener("click", approveResumeLocal);
@@ -247,6 +338,7 @@ async function init() {
   try {
     const settings = await runtimeMessage({ type: "GET_SETTINGS" });
     renderSettings(settings);
+    await refreshResumeTemplates({ silent: true });
     await refreshDiagnostics({ silent: true });
   } catch (error) {
     setStatus(error.message || String(error), true);
@@ -275,6 +367,7 @@ function readSettings() {
     maxCachedJobs: fields.maxCachedJobs.value,
     crawlMaxJobs: fields.crawlMaxJobs.value,
     crawlDelayMs: fields.crawlDelayMs.value,
+    resumeTemplateName: getSelectedResumeTemplateName(),
     riskGateEnabled: fields.riskGateEnabled.checked,
     excludedDirections: parseDelimitedList(fields.excludedDirections.value)
   };
@@ -288,6 +381,10 @@ function renderSettings(settings) {
   fields.maxCachedJobs.value = settings.maxCachedJobs || 500;
   fields.crawlMaxJobs.value = settings.crawlMaxJobs || 30;
   fields.crawlDelayMs.value = settings.crawlDelayMs || 1600;
+  if (ui.resumeTemplateName && settings.resumeTemplateName) {
+    ui.resumeTemplateName.dataset.pendingValue = settings.resumeTemplateName;
+    ui.resumeTemplateName.value = settings.resumeTemplateName;
+  }
   fields.riskGateEnabled.checked = Boolean(settings.riskGateEnabled);
   fields.excludedDirections.value = formatDelimitedList(settings.excludedDirections);
 }
@@ -549,7 +646,6 @@ async function generateCareerContext(options = {}) {
       }
     });
     renderCareerContextDiagnostics(result.response || {});
-    state.careerContextNeedsRegeneration = false;
     updateCareerContextFreshnessStatus();
     await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
     const questions = normalizeCareerContextQuestions(result.response || {});
@@ -561,7 +657,7 @@ async function generateCareerContext(options = {}) {
   } finally {
     ui.generateCareerContext.disabled = false;
     ui.generateCareerContextWithAnswers.disabled = false;
-    ui.regenerateCareerContextAfterFacts.disabled = !state.careerContextNeedsRegeneration;
+    ui.regenerateCareerContextAfterFacts.disabled = !isCareerContextRegenerationNeeded();
   }
 }
 
@@ -586,9 +682,9 @@ async function refreshProfileFactDrafts(options = {}) {
 }
 
 async function generateProfileFactDraftsFromAnswers() {
-  const answers = readCareerContextAnswers();
+  const answers = readCareerContextAnswersWithUserUpdate();
   if (!answers.length) {
-    setStatus("请先填写 ProfileAgent 追问回答，再生成事实草稿。", true);
+    setStatus("请先填写 ProfileAgent 追问回答或主动补充画像内容，再生成事实草稿。", true);
     return;
   }
   try {
@@ -614,6 +710,48 @@ async function generateProfileFactDraftsFromAnswers() {
     ui.generateProfileFactDrafts.disabled = false;
     ui.refreshProfileFactDrafts.disabled = false;
   }
+}
+
+async function stageProfileAgentUserUpdate() {
+  const answer = readProfileAgentUserUpdateAnswer();
+  if (!answer) {
+    ui.profileAgentUpdateStatus.textContent = "请先填写要补充或修改的画像内容";
+    ui.profileAgentUpdateStatus.classList.add("warn");
+    setStatus("请先填写要补充或修改的画像内容。", true);
+    return;
+  }
+  try {
+    ui.stageProfileAgentUpdate.disabled = true;
+    ui.generateProfileFactDrafts.disabled = true;
+    ui.profileAgentUpdateStatus.textContent = "正在生成待确认草稿";
+    ui.profileAgentUpdateStatus.classList.remove("warn");
+    const result = await runtimeMessage({
+      type: "GENERATE_PROFILE_FACT_DRAFTS",
+      options: {
+        answers: [answer]
+      }
+    });
+    renderProfileFactDrafts(result.response || {});
+    await refreshProfileFactDrafts({ silent: true });
+    await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
+    const payload = result.response || {};
+    ui.profileAgentUpdateStatus.textContent = `已生成 ${payload.created || 0} 条草稿，跳过 ${payload.skipped || 0} 条`;
+    setStatus(`画像补充已进入待确认草稿：新增 ${payload.created || 0}，跳过 ${payload.skipped || 0}`);
+  } catch (error) {
+    ui.profileAgentUpdateStatus.textContent = error.message || String(error);
+    ui.profileAgentUpdateStatus.classList.add("warn");
+    await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
+    setStatus(error.message || String(error), true);
+  } finally {
+    ui.stageProfileAgentUpdate.disabled = false;
+    ui.generateProfileFactDrafts.disabled = false;
+  }
+}
+
+function clearProfileAgentUserUpdate() {
+  ui.profileAgentUserUpdate.value = "";
+  ui.profileAgentUpdateStatus.textContent = "输入后先生成待确认草稿";
+  ui.profileAgentUpdateStatus.classList.remove("warn");
 }
 
 async function confirmProfileFactDraftFromOptions(draftId) {
@@ -649,9 +787,11 @@ async function mutateProfileFactDraft({ draftId, type, statusMessage, doneMessag
       draftId,
       options
     });
-    state.careerContextNeedsRegeneration = true;
-    updateCareerContextFreshnessStatus();
     await refreshProfileFactDrafts({ silent: true });
+    await refreshCareerContextDiagnostics({ silent: true }).catch(() => {
+      state.careerContextNeedsRegeneration = true;
+      updateCareerContextFreshnessStatus();
+    });
     await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
     setStatus(doneMessage);
   } catch (error) {
@@ -697,6 +837,69 @@ async function loadResumeDiagnostics() {
   };
 }
 
+async function refreshResumeTemplates(options = {}) {
+  if (!ui.resumeTemplateName) {
+    return;
+  }
+  try {
+    const result = await runtimeMessage({ type: "GET_RESUME_TEMPLATES" });
+    renderResumeTemplateOptions(result.response || {});
+  } catch (error) {
+    if (!options.silent) {
+      setStatus(error.message || String(error), true);
+    }
+  }
+}
+
+function renderResumeTemplateOptions(payload = {}) {
+  const templates = Array.isArray(payload.templates) ? payload.templates : [];
+  if (!ui.resumeTemplateName || !templates.length) {
+    return;
+  }
+  const selected = ui.resumeTemplateName.dataset.pendingValue || getSelectedResumeTemplateName();
+  ui.resumeTemplateName.replaceChildren();
+  for (const template of templates) {
+    const option = document.createElement("option");
+    option.value = template.key || "";
+    option.textContent = formatResumeTemplateOption(template, payload.defaultTemplate);
+    ui.resumeTemplateName.appendChild(option);
+  }
+  const nextValue = templates.some((template) => template.key === selected)
+    ? selected
+    : payload.defaultTemplate || templates[0]?.key || "";
+  ui.resumeTemplateName.value = nextValue;
+  ui.resumeTemplateName.dataset.pendingValue = nextValue;
+}
+
+function formatResumeTemplateOption(template = {}, defaultTemplate = "") {
+  const parts = [];
+  if (template.key && template.key === defaultTemplate) {
+    parts.push("默认");
+  }
+  parts.push(template.label || template.key || "Unnamed template");
+  if (template.skillName) {
+    parts.push(`skill:${template.skillName}`);
+  }
+  return parts.join(" · ");
+}
+
+function getSelectedResumeTemplateName() {
+  return ui.resumeTemplateName?.value || "resume-to-word-campus-product-v1";
+}
+
+async function saveResumeTemplateSelection() {
+  try {
+    const savedSettings = await runtimeMessage({
+      type: "SAVE_SETTINGS",
+      settings: readSettings()
+    });
+    renderSettings(savedSettings);
+    setStatus("DOCX template 已保存");
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  }
+}
+
 async function prepareRulesResume() {
   try {
     ui.prepareRulesResume.disabled = true;
@@ -713,6 +916,9 @@ async function prepareRulesResume() {
       options: {
         mode: "rules",
         renderDocx: true,
+        renderOptions: {
+          templateName: getSelectedResumeTemplateName()
+        },
         screeningId: candidate.screeningId || ""
       }
     });
@@ -751,6 +957,9 @@ async function runResumeWorkflowForSelectedApplication(applicationId = null) {
         mode: "rules",
         renderDocx: true,
         maxRevisions: 1,
+        renderOptions: {
+          templateName: getSelectedResumeTemplateName()
+        },
         userRules: {
           forceRescreen: false
         }
@@ -943,17 +1152,50 @@ async function refreshGreetingDiagnostics(options = {}) {
 }
 
 async function loadGreetingDiagnostics() {
+  const selectedApplicationId = getSelectedExecutionPackageApplicationId();
   const [messageResult, conversationResult, taskResult, readinessResult] = await Promise.all([
     runtimeMessage({ type: "GET_MESSAGES", options: { limit: 8 } }),
     runtimeMessage({ type: "GET_CONVERSATIONS", options: { limit: 8 } }),
     runtimeMessage({ type: "GET_BROWSER_TASK_DIAGNOSTICS", options: { limit: 8 } }),
     runtimeMessage({ type: "GET_SUBMISSION_READINESS_QUEUE", options: { limit: 8, status: ["READY_FOR_MANUAL_REVIEW", "BLOCKED"] } })
   ]);
+  let executionPackage = null;
+  let executionChecklist = null;
+  let submissionEvidence = null;
+  if (selectedApplicationId) {
+    try {
+      const packageResult = await runtimeMessage({
+        type: "GET_EXECUTION_PACKAGE",
+        applicationId: selectedApplicationId,
+        options: { requestedBy: "options_diagnostics" }
+      });
+      executionPackage = packageResult.response || null;
+      const checklistResult = await runtimeMessage({
+        type: "GET_EXECUTION_CHECKLIST",
+        applicationId: selectedApplicationId,
+        options: { requestedBy: "options_diagnostics" }
+      });
+      executionChecklist = checklistResult.response || null;
+      const evidenceResult = await runtimeMessage({
+        type: "GET_SUBMISSION_EVIDENCE",
+        applicationId: selectedApplicationId,
+        options: { limit: 10, requestedBy: "options_diagnostics" }
+      });
+      submissionEvidence = evidenceResult.response || null;
+    } catch (error) {
+      executionPackage = { ok: false, error: error.message || String(error), applicationId: selectedApplicationId };
+      executionChecklist = { ok: false, error: error.message || String(error), applicationId: selectedApplicationId };
+      submissionEvidence = { ok: false, error: error.message || String(error), applicationId: selectedApplicationId };
+    }
+  }
   return {
     messages: messageResult.response || {},
     conversations: conversationResult.response || {},
     tasks: taskResult.diagnostics || {},
-    submissionReadinessQueue: readinessResult.response || {}
+    submissionReadinessQueue: readinessResult.response || {},
+    executionPackage,
+    executionChecklist,
+    submissionEvidence
   };
 }
 
@@ -991,6 +1233,50 @@ async function prepareGreetingDryRun() {
   } finally {
     ui.prepareGreetingDryRun.disabled = false;
   }
+}
+
+async function prepareExecutionPackageForSelectedApplication(applicationId = null) {
+  const targetApplicationId = Number(applicationId || getSelectedExecutionPackageApplicationId());
+  try {
+    if (!Number.isInteger(targetApplicationId) || targetApplicationId <= 0) {
+      throw new Error("Select an application or approved resume before preparing the execution package.");
+    }
+    ui.prepareExecutionPackage.disabled = true;
+    ui.greetingStatus.textContent = "Preparing local execution package";
+    const result = await runtimeMessage({
+      type: "PREPARE_EXECUTION_PACKAGE",
+      applicationId: targetApplicationId,
+      options: {
+        requestedBy: "options_execution_package",
+        noRealBossAction: true
+      }
+    });
+    state.selectedExecutionPackageApplicationId = targetApplicationId;
+    state.selectedExecutionPackage = result.response?.executionPackage || null;
+    renderExecutionPackageDetail(result.response);
+    await refreshGreetingDiagnostics({ silent: true });
+    await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
+    const executionPackage = result.response?.executionPackage || {};
+    setStatus(executionPackage.ready
+      ? `Execution package ready for application #${targetApplicationId}`
+      : `Execution package has ${executionPackage.blockers?.length || 0} blocker(s)`);
+  } catch (error) {
+    renderExecutionPackageDetail({ ok: false, error: error.message || String(error), applicationId: targetApplicationId || null });
+    setStatus(error.message || String(error), true);
+  } finally {
+    ui.prepareExecutionPackage.disabled = false;
+  }
+}
+
+function getSelectedExecutionPackageApplicationId() {
+  const selected = Number(state.selectedExecutionPackageApplicationId || state.selectedResumeVersion?.applicationId || 0);
+  if (Number.isInteger(selected) && selected > 0) {
+    return selected;
+  }
+  const readinessItems = Array.isArray(state.submissionReadinessItems) ? state.submissionReadinessItems : [];
+  const approved = readinessItems.find((item) => item.submissionReadinessReview?.decision === "APPROVED_FOR_MANUAL_EXECUTION");
+  const ready = approved || readinessItems.find((item) => item.submissionReadiness?.status === "READY_FOR_MANUAL_REVIEW");
+  return Number(ready?.applicationId || 0);
 }
 
 async function runGreetingDryRunTask() {
@@ -1116,6 +1402,7 @@ async function runClaimedBrowserTask(tab, task, failureCode) {
       transition: {
         toStatus,
         result,
+        claimToken: task.claimToken || "",
         errorMessage: result?.ok ? "" : result?.errorCode || result?.message || failureCode
       }
     });
@@ -1126,6 +1413,7 @@ async function runClaimedBrowserTask(tab, task, failureCode) {
       taskId: task.id,
       transition: {
         toStatus: "FAILED",
+        claimToken: task.claimToken || "",
         result: {
           ok: false,
           errorCode: "BROWSER_TASK_FAILED",
@@ -1351,6 +1639,7 @@ function renderGreetingDiagnostics(diagnostics, error = null) {
     const readinessItems = Array.isArray(diagnostics?.submissionReadinessQueue?.items)
       ? diagnostics.submissionReadinessQueue.items.slice(0, 8)
       : [];
+    state.submissionReadinessItems = readinessItems;
     renderList(ui.submissionReadinessQueue, readinessItems, (item) => {
       const readiness = item.submissionReadiness || {};
       const nextAction = item.nextActionRecommendation || {};
@@ -1382,6 +1671,386 @@ function renderGreetingDiagnostics(diagnostics, error = null) {
         ]
       };
     }, "暂无待复核投递准备项");
+  }
+  renderExecutionPackageDetail(diagnostics?.executionPackage || null);
+  renderExecutionChecklistDetail(diagnostics?.executionChecklist || null);
+  renderSubmissionEvidenceDetail(diagnostics?.submissionEvidence || null);
+}
+
+function renderExecutionPackageDetail(result = null) {
+  if (!ui.executionPackageDetail) {
+    return;
+  }
+  ui.executionPackageDetail.replaceChildren();
+  const executionPackage = result?.executionPackage || result?.response?.executionPackage || state.selectedExecutionPackage || null;
+  if (result?.error) {
+    ui.executionPackageDetail.textContent = result.error;
+    ui.executionPackageDetail.classList.add("warn");
+    renderExecutionPackageReviewActions(null);
+    return;
+  }
+  if (!executionPackage) {
+    ui.executionPackageDetail.textContent = "No execution package prepared";
+    ui.executionPackageDetail.classList.remove("warn");
+    renderExecutionPackageReviewActions(null);
+    return;
+  }
+  state.selectedExecutionPackage = executionPackage;
+  state.selectedExecutionPackageApplicationId = executionPackage.applicationId || state.selectedExecutionPackageApplicationId;
+  const validation = executionPackage.validation || {};
+  const validationFailures = Array.isArray(validation.blockingFailures) ? validation.blockingFailures : [];
+  const validationWarnings = Array.isArray(validation.warnings) ? validation.warnings : [];
+  ui.executionPackageDetail.classList.toggle("warn", executionPackage.ready === false || validation.ok === false);
+  appendKeyValue(ui.executionPackageDetail, "Status", executionPackage.ready ? "Ready" : "Blocked");
+  appendKeyValue(ui.executionPackageDetail, "Validation", validation.ok === false ? `Failed (${validationFailures.length})` : "Passed/Not archived");
+  appendKeyValue(ui.executionPackageDetail, "Application", `#${executionPackage.applicationId || ""} ${executionPackage.application?.title || ""} @ ${executionPackage.application?.company || ""}`.trim());
+  appendKeyValue(ui.executionPackageDetail, "DOCX", shortPath(executionPackage.resume?.filePath || ""));
+  appendKeyValue(ui.executionPackageDetail, "DOCX QA", executionPackage.resume?.renderQuality?.ok === false ? "Failed" : "Passed/Not recorded");
+  appendKeyValue(ui.executionPackageDetail, "Greeting", executionPackage.greeting?.messageId ? `Message #${executionPackage.greeting.messageId}` : "Missing");
+  appendKeyValue(ui.executionPackageDetail, "Readiness", formatSubmissionReadiness(executionPackage.submissionReadiness?.status) || executionPackage.submissionReadiness?.status || "Missing");
+  appendKeyValue(ui.executionPackageDetail, "Review", formatSubmissionReadinessReview(executionPackage.submissionReadinessReview?.decision) || executionPackage.submissionReadinessReview?.decision || "Missing");
+  if (executionPackage.archive?.jsonPath || executionPackage.archive?.markdownPath) {
+    appendKeyValue(ui.executionPackageDetail, "Archive JSON", shortPath(executionPackage.archive.jsonPath || ""));
+    appendKeyValue(ui.executionPackageDetail, "Archive MD", shortPath(executionPackage.archive.markdownPath || ""));
+  }
+  appendPillGroup(ui.executionPackageDetail, "Blocked real actions", executionPackage.realActionsBlocked || []);
+  if (validationFailures.length) {
+    renderTextList(ui.executionPackageDetail, validationFailures.map((failure) => `${failure.code}: ${failure.message}`), "No validation failures", { append: true });
+  }
+  if (validationWarnings.length) {
+    renderTextList(ui.executionPackageDetail, validationWarnings.map((warning) => `${warning.code}: ${warning.message}`), "No validation warnings", { append: true });
+  }
+  const blockers = Array.isArray(executionPackage.blockers) ? executionPackage.blockers : [];
+  if (blockers.length) {
+    renderTextList(ui.executionPackageDetail, blockers.map((blocker) => `${blocker.code}: ${blocker.message}`), "No blockers", { append: true });
+  }
+  const steps = Array.isArray(executionPackage.manualSteps) ? executionPackage.manualSteps.slice(0, 6) : [];
+  if (steps.length) {
+    renderTextList(ui.executionPackageDetail, steps.map((step) => `${step.order}. ${step.title}${step.detail ? ` - ${step.detail}` : ""}`), "No manual steps", { append: true });
+  }
+  renderExecutionPackageReviewActions(executionPackage);
+}
+
+function renderExecutionPackageReviewActions(executionPackage) {
+  if (!ui.executionPackageReviewActions) {
+    return;
+  }
+  ui.executionPackageReviewActions.replaceChildren();
+  if (!executionPackage?.applicationId) {
+    ui.executionPackageReviewActions.hidden = true;
+    ui.executionPackageReviewActions.classList.add("hidden");
+    return;
+  }
+  ui.executionPackageReviewActions.hidden = false;
+  ui.executionPackageReviewActions.classList.remove("hidden");
+  const actions = [
+    ["APPROVED_FOR_MANUAL_EXECUTION", "Approve package", "primary"],
+    ["REFRESH_REQUIRED", "Refresh required", "secondary"],
+    ["BLOCKED", "Block package", "secondary"]
+  ];
+  for (const [decision, label, className] of actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.textContent = label;
+    button.addEventListener("click", () => reviewExecutionPackage(executionPackage.applicationId, decision));
+    ui.executionPackageReviewActions.appendChild(button);
+  }
+}
+
+async function reviewExecutionPackage(applicationId, decision) {
+  try {
+    const targetApplicationId = Number(applicationId);
+    if (!Number.isInteger(targetApplicationId) || targetApplicationId <= 0) {
+      throw new Error("Select an execution package before review.");
+    }
+    setExecutionPackageReviewButtonsDisabled(true);
+    setStatus(`Reviewing execution package: ${formatExecutionPackageReview(decision)}`);
+    const result = await runtimeMessage({
+      type: "REVIEW_EXECUTION_PACKAGE",
+      applicationId: targetApplicationId,
+      options: {
+        decision,
+        reviewer: "user",
+        note: "options_execution_package_review",
+        requireArchive: true,
+        noRealBossAction: true
+      }
+    });
+    state.selectedExecutionPackageApplicationId = targetApplicationId;
+    state.selectedExecutionPackage = result.response?.executionPackage || state.selectedExecutionPackage;
+    renderExecutionPackageDetail(result.response);
+    await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
+    await refreshGreetingDiagnostics({ silent: true }).catch(() => {});
+    const review = result.response?.review || {};
+    setStatus(review.accepted
+      ? `Execution package review recorded: ${formatExecutionPackageReview(decision)}`
+      : `Execution package review blocked: ${(review.validationFailureCodes || []).concat(review.blockerCodes || []).join(", ") || decision}`, !review.accepted);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    setExecutionPackageReviewButtonsDisabled(false);
+  }
+}
+
+function setExecutionPackageReviewButtonsDisabled(disabled) {
+  if (!ui.executionPackageReviewActions) {
+    return;
+  }
+  for (const button of ui.executionPackageReviewActions.querySelectorAll("button")) {
+    button.disabled = Boolean(disabled);
+  }
+}
+
+function formatExecutionPackageReview(decision) {
+  const value = String(decision || "").toUpperCase();
+  if (value === "APPROVED_FOR_MANUAL_EXECUTION") {
+    return "Approved for manual execution";
+  }
+  if (value === "REFRESH_REQUIRED") {
+    return "Refresh required";
+  }
+  if (value === "BLOCKED") {
+    return "Blocked";
+  }
+  return value || "Unknown";
+}
+
+function renderExecutionChecklistDetail(result = null) {
+  if (!ui.executionChecklistDetail) {
+    return;
+  }
+  ui.executionChecklistDetail.replaceChildren();
+  const checklist = result?.checklist || result?.response?.checklist || null;
+  if (result?.error) {
+    ui.executionChecklistDetail.textContent = result.error;
+    ui.executionChecklistDetail.classList.add("warn");
+    return;
+  }
+  if (!checklist) {
+    ui.executionChecklistDetail.textContent = "No execution checklist loaded";
+    ui.executionChecklistDetail.classList.remove("warn");
+    return;
+  }
+  const blockedReasons = Array.isArray(checklist.blockedReasons) ? checklist.blockedReasons : [];
+  ui.executionChecklistDetail.classList.toggle("warn", checklist.canRecordManualProgress === false);
+  appendKeyValue(ui.executionChecklistDetail, "Checklist", `${checklist.status || "UNKNOWN"} ${checklist.progress?.completed || 0}/${checklist.progress?.total || 0}`);
+  appendKeyValue(ui.executionChecklistDetail, "Package review", checklist.packageReview?.decision || "Missing");
+  appendKeyValue(ui.executionChecklistDetail, "Boundary", "Records local manual progress only");
+  if (blockedReasons.length) {
+    appendPillGroup(ui.executionChecklistDetail, "Blocked reasons", blockedReasons);
+  }
+  const steps = Array.isArray(checklist.steps) ? checklist.steps : [];
+  if (!steps.length) {
+    renderTextList(ui.executionChecklistDetail, [], "No checklist steps", { append: true });
+    return;
+  }
+  for (const step of steps) {
+    ui.executionChecklistDetail.appendChild(renderExecutionChecklistStep(checklist, step));
+  }
+}
+
+function renderExecutionChecklistStep(checklist, step) {
+  const item = document.createElement("div");
+  item.className = "checklist-step";
+  const title = document.createElement("div");
+  title.className = "list-title";
+  title.textContent = `${step.order || ""}. ${step.title || step.action || "Step"}`.trim();
+  const meta = document.createElement("div");
+  meta.className = "list-meta";
+  meta.textContent = [
+    step.action || "",
+    step.record?.decision ? `recorded: ${step.record.decision}` : "not recorded",
+    step.record?.recordedAt ? formatTime(step.record.recordedAt) : "",
+    step.detail || ""
+  ].filter(Boolean).join(" · ");
+  const actions = document.createElement("div");
+  actions.className = "button-row compact checklist-actions";
+  const decisions = [
+    ["DONE", "Done", "primary"],
+    ["FAILED", "Failed", "secondary"],
+    ["BLOCKED", "Block", "secondary"],
+    ["NEEDS_REFRESH", "Refresh", "secondary"]
+  ];
+  for (const [decision, label, className] of decisions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.textContent = label;
+    button.disabled = !checklist.canRecordManualProgress;
+    button.addEventListener("click", () => recordExecutionChecklistStep(checklist.applicationId, step.action, decision));
+    actions.appendChild(button);
+  }
+  item.append(title, meta, actions);
+  return item;
+}
+
+async function recordExecutionChecklistStep(applicationId, stepAction, decision) {
+  try {
+    const targetApplicationId = Number(applicationId);
+    if (!Number.isInteger(targetApplicationId) || targetApplicationId <= 0 || !stepAction) {
+      throw new Error("Select a valid execution checklist step first.");
+    }
+    setStatus(`Recording checklist step: ${stepAction} ${decision}`);
+    const result = await runtimeMessage({
+      type: "RECORD_EXECUTION_CHECKLIST_STEP",
+      applicationId: targetApplicationId,
+      options: {
+        stepAction,
+        decision,
+        reviewer: "user",
+        note: "options_execution_checklist",
+        noRealBossAction: true
+      }
+    });
+    renderExecutionChecklistDetail(result.response);
+    await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
+    await refreshGreetingDiagnostics({ silent: true }).catch(() => {});
+    const record = result.response?.record || {};
+    setStatus(result.response?.ok
+      ? `Checklist step recorded: ${record.stepAction || stepAction} ${record.decision || decision}`
+      : `Checklist step blocked: ${record.stepAction || stepAction}`, !result.response?.ok);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  }
+}
+
+function renderSubmissionEvidenceDetail(result = null) {
+  if (!ui.submissionEvidenceDetail) {
+    return;
+  }
+  ui.submissionEvidenceDetail.replaceChildren();
+  const latestPageResult = result?.latestPageResult || state.latestSubmissionPageResult || null;
+  const latestEvidence = result?.latestEvidence
+    || (Array.isArray(result?.evidence) ? result.evidence[0] : null)
+    || result?.workflowEvent
+    || null;
+  const metadata = latestEvidence?.metadata || {};
+  const evidence = result?.evidence && !Array.isArray(result.evidence)
+    ? result.evidence
+    : metadata.evidence || result?.evidenceRecord || null;
+  const assessment = result?.assessment || metadata.assessment || null;
+  if (result?.error) {
+    ui.submissionEvidenceDetail.textContent = result.error;
+    ui.submissionEvidenceDetail.classList.add("warn");
+    return;
+  }
+  if (!latestEvidence && !latestPageResult && !evidence && !assessment) {
+    ui.submissionEvidenceDetail.textContent = "No submission evidence recorded";
+    ui.submissionEvidenceDetail.classList.remove("warn");
+    return;
+  }
+  const status = assessment?.resultStatus || evidence?.pageResult?.resultStatus || latestPageResult?.resultStatus || latestEvidence?.status || "UNKNOWN";
+  const blockers = Array.isArray(assessment?.blockers) && assessment.blockers.length
+    ? assessment.blockers
+    : Array.isArray(evidence?.pageResult?.blockers) && evidence.pageResult.blockers.length
+      ? evidence.pageResult.blockers
+      : latestPageResult?.blockers || [];
+  const signals = Array.isArray(evidence?.pageResult?.signals) && evidence.pageResult.signals.length
+    ? evidence.pageResult.signals
+    : latestPageResult?.signals || [];
+  ui.submissionEvidenceDetail.classList.toggle("warn", status === "BLOCKED_BY_BOSS" || status === "NEEDS_USER_ACTION" || status === "UNKNOWN");
+  appendKeyValue(ui.submissionEvidenceDetail, "Status", formatSubmissionEvidenceStatus(status));
+  appendKeyValue(ui.submissionEvidenceDetail, "Confidence", formatDecimal(assessment?.confidence ?? evidence?.pageResult?.confidence ?? latestPageResult?.confidence));
+  appendKeyValue(ui.submissionEvidenceDetail, "Application", `#${result?.applicationId || latestEvidence?.applicationId || evidence?.pageResult?.context?.applicationId || latestPageResult?.context?.applicationId || ""}`.trim());
+  appendKeyValue(ui.submissionEvidenceDetail, "Source", evidence?.source || latestPageResult?.source || "workflow event");
+  appendKeyValue(ui.submissionEvidenceDetail, "Recorded", latestEvidence?.createdAt ? formatTime(latestEvidence.createdAt) : (latestPageResult ? "Pending local read" : ""));
+  appendKeyValue(ui.submissionEvidenceDetail, "Boundary", "Read-only evidence; no BOSS click/upload/submit");
+  if (signals.length) {
+    appendPillGroup(ui.submissionEvidenceDetail, "Signals", signals);
+  }
+  if (blockers.length) {
+    appendPillGroup(ui.submissionEvidenceDetail, "Blockers", blockers);
+  }
+  const sample = evidence?.pageResult?.pageTextSample || latestPageResult?.pageTextSample || evidence?.manualEvidence?.text || evidence?.notes || "";
+  if (sample) {
+    renderTextList(ui.submissionEvidenceDetail, [sample.slice(0, 360)], "No page sample", { append: true });
+  }
+}
+
+async function readSubmissionPageResult(options = {}) {
+  const applicationId = Number(getSelectedExecutionPackageApplicationId());
+  try {
+    if (!Number.isInteger(applicationId) || applicationId <= 0) {
+      throw new Error("Select an application or approved execution package before reading submission evidence.");
+    }
+    if (ui.readSubmissionPageResult) {
+      ui.readSubmissionPageResult.disabled = true;
+    }
+    if (!options.silent) {
+      setStatus("Reading current BOSS page result");
+    }
+    const tab = await getBossExecutionTab();
+    await rememberBossPage(tab);
+    const pageContext = await getBossPageTaskContext(tab);
+    const pageResult = await tabMessage(tab.id, {
+      type: "READ_SUBMISSION_PAGE_RESULT",
+      context: {
+        ...pageContext,
+        applicationId
+      }
+    });
+    state.selectedExecutionPackageApplicationId = applicationId;
+    state.latestSubmissionPageResult = pageResult;
+    renderSubmissionEvidenceDetail({
+      ok: true,
+      applicationId,
+      latestPageResult: pageResult
+    });
+    if (!options.silent) {
+      setStatus(`BOSS page result read: ${formatSubmissionEvidenceStatus(pageResult.resultStatus)}`);
+    }
+    return pageResult;
+  } catch (error) {
+    renderSubmissionEvidenceDetail({ ok: false, error: error.message || String(error), applicationId });
+    setStatus(error.message || String(error), true);
+    throw error;
+  } finally {
+    if (ui.readSubmissionPageResult) {
+      ui.readSubmissionPageResult.disabled = false;
+    }
+  }
+}
+
+async function recordSubmissionPageResult() {
+  const applicationId = Number(getSelectedExecutionPackageApplicationId());
+  try {
+    if (!Number.isInteger(applicationId) || applicationId <= 0) {
+      throw new Error("Select an application or approved execution package before recording submission evidence.");
+    }
+    if (ui.recordSubmissionPageResult) {
+      ui.recordSubmissionPageResult.disabled = true;
+    }
+    setStatus("Recording submission evidence");
+    let pageResult = state.latestSubmissionPageResult;
+    const pageResultApplicationId = Number(pageResult?.context?.applicationId || 0);
+    if (!pageResult || pageResultApplicationId !== applicationId) {
+      pageResult = await readSubmissionPageResult({ silent: true });
+    }
+    const result = await runtimeMessage({
+      type: "RECORD_SUBMISSION_EVIDENCE",
+      applicationId,
+      options: {
+        source: "boss_page_readonly",
+        evidenceType: "readonly_page_result",
+        pageResult,
+        notes: "options_submission_result_read",
+        recordedBy: "user",
+        noRealBossAction: true
+      }
+    });
+    state.selectedExecutionPackageApplicationId = applicationId;
+    renderSubmissionEvidenceDetail(result.response);
+    await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
+    await refreshGreetingDiagnostics({ silent: true }).catch(() => {});
+    const assessment = result.response?.assessment || {};
+    setStatus(`Submission evidence recorded: ${formatSubmissionEvidenceStatus(assessment.resultStatus || pageResult.resultStatus)}`);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    if (ui.recordSubmissionPageResult) {
+      ui.recordSubmissionPageResult.disabled = false;
+    }
   }
 }
 
@@ -1798,6 +2467,8 @@ function renderCareerContextDiagnostics(diagnostics, error = null) {
   const context = normalizeCareerContextPayload(diagnostics || {});
   const questions = normalizeCareerContextQuestions(diagnostics || {});
   state.careerContext = context;
+  state.careerContextFreshness = normalizeCareerContextFreshness(diagnostics || {});
+  state.careerContextNeedsRegeneration = state.careerContextFreshness.status === "STALE" || state.careerContextFreshness.status === "MISSING";
   state.careerContextQuestions = questions;
   state.careerContextAnswers = mergeCareerContextAnswers(state.careerContextAnswers, normalizeCareerContextAnswers(diagnostics || {}), questions);
 
@@ -1813,9 +2484,11 @@ function renderCareerContextDiagnostics(diagnostics, error = null) {
   ui.careerContextMeta.replaceChildren();
   appendKeyValue(ui.careerContextMeta, "文件", context.filePath || context.fileName || "未生成");
   appendKeyValue(ui.careerContextMeta, "更新时间", context.updatedAt ? formatTime(context.updatedAt) : "未记录");
+  appendKeyValue(ui.careerContextMeta, "复用状态", formatCareerContextFreshnessStatus(state.careerContextFreshness));
+  appendKeyValue(ui.careerContextMeta, "最近画像变更", state.careerContextFreshness.latestProfileChangedAt ? `${formatTime(state.careerContextFreshness.latestProfileChangedAt)} / ${state.careerContextFreshness.latestProfileChangeSource || "profile"}` : "未记录");
   appendKeyValue(ui.careerContextMeta, "Agent run", context.agentRunId ? `#${context.agentRunId}` : "暂无");
   appendKeyValue(ui.careerContextMeta, "写入策略", context.writeFile === false ? "仅预览，未写入" : "写入本地文件");
-  appendKeyValue(ui.careerContextMeta, "边界", "不确认 PENDING 草稿，不触发 BOSS 页面动作");
+  appendKeyValue(ui.careerContextMeta, "边界", "只做画像沉淀；单岗位流程仅读取已持久化事实，不会重跑 ProfileAgent 或触发 BOSS 页面动作");
 
   ui.careerContextAnswerStatus.classList.remove("warn");
   renderTextList(ui.careerContextQuestions, questions.map(formatCareerContextQuestion), "暂无待追问问题");
@@ -1826,6 +2499,7 @@ function renderCareerContextDiagnostics(diagnostics, error = null) {
   ui.careerContextPreview.textContent = context.markdown
     ? truncateText(context.markdown, 12000)
     : "暂无 career_agent_context.md";
+  updateCareerContextFreshnessStatus();
 }
 
 function renderProfileFactDrafts(payload, error = null) {
@@ -1974,11 +2648,57 @@ function splitEditableList(value) {
 }
 
 function updateCareerContextFreshnessStatus() {
-  ui.regenerateCareerContextAfterFacts.disabled = !state.careerContextNeedsRegeneration;
-  ui.careerContextFreshnessStatus.classList.toggle("warn", state.careerContextNeedsRegeneration);
+  const freshness = state.careerContextFreshness || {};
+  const needsRegeneration = isCareerContextRegenerationNeeded();
+  ui.regenerateCareerContextAfterFacts.disabled = !needsRegeneration;
+  ui.careerContextFreshnessStatus.classList.toggle("warn", needsRegeneration);
+  if (freshness.status === "STALE") {
+    ui.careerContextFreshnessStatus.textContent = `事实库已变更，旧 career_agent_context.md 已过期；最近变更：${freshness.latestProfileChangedAt ? formatTime(freshness.latestProfileChangedAt) : "未记录"}。`;
+    return;
+  }
+  if (freshness.status === "MISSING") {
+    ui.careerContextFreshnessStatus.textContent = "尚未生成 career_agent_context.md；ProfileAgent 首次对话沉淀后会持久复用。";
+    return;
+  }
+  if (freshness.status === "FRESH") {
+    ui.careerContextFreshnessStatus.textContent = "career_agent_context.md 与当前画像事实库一致；后续 JD 评分和简历生成会直接复用持久化画像。";
+    return;
+  }
   ui.careerContextFreshnessStatus.textContent = state.careerContextNeedsRegeneration
     ? "事实库已变更，建议重新生成 career_agent_context.md 后再进行 JD 打分或简历生成。"
     : "确认或拒绝事实草稿后，建议重新生成职业上下文。";
+}
+
+function isCareerContextRegenerationNeeded() {
+  const status = state.careerContextFreshness?.status || "";
+  return state.careerContextNeedsRegeneration || status === "STALE" || status === "MISSING";
+}
+
+function normalizeCareerContextFreshness(payload = {}) {
+  const freshness = payload.freshness && typeof payload.freshness === "object" ? payload.freshness : {};
+  const status = String(freshness.status || "").toUpperCase();
+  return {
+    status: ["FRESH", "STALE", "MISSING"].includes(status) ? status : "",
+    isFresh: Boolean(freshness.isFresh),
+    contextUpdatedAt: freshness.contextUpdatedAt || "",
+    latestProfileChangedAt: freshness.latestProfileChangedAt || "",
+    latestProfileChangeSource: freshness.latestProfileChangeSource || "",
+    latestProfileChangeId: freshness.latestProfileChangeId || null,
+    staleReasons: Array.isArray(freshness.staleReasons) ? freshness.staleReasons : []
+  };
+}
+
+function formatCareerContextFreshnessStatus(freshness = {}) {
+  if (freshness.status === "FRESH") {
+    return "可复用";
+  }
+  if (freshness.status === "STALE") {
+    return "已过期，需重新生成";
+  }
+  if (freshness.status === "MISSING") {
+    return "未生成";
+  }
+  return "未记录";
 }
 
 function formatProfileDraftType(value) {
@@ -1993,15 +2713,16 @@ function formatProfileDraftType(value) {
 
 function normalizeCareerContextPayload(payload = {}) {
   const stored = payload.careerContext || {};
+  const file = stored.file && typeof stored.file === "object" ? stored.file : {};
   const context = stored.context && typeof stored.context === "object" ? stored.context : {};
   const markdown = stored.markdown || "";
   return {
     exists: Boolean(stored.exists || markdown || stored.file || stored.filePath),
-    filePath: stored.filePath || stored.file || "",
-    fileName: stored.fileName || "",
+    filePath: stored.filePath || file.filePath || "",
+    fileName: stored.fileName || file.fileName || "",
     markdown,
-    bytes: Number(stored.bytes || browserByteLength(markdown)),
-    updatedAt: stored.updatedAt || "",
+    bytes: Number(stored.bytes || file.bytes || browserByteLength(markdown)),
+    updatedAt: stored.updatedAt || file.updatedAt || payload.freshness?.contextUpdatedAt || "",
     agentRunId: payload.agentRun?.id || stored.agentRunId || context.agentRunId || "",
     writeFile: stored.writeFile
   };
@@ -2159,6 +2880,27 @@ function readCareerContextAnswers() {
     .filter((item) => item?.id && item.answer)
     .map((item) => ({ id: item.id, answer: item.answer }))
     .slice(0, 50);
+}
+
+function readCareerContextAnswersWithUserUpdate() {
+  const answers = readCareerContextAnswers();
+  const updateAnswer = readProfileAgentUserUpdateAnswer();
+  if (updateAnswer) {
+    answers.push(updateAnswer);
+  }
+  return answers.slice(0, 50);
+}
+
+function readProfileAgentUserUpdateAnswer() {
+  const answer = String(ui.profileAgentUserUpdate?.value || "").trim();
+  if (!answer) {
+    return null;
+  }
+  return {
+    id: "profile_user_update",
+    prompt: "用户主动补充或修改画像信息",
+    answer
+  };
 }
 
 function browserByteLength(value) {
@@ -2373,6 +3115,7 @@ async function showResumeAuditDetail(resumeAuditId) {
 
 function renderResumeDetail(version = {}, audit = null, fitEvaluation = null, claimVerification = null) {
   const fields = version.resumeFields && typeof version.resumeFields === "object" ? version.resumeFields : {};
+  const renderMetadata = version.renderMetadata && typeof version.renderMetadata === "object" ? version.renderMetadata : {};
   state.selectedResumeVersion = version;
   state.selectedResumeAudit = audit;
   state.selectedResumeFitEvaluation = fitEvaluation;
@@ -2402,6 +3145,8 @@ function renderResumeDetail(version = {}, audit = null, fitEvaluation = null, cl
   setResumeEditorVisible(false);
 
   ui.resumeFieldPreview.replaceChildren();
+  appendTemplateMetadata(ui.resumeFieldPreview, renderMetadata);
+  appendRenderQuality(ui.resumeFieldPreview, renderMetadata.renderQuality || {});
   appendKeyValue(ui.resumeFieldPreview, "姓名", fields.name || "未填写");
   appendKeyValue(ui.resumeFieldPreview, "标题", fields.headline || fields.targetRole || "未填写");
   appendKeyValue(ui.resumeFieldPreview, "摘要", fields.summary || "暂无摘要");
@@ -2590,6 +3335,36 @@ function appendKeyValue(container, label, value) {
   text.textContent = value || "";
   row.append(key, text);
   container.appendChild(row);
+}
+
+function appendTemplateMetadata(container, metadata = {}) {
+  if (!metadata || typeof metadata !== "object" || !(metadata.template || metadata.templateLabel || metadata.templateSkill)) {
+    return;
+  }
+  appendKeyValue(container, "模板", metadata.templateLabel || metadata.template || "未记录");
+  appendKeyValue(container, "模板 Skill", metadata.templateSkill || "未记录");
+  appendKeyValue(
+    container,
+    "章节顺序",
+    Array.isArray(metadata.templateOrder) && metadata.templateOrder.length ? metadata.templateOrder.join(" -> ") : "未记录"
+  );
+  appendKeyValue(container, "隐藏摘要/技能", [
+    metadata.showSummarySection === false ? "摘要隐藏" : "摘要显示",
+    metadata.showSkillsSection === false ? "技能隐藏" : "技能显示"
+  ].join(" / "));
+}
+
+function appendRenderQuality(container, renderQuality = {}) {
+  if (!renderQuality || typeof renderQuality !== "object" || !renderQuality.checks) {
+    return;
+  }
+  appendKeyValue(container, "DOCX QA", renderQuality.ok === false ? "需检查" : "通过");
+  appendKeyValue(container, "页数估算", `${renderQuality.estimatedPages || "?"}/${renderQuality.maxPages || 2}`);
+  appendKeyValue(container, "文本长度", String(renderQuality.textLength || 0));
+  const warnings = Array.isArray(renderQuality.warnings) ? renderQuality.warnings.filter(Boolean) : [];
+  if (warnings.length) {
+    appendPillGroup(container, "DOCX QA warnings", warnings.slice(0, 8));
+  }
 }
 
 function appendPillGroup(container, label, items) {
@@ -2965,6 +3740,23 @@ function formatSubmissionReadinessReview(value) {
     BLOCKED: "本地阻断"
   };
   return labels[value] || "";
+}
+
+function formatSubmissionEvidenceStatus(value) {
+  const labels = {
+    MANUAL_SUBMISSION_CONFIRMED: "Manual submission confirmed",
+    GREETING_SENT_CONFIRMED: "Greeting sent confirmed",
+    RESUME_UPLOAD_CONFIRMED: "Resume upload confirmed",
+    BLOCKED_BY_BOSS: "Blocked by BOSS",
+    NEEDS_USER_ACTION: "Needs user action",
+    UNKNOWN: "Unknown"
+  };
+  return labels[value] || value || "Unknown";
+}
+
+function formatDecimal(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(2) : "--";
 }
 
 function formatWorkflowSeverity(value) {

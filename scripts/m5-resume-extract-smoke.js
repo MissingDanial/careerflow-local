@@ -189,7 +189,7 @@ function runWiringChecks() {
         && extractorJs.includes("unpdf")
         && extractorJs.includes("MAX_RESUME_FILE_BYTES"),
       packageRunsExtractSmoke: packageJson.includes("m5:resume:smoke")
-        && packageJson.includes("server/src/resume-extractor.js")
+        && packageJson.includes("check:syntax")
     }
   };
 }

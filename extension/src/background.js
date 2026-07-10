@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS = {
   autoSyncDebounceMs: 1200,
   crawlDelayMs: 1600,
   crawlMaxJobs: 30,
+  resumeTemplateName: "resume-to-word-campus-product-v1",
   riskGateEnabled: false,
   excludedDirections: []
 };
@@ -98,6 +99,8 @@ async function handleMessage(message, sender) {
       return screenApplicationBatch(message.options || {});
     case "GET_RESUME_CANDIDATES":
       return fetchResumeCandidates(message.options || message.limit || 8);
+    case "GET_RESUME_TEMPLATES":
+      return fetchResumeTemplates();
     case "GET_RESUME_VERSIONS":
       return fetchResumeVersions(message.options || message.limit || 8);
     case "GET_RESUME_VERSION":
@@ -136,6 +139,20 @@ async function handleMessage(message, sender) {
       return reviewSubmissionReadiness(message.applicationId, message.options || {});
     case "PREPARE_GREETING":
       return prepareGreeting(message.applicationId, message.options || {});
+    case "GET_EXECUTION_PACKAGE":
+      return fetchExecutionPackage(message.applicationId, message.options || {});
+    case "PREPARE_EXECUTION_PACKAGE":
+      return prepareExecutionPackage(message.applicationId, message.options || {});
+    case "REVIEW_EXECUTION_PACKAGE":
+      return reviewExecutionPackage(message.applicationId, message.options || {});
+    case "GET_EXECUTION_CHECKLIST":
+      return fetchExecutionChecklist(message.applicationId, message.options || {});
+    case "RECORD_EXECUTION_CHECKLIST_STEP":
+      return recordExecutionChecklistStep(message.applicationId, message.options || {});
+    case "GET_SUBMISSION_EVIDENCE":
+      return fetchSubmissionEvidence(message.applicationId, message.options || {});
+    case "RECORD_SUBMISSION_EVIDENCE":
+      return recordSubmissionEvidence(message.applicationId, message.options || {});
     case "GET_JOB_KEYS":
       return fetchJobKeys(message.options || {});
     case "CLAIM_BROWSER_TASK":
@@ -168,6 +185,7 @@ async function saveSettings(settings) {
     autoSyncDebounceMs: clampNumber(settings.autoSyncDebounceMs, 500, 10000, current.autoSyncDebounceMs),
     crawlDelayMs: clampNumber(settings.crawlDelayMs, 800, 8000, current.crawlDelayMs),
     crawlMaxJobs: clampNumber(settings.crawlMaxJobs, 1, 100, current.crawlMaxJobs),
+    resumeTemplateName: normalizeResumeTemplateName(settings.resumeTemplateName ?? current.resumeTemplateName),
     riskGateEnabled: parseBoolean(settings.riskGateEnabled, current.riskGateEnabled),
     excludedDirections: normalizeDelimitedStringArray(settings.excludedDirections ?? current.excludedDirections)
   };
@@ -750,6 +768,19 @@ async function fetchResumeCandidates(options = 8) {
   };
 }
 
+async function fetchResumeTemplates() {
+  const settings = await getSettings();
+  const templatesUrl = new URL("/api/resume-templates", ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: templatesUrl,
+    response: await backendJson(templatesUrl, {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "Resume templates read failed"
+    })
+  };
+}
+
 async function fetchResumeVersions(options = 8) {
   const settings = await getSettings();
   const normalizedOptions = typeof options === "object" && options !== null
@@ -1157,6 +1188,177 @@ async function prepareGreeting(applicationId, options = {}) {
         dryRun: true
       },
       errorPrefix: "打招呼 dry-run 生成失败"
+    })
+  };
+}
+
+async function fetchExecutionPackage(applicationId, options = {}) {
+  const id = Number(applicationId || options.applicationId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Missing valid application ID");
+  }
+  const settings = await getSettings();
+  const packageUrl = new URL(`/api/applications/${id}/execution-package`, ensureTrailingSlash(settings.backendUrl));
+  if (options.requestedBy) {
+    packageUrl.searchParams.set("requestedBy", String(options.requestedBy));
+  }
+  return {
+    endpoint: packageUrl.toString(),
+    response: await backendJson(packageUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "Execution package read failed"
+    })
+  };
+}
+
+async function prepareExecutionPackage(applicationId, options = {}) {
+  const id = Number(applicationId || options.applicationId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Missing valid application ID");
+  }
+  const settings = await getSettings();
+  const packageUrl = new URL(`/api/applications/${id}/execution-package`, ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: packageUrl,
+    response: await backendJson(packageUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {
+        requestedBy: options.requestedBy || options.reviewer || "options",
+        noRealBossAction: true
+      },
+      errorPrefix: "Execution package prepare failed"
+    })
+  };
+}
+
+async function reviewExecutionPackage(applicationId, options = {}) {
+  const id = Number(applicationId || options.applicationId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Missing valid application ID");
+  }
+  const decision = String(options.decision || options.status || "").trim().toUpperCase();
+  if (!decision) {
+    throw new Error("Missing execution package review decision");
+  }
+  const settings = await getSettings();
+  const reviewUrl = new URL(`/api/applications/${id}/execution-package/review`, ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: reviewUrl,
+    response: await backendJson(reviewUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {
+        decision,
+        reviewer: options.reviewer || options.approver || "options",
+        note: options.note || "",
+        requireArchive: options.requireArchive !== false,
+        noRealBossAction: true
+      },
+      errorPrefix: "Execution package review failed"
+    })
+  };
+}
+
+async function fetchExecutionChecklist(applicationId, options = {}) {
+  const id = Number(applicationId || options.applicationId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Missing valid application ID");
+  }
+  const settings = await getSettings();
+  const checklistUrl = new URL(`/api/applications/${id}/execution-checklist`, ensureTrailingSlash(settings.backendUrl));
+  if (options.requestedBy) {
+    checklistUrl.searchParams.set("requestedBy", String(options.requestedBy));
+  }
+  if (options.requireArchive === false) {
+    checklistUrl.searchParams.set("requireArchive", "0");
+  }
+  return {
+    endpoint: checklistUrl.toString(),
+    response: await backendJson(checklistUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "Execution checklist read failed"
+    })
+  };
+}
+
+async function recordExecutionChecklistStep(applicationId, options = {}) {
+  const id = Number(applicationId || options.applicationId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Missing valid application ID");
+  }
+  const stepAction = String(options.stepAction || options.action || "").trim();
+  const decision = String(options.decision || options.status || "").trim().toUpperCase();
+  if (!stepAction || !decision) {
+    throw new Error("Missing execution checklist step action or decision");
+  }
+  const settings = await getSettings();
+  const checklistUrl = new URL(`/api/applications/${id}/execution-checklist`, ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: checklistUrl,
+    response: await backendJson(checklistUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {
+        stepAction,
+        decision,
+        note: options.note || "",
+        evidenceUrl: options.evidenceUrl || "",
+        reviewer: options.reviewer || options.operator || "options",
+        requestedBy: options.requestedBy || "options_execution_checklist",
+        noRealBossAction: true
+      },
+      errorPrefix: "Execution checklist step record failed"
+    })
+  };
+}
+
+async function fetchSubmissionEvidence(applicationId, options = {}) {
+  const id = Number(applicationId || options.applicationId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Missing valid application ID");
+  }
+  const settings = await getSettings();
+  const evidenceUrl = new URL(`/api/applications/${id}/submission-evidence`, ensureTrailingSlash(settings.backendUrl));
+  evidenceUrl.searchParams.set("limit", String(clampNumber(options.limit, 1, 100, 20)));
+  return {
+    endpoint: evidenceUrl.toString(),
+    response: await backendJson(evidenceUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "Submission evidence read failed"
+    })
+  };
+}
+
+async function recordSubmissionEvidence(applicationId, options = {}) {
+  const id = Number(applicationId || options.applicationId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Missing valid application ID");
+  }
+  const settings = await getSettings();
+  const evidenceUrl = new URL(`/api/applications/${id}/submission-evidence`, ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: evidenceUrl,
+    response: await backendJson(evidenceUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {
+        source: options.source || "options",
+        evidenceType: options.evidenceType || "manual_or_readonly_page",
+        pageResult: options.pageResult || {},
+        manualEvidence: options.manualEvidence || {},
+        notes: options.notes || options.note || "",
+        pageUrl: options.pageUrl || options.pageResult?.page?.url || "",
+        pageTitle: options.pageTitle || options.pageResult?.page?.title || "",
+        screenshotPath: options.screenshotPath || "",
+        userDecision: options.userDecision || options.resultStatus || "",
+        recordedBy: options.recordedBy || options.reviewer || "options",
+        noRealBossAction: true
+      },
+      errorPrefix: "Submission evidence record failed"
     })
   };
 }
@@ -1646,6 +1848,10 @@ function normalizeDelimitedStringArray(value) {
     .map(cleanText)
     .filter(Boolean)
     .slice(0, 30);
+}
+
+function normalizeResumeTemplateName(value) {
+  return String(value || "").trim() || DEFAULT_SETTINGS.resumeTemplateName;
 }
 
 function unionStrings(left = [], right = []) {

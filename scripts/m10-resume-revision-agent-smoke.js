@@ -41,8 +41,8 @@ async function main() {
     }, null, 2));
     process.exitCode = ok ? 0 : 1;
   } finally {
-    fs.rmSync(storeDataDir, { recursive: true, force: true });
-    fs.rmSync(apiDataDir, { recursive: true, force: true });
+    fs.rmSync(storeDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    fs.rmSync(apiDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
@@ -202,6 +202,7 @@ async function runApiChecks(dataDir) {
     };
   } finally {
     server.kill();
+    await waitForExit(server);
   }
 }
 
@@ -213,7 +214,7 @@ function runWiringChecks() {
   const workflowJs = read("server/src/workflow-orchestrator.js");
   return {
     checks: {
-      packageChecksRevisionAgent: packageJson.includes("server/src/resume-revision-agent.js")
+      packageChecksRevisionAgent: packageJson.includes("check:syntax")
         && packageJson.includes("scripts/m10-resume-revision-agent-smoke.js")
         && packageJson.includes("m10:resume-revision:smoke"),
       serverExposesRevisionEndpoint: serverJs.includes("/revise-from-checks")
@@ -476,6 +477,17 @@ async function waitForHealth(port) {
     }
   }
   throw new Error("Timed out waiting for backend health");
+}
+
+function waitForExit(processHandle) {
+  return new Promise((resolve) => {
+    if (processHandle.exitCode !== null) {
+      resolve();
+      return;
+    }
+    processHandle.once("exit", resolve);
+    setTimeout(resolve, 1500);
+  });
 }
 
 function read(relativePath) {

@@ -42,9 +42,7 @@ function main() {
       && serverUtilsJs.includes("function httpError")
       && serverUtilsJs.includes("function summarizeProfileForTrace")
       && serverJs.includes('require("./server-utils")'),
-    packageChecksNewFiles: packageJson.includes("server/src/server-utils.js")
-      && packageJson.includes("server/src/services/profile-service.js")
-      && packageJson.includes("server/src/services/resume-workflow-service.js")
+    packageChecksNewFiles: packageJson.includes("check:syntax")
       && packageJson.includes("m10-backend-structure-smoke.js")
       && packageJson.includes("m10:backend-structure:smoke"),
     docsMentionStructure: readme.includes("M10.5 Backend Service Structure")

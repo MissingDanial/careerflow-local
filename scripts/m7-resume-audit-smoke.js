@@ -240,6 +240,7 @@ async function runApiChecks(dataDir) {
 function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
+  const migrationSql = read("server/migrations/007_resume_workflow.sql");
   const packageJson = read("package.json");
   return {
     checks: {
@@ -251,16 +252,14 @@ function runWiringChecks() {
       serverUsesResumeAuditAndRenderer: serverJs.includes("runResumeAgent")
         && serverJs.includes("runAuditAgent")
         && serverJs.includes("renderResumeDocx"),
-      storeDefinesM7Tables: storeJs.includes("CREATE TABLE IF NOT EXISTS resume_versions")
-        && storeJs.includes("CREATE TABLE IF NOT EXISTS resume_audits"),
+      storeDefinesM7Tables: migrationSql.includes("CREATE TABLE IF NOT EXISTS resume_versions")
+        && migrationSql.includes("CREATE TABLE IF NOT EXISTS resume_audits"),
       storeDefinesM7Persistence: storeJs.includes("createResumeVersion(input")
         && storeJs.includes("createResumeAudit(input")
         && storeJs.includes("getApplicationResumeInput")
         && storeJs.includes("getResumeCandidates(options"),
       packageRunsM7Smoke: packageJson.includes("m7:resume-audit:smoke")
-        && packageJson.includes("server/src/resume-agent.js")
-        && packageJson.includes("server/src/audit-agent.js")
-        && packageJson.includes("server/src/document-renderer.js")
+        && packageJson.includes("check:syntax")
     }
   };
 }

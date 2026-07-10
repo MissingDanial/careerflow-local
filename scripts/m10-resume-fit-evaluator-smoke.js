@@ -38,8 +38,8 @@ async function main() {
     }, null, 2));
     process.exitCode = ok ? 0 : 1;
   } finally {
-    fs.rmSync(storeDataDir, { recursive: true, force: true });
-    fs.rmSync(apiDataDir, { recursive: true, force: true });
+    fs.rmSync(storeDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    fs.rmSync(apiDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
@@ -199,24 +199,36 @@ async function runApiChecks(dataDir) {
     };
   } finally {
     server.kill();
+    await waitForExit(server, 3000);
   }
+}
+
+async function waitForExit(child, timeoutMs) {
+  if (child.exitCode !== null) {
+    return;
+  }
+  await Promise.race([
+    new Promise((resolve) => child.once("exit", resolve)),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs))
+  ]);
 }
 
 function runWiringChecks() {
   const packageJson = read("package.json");
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
+  const migrationSql = read("server/migrations/009_resume_fit_evaluations.sql");
   const evaluatorJs = read("server/src/resume-fit-evaluator.js");
   const workflowJs = read("server/src/workflow-orchestrator.js");
   return {
     checks: {
-      packageChecksEvaluator: packageJson.includes("server/src/resume-fit-evaluator.js")
+      packageChecksEvaluator: packageJson.includes("check:syntax")
         && packageJson.includes("scripts/m10-resume-fit-evaluator-smoke.js")
         && packageJson.includes("m10:resume-fit:smoke"),
       serverExposesFitEndpoints: serverJs.includes("/api/resume-fit-evaluations")
         && serverJs.includes("/evaluate-fit")
         && serverJs.includes("runResumeFitEvaluator"),
-      storeDefinesFitSchema: storeJs.includes("CREATE TABLE IF NOT EXISTS resume_fit_evaluations")
+      storeDefinesFitSchema: migrationSql.includes("CREATE TABLE IF NOT EXISTS resume_fit_evaluations")
         && storeJs.includes("resumeFitEvaluationCount")
         && storeJs.includes("createResumeFitEvaluation"),
       evaluatorKeepsNoRealBossBoundary: evaluatorJs.includes("noRealBossAction: true")

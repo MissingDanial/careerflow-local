@@ -50,9 +50,63 @@
         return autoCrawlState;
       case "RUN_BROWSER_TASK":
         return runBrowserTask(message.task || {});
+      case "READ_SUBMISSION_PAGE_RESULT":
+        return readSubmissionPageResult(message.context || {});
       default:
         throw new Error(`Unsupported content message: ${message?.type}`);
     }
+  }
+
+  async function readSubmissionPageResult(context = {}) {
+    const capture = await extractAndCache().catch(() => null);
+    const diagnostics = getPageDiagnostics(findJobCards());
+    const blocker = getReadOnlyBossTaskBlocker(diagnostics);
+    const conversation = extractConversationSnapshot();
+    const resumeUnlock = extractResumeUnlockSnapshot();
+    const uploadDryRun = extractUploadResumeDryRunSnapshot();
+    const submitDryRun = extractSubmitApplicationDryRunSnapshot();
+    const bodyText = document.body ? cleanText(document.body.innerText || "") : "";
+    const signals = extractSubmissionResultSignals(bodyText, {
+      conversation,
+      resumeUnlock,
+      uploadDryRun,
+      submitDryRun
+    });
+    const blockers = blocker ? [blocker.errorCode] : extractSubmissionResultBlockers(bodyText, diagnostics);
+    const resultStatus = classifySubmissionPageResult({ signals, blockers, conversation, resumeUnlock, uploadDryRun, submitDryRun });
+    return {
+      ok: !blocker,
+      source: "boss_page_readonly",
+      resultStatus,
+      confidence: estimateSubmissionResultConfidence(resultStatus, signals, blockers),
+      signals,
+      blockers,
+      context: {
+        applicationId: context.applicationId || null,
+        title: cleanText(context.title || ""),
+        company: cleanText(context.company || "")
+      },
+      pageTextSample: bodyText.slice(0, 800),
+      diagnostics,
+      captureSummary: capture ? summarizeCaptureForTask(capture) : null,
+      conversation,
+      resumeUnlock,
+      uploadDryRun,
+      submitDryRun,
+      readOnly: {
+        noRealBossAction: true,
+        clicked: false,
+        uploaded: false,
+        submitted: false
+      },
+      page: {
+        url: location.href,
+        title: document.title
+      },
+      noRealBossAction: true,
+      noBrowserTaskCreated: true,
+      createsBrowserTasks: false
+    };
   }
 
   async function runBrowserTask(task) {
@@ -1081,6 +1135,99 @@
       uploaded: false,
       confidence: computeSubmitDryRunConfidence({ readyActions, lockedActions, confirmationCandidates, actionCandidates })
     };
+  }
+
+  function extractSubmissionResultSignalsLegacy(bodyText, snapshots = {}) {
+    const signals = [];
+    const textValue = cleanText(bodyText);
+    addSignalIf(signals, /已投递|投递成功|简历已投递|已提交|申请成功|已发送简历/.test(textValue), "submitted_signal_visible");
+    addSignalIf(signals, /已发送|消息已发送|沟通中|继续沟通|立即沟通/.test(textValue), "greeting_or_chat_signal_visible");
+    addSignalIf(signals, /简历已上传|上传成功|附件已上传|重新上传/.test(textValue), "resume_upload_signal_visible");
+    addSignalIf(signals, /职位关闭|停止招聘|已下线|岗位已关闭|不再招聘/.test(textValue), "job_closed_signal_visible");
+    addSignalIf(signals, /验证码|安全验证|滑块|异常访问|访问过于频繁|人机验证/.test(textValue), "security_check_signal_visible");
+    addSignalIf(signals, /登录|扫码登录|手机号登录/.test(textValue), "login_required_signal_visible");
+    addSignalIf(signals, snapshots.conversation?.chatOpened, "conversation_opened");
+    addSignalIf(signals, Number(snapshots.conversation?.messageCount || 0) > 0, "conversation_messages_visible");
+    addSignalIf(signals, snapshots.resumeUnlock?.unlocked, "resume_action_unlocked");
+    addSignalIf(signals, snapshots.uploadDryRun?.fileInputUsable || snapshots.uploadDryRun?.uploadActionVisible, "upload_entry_visible");
+    addSignalIf(signals, snapshots.submitDryRun?.submitActionVisible, "submit_entry_visible");
+    return signals;
+  }
+
+  function extractSubmissionResultBlockersLegacy(bodyText, diagnostics = {}) {
+    const blockers = [];
+    const textValue = cleanText(bodyText);
+    addSignalIf(blockers, diagnostics.loginRequired || /登录|扫码登录|手机号登录/.test(textValue), "LOGIN_REQUIRED");
+    addSignalIf(blockers, diagnostics.captchaRequired || /验证码|安全验证|滑块|异常访问|访问过于频繁|人机验证/.test(textValue), "SECURITY_CHECK");
+    addSignalIf(blockers, /职位关闭|停止招聘|已下线|岗位已关闭|不再招聘/.test(textValue), "JOB_CLOSED");
+    return blockers;
+  }
+
+  function classifySubmissionPageResult({ signals = [], blockers = [], conversation, uploadDryRun, submitDryRun }) {
+    if (blockers.includes("LOGIN_REQUIRED") || blockers.includes("SECURITY_CHECK") || blockers.includes("JOB_CLOSED") || signals.includes("job_closed_signal_visible")) {
+      return "BLOCKED_BY_BOSS";
+    }
+    if (signals.includes("submitted_signal_visible")) {
+      return "MANUAL_SUBMISSION_CONFIRMED";
+    }
+    if (signals.includes("resume_upload_signal_visible")) {
+      return "RESUME_UPLOAD_CONFIRMED";
+    }
+    if (signals.includes("greeting_or_chat_signal_visible") || conversation?.messageCount > 0) {
+      return "GREETING_SENT_CONFIRMED";
+    }
+    if (uploadDryRun?.fileInputUsable || uploadDryRun?.uploadActionVisible || submitDryRun?.submitActionVisible) {
+      return "NEEDS_USER_ACTION";
+    }
+    return "UNKNOWN";
+  }
+
+  function estimateSubmissionResultConfidence(resultStatus, signals = [], blockers = []) {
+    if (resultStatus === "MANUAL_SUBMISSION_CONFIRMED") {
+      return 0.9;
+    }
+    if (resultStatus === "RESUME_UPLOAD_CONFIRMED" || resultStatus === "GREETING_SENT_CONFIRMED") {
+      return signals.length >= 2 ? 0.8 : 0.65;
+    }
+    if (resultStatus === "BLOCKED_BY_BOSS") {
+      return blockers.length ? 0.85 : 0.7;
+    }
+    if (resultStatus === "NEEDS_USER_ACTION") {
+      return 0.65;
+    }
+    return 0.25;
+  }
+
+  function addSignalIf(items, condition, value) {
+    if (condition && !items.includes(value)) {
+      items.push(value);
+    }
+  }
+
+  function extractSubmissionResultSignals(bodyText, snapshots = {}) {
+    const signals = [];
+    const textValue = cleanText(bodyText);
+    addSignalIf(signals, /(\u5df2\u6295\u9012|\u6295\u9012\u6210\u529f|\u7b80\u5386\u5df2\u6295\u9012|\u5df2\u63d0\u4ea4|\u7533\u8bf7\u6210\u529f|\u5df2\u53d1\u9001\u7b80\u5386|submitted|application sent|resume sent)/i.test(textValue), "submitted_signal_visible");
+    addSignalIf(signals, /(\u5df2\u53d1\u9001|\u6d88\u606f\u5df2\u53d1\u9001|\u6c9f\u901a\u4e2d|\u7ee7\u7eed\u6c9f\u901a|\u7acb\u5373\u6c9f\u901a|message sent|chatting)/i.test(textValue), "greeting_or_chat_signal_visible");
+    addSignalIf(signals, /(\u7b80\u5386\u5df2\u4e0a\u4f20|\u4e0a\u4f20\u6210\u529f|\u9644\u4ef6\u5df2\u4e0a\u4f20|\u91cd\u65b0\u4e0a\u4f20|upload success|resume uploaded)/i.test(textValue), "resume_upload_signal_visible");
+    addSignalIf(signals, /(\u804c\u4f4d\u5173\u95ed|\u505c\u6b62\u62db\u8058|\u5df2\u4e0b\u7ebf|\u5c97\u4f4d\u5df2\u5173\u95ed|\u4e0d\u518d\u62db\u8058|job closed|position closed)/i.test(textValue), "job_closed_signal_visible");
+    addSignalIf(signals, /(\u9a8c\u8bc1\u7801|\u5b89\u5168\u9a8c\u8bc1|\u6ed1\u5757|\u5f02\u5e38\u8bbf\u95ee|\u8bbf\u95ee\u8fc7\u4e8e\u9891\u7e41|\u4eba\u673a\u9a8c\u8bc1|captcha|security check)/i.test(textValue), "security_check_signal_visible");
+    addSignalIf(signals, /(\u767b\u5f55|\u626b\u7801\u767b\u5f55|\u624b\u673a\u53f7\u767b\u5f55|login|sign in)/i.test(textValue), "login_required_signal_visible");
+    addSignalIf(signals, snapshots.conversation?.chatOpened, "conversation_opened");
+    addSignalIf(signals, Number(snapshots.conversation?.messageCount || 0) > 0, "conversation_messages_visible");
+    addSignalIf(signals, snapshots.resumeUnlock?.unlocked, "resume_action_unlocked");
+    addSignalIf(signals, snapshots.uploadDryRun?.fileInputUsable || snapshots.uploadDryRun?.uploadActionVisible, "upload_entry_visible");
+    addSignalIf(signals, snapshots.submitDryRun?.submitActionVisible, "submit_entry_visible");
+    return signals;
+  }
+
+  function extractSubmissionResultBlockers(bodyText, diagnostics = {}) {
+    const blockers = [];
+    const textValue = cleanText(bodyText);
+    addSignalIf(blockers, diagnostics.loginRequired || /(\u767b\u5f55|\u626b\u7801\u767b\u5f55|\u624b\u673a\u53f7\u767b\u5f55|login|sign in)/i.test(textValue), "LOGIN_REQUIRED");
+    addSignalIf(blockers, diagnostics.captchaRequired || /(\u9a8c\u8bc1\u7801|\u5b89\u5168\u9a8c\u8bc1|\u6ed1\u5757|\u5f02\u5e38\u8bbf\u95ee|\u8bbf\u95ee\u8fc7\u4e8e\u9891\u7e41|\u4eba\u673a\u9a8c\u8bc1|captcha|security check)/i.test(textValue), "SECURITY_CHECK");
+    addSignalIf(blockers, /(\u804c\u4f4d\u5173\u95ed|\u505c\u6b62\u62db\u8058|\u5df2\u4e0b\u7ebf|\u5c97\u4f4d\u5df2\u5173\u95ed|\u4e0d\u518d\u62db\u8058|job closed|position closed)/i.test(textValue), "JOB_CLOSED");
+    return blockers;
   }
 
   function findConversationRoots() {

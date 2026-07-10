@@ -16,10 +16,12 @@ function createProfileService({ store, dataDir }) {
 
   return {
     readCareerContext() {
+      const careerContext = readCareerContextFile({ dataDir });
       return {
         ok: true,
         storage: "file",
-        careerContext: readCareerContextFile({ dataDir })
+        careerContext,
+        freshness: store.getCareerContextFreshness(careerContext.updatedAt)
       };
     },
 
@@ -93,6 +95,7 @@ function createProfileService({ store, dataDir }) {
             markdown: agentResult.result.markdown,
             file
           },
+          freshness: store.getCareerContextFreshness(file?.updatedAt || ""),
           missingQuestions: agentResult.result.missingQuestions
         };
       } catch (error) {

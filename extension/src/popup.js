@@ -355,6 +355,7 @@ async function claimAndRunCurrentPageTask(tab) {
       transition: {
         toStatus,
         result,
+        claimToken: task.claimToken || "",
         errorMessage: result?.ok ? "" : result?.errorCode || result?.message || "browser_task_failed"
       }
     });
@@ -373,6 +374,7 @@ async function claimAndRunCurrentPageTask(tab) {
       taskId: task.id,
       transition: {
         toStatus: "FAILED",
+        claimToken: task.claimToken || "",
         result: {
           ok: false,
           errorCode: "BROWSER_TASK_FAILED",

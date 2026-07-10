@@ -12,20 +12,48 @@ function main() {
   const optionsJs = read("extension/src/options.js");
   const backgroundJs = read("extension/src/background.js");
   const serverJs = read("server/src/server.js");
+  const resumeWorkflowServiceJs = read("server/src/services/resume-workflow-service.js");
   const graphJs = read("server/src/resume-workflow-graph.js");
   const packageJson = read("package.json");
 
   const handlerFunction = sliceFunction(backgroundJs, "async function runResumeWorkflowGraph", "async function fetchMessages");
   const optionsFunction = sliceFunction(optionsJs, "async function runResumeWorkflowForSelectedApplication", "async function evaluateSelectedResumeFit");
+  const prepareFunction = sliceFunction(optionsJs, "async function prepareRulesResume", "async function runResumeWorkflowForSelectedApplication");
+  const detailFunction = sliceFunction(optionsJs, "function renderResumeDetail", "function clearResumeDetail");
 
   const checks = {
     optionsHasOneClickButton: optionsHtml.includes('id="runSelectedResumeWorkflow"')
       && optionsHtml.includes("一键跑简历闭环"),
+    optionsHasTemplateSelector: optionsHtml.includes('id="resumeTemplateName"')
+      && optionsHtml.includes("resume-to-word-campus-product-v1")
+      && optionsHtml.includes("boss-find-fixed-docx-v1"),
     optionsReadsAndBindsButton: optionsJs.includes('runSelectedResumeWorkflow: document.getElementById("runSelectedResumeWorkflow")')
+      && optionsJs.includes('resumeTemplateName: document.getElementById("resumeTemplateName")')
       && optionsJs.includes("runResumeWorkflowForSelectedApplication"),
+    optionsLoadsTemplatesFromRegistry: optionsJs.includes('type: "GET_RESUME_TEMPLATES"')
+      && optionsJs.includes("function renderResumeTemplateOptions")
+      && optionsJs.includes("formatResumeTemplateOption")
+      && optionsJs.includes("getSelectedResumeTemplateName")
+      && optionsJs.includes("refreshResumeTemplates({ silent: true })"),
+    optionsPersistsTemplateSelection: optionsJs.includes('ui.resumeTemplateName.addEventListener("change", saveResumeTemplateSelection)')
+      && optionsJs.includes("function saveResumeTemplateSelection")
+      && optionsJs.includes("resumeTemplateName: getSelectedResumeTemplateName()")
+      && optionsJs.includes("dataset.pendingValue"),
+    optionsPrepareResumeUsesTemplate: prepareFunction.includes('type: "PREPARE_RESUME"')
+      && prepareFunction.includes("renderOptions")
+      && prepareFunction.includes("templateName: getSelectedResumeTemplateName()"),
     optionsCallsGraphMessage: optionsJs.includes('type: "RUN_RESUME_WORKFLOW_GRAPH"')
       && optionsJs.includes("renderDocx: true")
-      && optionsJs.includes("maxRevisions: 1"),
+      && optionsJs.includes("maxRevisions: 1")
+      && optionsFunction.includes("renderOptions")
+      && optionsFunction.includes("templateName: getSelectedResumeTemplateName()"),
+    optionsDisplaysTemplateMetadata: detailFunction.includes("version.renderMetadata")
+      && detailFunction.includes("appendTemplateMetadata")
+      && detailFunction.includes("appendRenderQuality")
+      && optionsJs.includes("function appendTemplateMetadata")
+      && optionsJs.includes("function appendRenderQuality")
+      && optionsJs.includes("metadata.templateOrder")
+      && optionsJs.includes("DOCX QA"),
     optionsSupportsSelectedJobActions: countOccurrences(optionsJs, "一键简历闭环") >= 3
       && optionsJs.includes("runResumeWorkflowForSelectedApplication(candidate.id)")
       && optionsJs.includes("runResumeWorkflowForSelectedApplication(screening.applicationId)"),
@@ -36,6 +64,12 @@ function main() {
       && optionsFunction.includes("viewWorkflowTimeline"),
     backgroundHandlesGraphMessage: backgroundJs.includes('case "RUN_RESUME_WORKFLOW_GRAPH"')
       && backgroundJs.includes("return runResumeWorkflowGraph(message.applicationId, message.options || {})"),
+    backgroundFetchesTemplateRegistry: backgroundJs.includes('case "GET_RESUME_TEMPLATES"')
+      && backgroundJs.includes("function fetchResumeTemplates")
+      && backgroundJs.includes("/api/resume-templates"),
+    backgroundPersistsTemplateSetting: backgroundJs.includes('resumeTemplateName: "resume-to-word-campus-product-v1"')
+      && backgroundJs.includes("settings.resumeTemplateName ?? current.resumeTemplateName")
+      && backgroundJs.includes("function normalizeResumeTemplateName"),
     backgroundCallsGraphEndpoint: handlerFunction.includes("/api/applications/${id}/resume-workflow-graph")
       && handlerFunction.includes('method: "POST"')
       && handlerFunction.includes("renderDocx: options.renderDocx !== false")
@@ -47,7 +81,12 @@ function main() {
       && graphJs.includes("RESUME_WORKFLOW_GRAPH_NODE_FAILED")
       && graphJs.includes("RESUME_WORKFLOW_GRAPH_FAILED"),
     serverExposesGraphEndpoint: serverJs.includes("/resume-workflow-graph")
-      && serverJs.includes("runResumeWorkflowGraph"),
+      && serverJs.includes("resumeWorkflowService.runGraph")
+      && resumeWorkflowServiceJs.includes("runResumeWorkflowGraph")
+      && resumeWorkflowServiceJs.includes("payload.renderOptions"),
+    serverExposesTemplateRegistry: serverJs.includes("/api/resume-templates")
+      && serverJs.includes("listResumeTemplates")
+      && serverJs.includes("DEFAULT_RESUME_TEMPLATE"),
     oneClickDoesNotCreateBrowserTask: !handlerFunction.includes("CREATE_BROWSER_TASK")
       && !handlerFunction.includes("/api/browser-tasks")
       && !optionsFunction.includes("CREATE_BROWSER_TASK")

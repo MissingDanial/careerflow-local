@@ -1,8 +1,8 @@
 # JoB_Find 分阶段开发计划
 
-本文是当前项目的主开发路线图。最新决策：在继续数据库、Agent、简历生成之前，先完成 BOSS 浏览器执行层的技术选型 POC。原因是项目最大不确定性不在数据库和 Agent，而在 BOSS 登录态、页面交互、打招呼、沟通解锁、简历投递这些浏览器执行问题。
+本文是当前项目的主开发路线图。M1 已经完成 BOSS 浏览器执行层的技术选型，M2-M12 已建立从岗位采集、用户画像、Agent 简历闭环到本地执行包和投递结果证据的主流程。
 
-截至 2026-07-05，M1 已经收敛出主路径：Chrome Extension 是 BOSS 主执行器；Firecrawl 降级为 scrape-only 辅助候选；LocalPlaywright 不作为主执行器，只保留为后续用户确认后的文件上传/投递入口实验候选。
+截至 2026-07-10，M13“质量基线与可回放工作流”已完成仓库基线、测试分层、CI、有序数据库迁移、不可变输入快照、集中状态迁移和 Agent 固定评测。下一阶段先持续补充匿名真实失败样本，再基于证据与质量结果重新评估真实 BOSS 动作范围。
 
 ## 0. 开发原则
 
@@ -28,11 +28,9 @@
 
 当前不足：
 
-- Chrome Extension 还需要更严格过滤非岗位入口，例如 `/gongsi/` 公司页。
-- application 状态机、browser_tasks 队列和 ScreeningAgent 最小闭环已落地，但还没有 ResumeAgent/AuditAgent 编排。
-- 简历原文抽取和事实草稿已落地，但还没有完整 ProfileAgent 追问 UI。
-- 没有简历版本管理。
-- 没有打招呼、沟通状态、投递解锁和投递执行闭环。
+- M13.5 第一版是小规模匿名 rules-mode 基线，尚未覆盖真实模型的稳定性、成本、延迟和同一输入多次采样方差。
+- 固定样本仍需持续吸收真实但匿名化的误筛、漏筛、JD 必要项识别和 claim/Audit 失败案例。
+- 真实 BOSS 页面仍是最大平台风险，选择器和风控行为必须继续通过人工登录环境验证。
 
 ## 2. 阶段总览
 
@@ -48,6 +46,10 @@
 | M7 | 简历定制与审核 | 生成岗位版简历，独立审核真实性和风险 |
 | M8 | 打招呼与沟通解锁 POC | 验证 Firecrawl 或 fallback 是否能低人工介入完成沟通动作 |
 | M9 | 投递执行 POC 与复盘 | 验证投递入口、简历上传/选择、投递结果记录 |
+| M10 | Agent 编排与可观测闭环 | 用持久化节点契约和 LangGraph 跑通岗位版简历工作流 |
+| M11 | DOCX 与本地执行包 | 固化模板、渲染 QA、执行包和人工检查清单 |
+| M12 | 投递结果证据 | 只读识别并记录当前 BOSS 页面结果，不推进真实动作 |
+| M13 | 质量基线与可回放工作流 | 建立 CI、迁移、不可变输入、状态不变量和 Agent 评测集 |
 
 ## 3. M0 文档和边界收敛
 
@@ -1145,6 +1147,53 @@ Acceptance:
 - `npm run m10:options-profile-facts-ui:smoke` passes.
 - `npm run check` includes the UI smoke syntax check.
 
+## M10.2h Persistent Profile Context Lifecycle
+
+Goal: make ProfileAgent a reusable upstream profile builder, not a per-application workflow node.
+
+Delivered:
+
+- `GET /api/profile/career-context` now returns backend freshness with `MISSING`, `FRESH`, or `STALE`.
+- Freshness is calculated from the persisted `career_agent_context.md` timestamp and the latest SQLite profile change across `candidate_profiles`, `resume_sources`, `profile_experiences`, `profile_skills`, `profile_constraints`, and `profile_fact_drafts`.
+- The settings page shows whether the context is reusable, stale, or missing, including the latest profile change source/time.
+- Confirming or rejecting a fact draft no longer relies only on a page-local stale flag; a refreshed settings page can recover stale state from the backend.
+- The ProfileAgent smoke covers `MISSING -> FRESH -> STALE -> FRESH` and statically asserts that the per-application `ResumeWorkflowGraph` does not import/run ProfileAgent.
+
+Lifecycle:
+
+- Run ProfileAgent for first onboarding, resume/material imports, user Q&A, fact confirmation/rejection, and target/constraint changes.
+- Do not run ProfileAgent for every JD scoring, resume draft, fit evaluation, claim check, or one-click application workflow.
+- Per-job agents consume the persisted SQLite profile and generated context snapshot.
+
+Acceptance:
+
+- `GET /api/profile/career-context` exposes durable freshness.
+- `ProfileAgent` is absent from the LangGraph per-job node list and imports.
+- Refreshing the settings page after profile fact changes still shows stale context.
+- `npm run m10:profile-agent:smoke` passes.
+- `npm run check` includes the updated smoke syntax check.
+
+## M10.2i Dedicated ProfileAgent Portal
+
+Goal: give users one explicit place to talk to ProfileAgent and change persistent profile material, instead of mixing profile maintenance with per-job workflows.
+
+Delivered:
+
+- The settings page panel is now labeled `ProfileAgent 画像入口`.
+- The header includes a direct `画像入口` anchor for quick access.
+- The panel includes `主动补充或修改画像`, where users can add/correct experiences, project metrics, target roles, skills, or excluded directions.
+- Active profile updates are sent as `profile_user_update` answers to the existing fact-draft generation path.
+- Generated items remain `PENDING profile_fact_drafts`; only explicit confirm/reject changes the formal profile library.
+- No BOSS browser task, JD scoring, resume generation, upload, greeting, or submission is triggered from this portal.
+
+Acceptance:
+
+- The ProfileAgent portal is discoverable from the top of the settings page.
+- The portal can stage user-entered profile changes as pending drafts.
+- Dedicated portal actions do not call application workflow or browser task messages.
+- `npm run m10:options-profile-agent:smoke` passes.
+- `npm run m10:options-profile-facts-ui:smoke` passes.
+
 ## M10.2b Observability Hooks / Error Correction
 
 Goal: make backend execution progress, warnings, and errors inspectable and correctable before expanding agent orchestration.
@@ -1422,3 +1471,415 @@ Next:
 
 - Extend the ProfileAgent settings UI so answered questions can submit fact drafts and let the user confirm/reject them from one place.
 - Later submission policy and real-action gates should get their own service module before adding more routes.
+
+## M11.1 Resume Template Registry / Skill-backed DOCX Output
+
+Goal: turn the DOCX resume output from an ad hoc fixed renderer into a controllable template contract backed by the project skill.
+
+Scope:
+
+- Add `server/src/resume-template-registry.js` as the local template registry.
+- Make `resume-to-word-campus-product-v1` the default template.
+- Keep `boss-find-fixed-docx-v1` as a legacy compatibility template.
+- Update `DocumentRenderer` so template metadata is persisted with each rendered resume:
+  - `template`
+  - `templateLabel`
+  - `templateSkill`
+  - `templateOrder`
+  - `showSummarySection`
+  - `showSkillsSection`
+- Expose a compact DOCX template selector in the Chrome Extension settings page and pass it through `renderOptions.templateName` when running `一键跑简历闭环`.
+- Show rendered template metadata in the resume detail panel so template/debug state is visible without opening the generated DOCX.
+- Add `GET /api/resume-templates` so the extension loads template options from the backend registry rather than treating the HTML select as the source of truth.
+- Persist the selected template in extension settings as `resumeTemplateName`.
+- Use the selected template for both manual `规则生成简历` and graph-based `一键跑简历闭环`.
+- Update `.agents/skills/resume-to-word/SKILL.md` so the Word resume skill owns the default section order and suppression rules.
+
+Default resume-to-word template behavior:
+
+- Header first.
+- Education before internships/projects.
+- Internships and projects carry JD evidence.
+- No standalone `求职摘要`, `核心匹配点`, `技能关键词`, or `补充经历` section by default.
+- Skills are embedded in project bullets or compact project capability lines.
+- Hard target remains 2 pages or less.
+
+Out of scope:
+
+- Exact Word template cloning.
+- Drag-and-drop visual template editor.
+- PDF export.
+- Replacing the current `docx` library with a templating engine.
+
+Validation:
+
+```powershell
+npm run m11:resume-template:smoke
+npm run m10:langgraph-resume:smoke
+npm run check
+```
+
+Acceptance:
+
+- Default DOCX render records `template = resume-to-word-campus-product-v1`.
+- Default DOCX render records `templateSkill = resume-to-word`.
+- Default DOCX text puts `教育经历` before `项目经历`.
+- Default DOCX does not render standalone `求职摘要` or `技能` headings.
+- Settings page one-click resume workflow can choose the default or legacy DOCX template.
+- Settings page template choices are loaded from `GET /api/resume-templates`.
+- Selected template survives settings-page refresh through `chrome.storage.local`.
+- Manual rules resume generation and one-click graph generation use the same selected template.
+- Resume detail displays template label, template skill, section order, and summary/skills visibility.
+- Legacy `boss-find-fixed-docx-v1` remains available and still renders standalone summary/skills sections.
+
+## M11.2 DOCX Render QA
+
+Goal: make generated DOCX files testable after rendering, so the local resume workflow can catch broken output before the user sends or uploads a file.
+
+Delivered:
+
+- Added `server/src/resume-render-qa.js`.
+- `DocumentRenderer` runs DOCX render QA after writing the file and attaches `renderQuality` to the render result.
+- `sqlite-store.attachResumeFile` persists the QA object inside `resume_versions.renderMetadata` without a schema change.
+- `AuditAgent` reads `renderMetadata.renderQuality`, adds `Render QA:` risk flags for hard failures, records `renderQualityPassed`, and blocks approval when QA failed.
+- Chrome Extension resume detail displays a `DOCX QA` section with pass/fail status, estimated pages, extracted text length, and warnings.
+- Added `scripts/m11-render-qa-smoke.js`.
+- M10 LangGraph smoke now verifies render QA is persisted on the resume version and reflected in audit metadata.
+
+QA checks:
+
+- DOCX text extraction succeeds.
+- Template metadata is present.
+- Expected headings are present for sections that have content and should render.
+- Section order matches the selected template.
+- Default template suppresses standalone `求职摘要` and `技能` headings.
+- Estimated page count stays within `maxPages`.
+- Known headings do not contain mojibake.
+
+Important rule:
+
+- `requiredFieldsPresent` remains visible in `checks` and warnings, but content completeness alone is not a DOCX render hard failure. Render QA should block malformed output, wrong template behavior, or page/layout policy failure, not a usable resume that simply has no awards section.
+
+Validation:
+
+```powershell
+npm run m11:render-qa:smoke
+npm run m11:resume-template:smoke
+npm run m10:langgraph-resume:smoke
+npm run m10:options-resume-workflow:smoke
+```
+
+Acceptance:
+
+- Default and legacy DOCX renders have `renderQuality.ok = true`.
+- Bad section order and standalone default-template skills headings are detected.
+- AuditAgent blocks failed render QA and records `renderQualityPassed = false`.
+- LangGraph-generated resume versions persist `renderMetadata.renderQuality`.
+- Successful LangGraph sample flow reaches `RESUME_AUDITED`.
+- Settings page detail can show DOCX QA metadata without opening Word.
+
+## M11.3 Local Execution Package
+
+Goal: close the current local workflow loop after submission readiness review without enabling real BOSS execution.
+
+Delivered:
+
+- Added `server/src/services/execution-package-service.js`.
+- Added `GET /api/applications/:id/execution-package` for read-only package preview.
+- Added `POST /api/applications/:id/execution-package` for package preparation, local JSON/Markdown archive writing, plus `EXECUTION_PACKAGE_PREPARED` workflow event.
+- Updated `WorkflowOrchestrator` final action `PREPARE_MANUAL_EXECUTION_PACKAGE` to point at the execution-package endpoint.
+- Added Chrome Extension settings-page action `Prepare execution package` and local package detail rendering.
+- Added `scripts/m11-execution-package-smoke.js`.
+
+Ready gate:
+
+- Approved and locally approved DOCX resume.
+- DOCX render QA has no hard failure.
+- Latest audit approved.
+- Greeting draft exists.
+- SEND_GREETING dry-run succeeded.
+- UPLOAD_RESUME and SUBMIT_APPLICATION dry-run evidence is ready and safe.
+- Submission readiness is `READY_FOR_MANUAL_REVIEW`.
+- Local review is `APPROVED_FOR_MANUAL_EXECUTION`.
+
+Safety boundary:
+
+- No browser task creation.
+- No application status transition.
+- No real send/upload/submit action.
+- Package output includes `realActionsBlocked`.
+- Package archives are written under the backend data directory, not to the extension.
+
+Validation:
+
+```powershell
+npm run m11:execution-package:smoke
+```
+
+Acceptance:
+
+- GET returns a package with blockers before local readiness review approval.
+- GET returns `READY_FOR_MANUAL_EXECUTION` after all local gates pass.
+- POST records `EXECUTION_PACKAGE_PREPARED`.
+- POST returns archive JSON/Markdown paths and records them in workflow event metadata.
+- POST does not create browser tasks and does not move the application to `SUBMITTED`.
+- Extension settings page can render the package summary and blockers.
+
+## M11.4 Execution Package Validation and Review Gate
+
+Goal: make the local execution package reviewable and auditable before any future manual or real BOSS execution step is discussed.
+
+Delivered:
+
+- Added a narrow `validateExecutionPackage` contract in `server/src/services/execution-package-service.js`.
+- `GET /api/applications/:id/execution-package` now attaches validation results to the preview package.
+- `POST /api/applications/:id/execution-package` validates the package after archive writing and stores validation metadata in `EXECUTION_PACKAGE_PREPARED`.
+- Added `POST /api/applications/:id/execution-package/review` for local review decisions:
+  - `APPROVED_FOR_MANUAL_EXECUTION`
+  - `REFRESH_REQUIRED`
+  - `BLOCKED`
+- Review decisions are recorded as `EXECUTION_PACKAGE_REVIEWED` workflow events.
+- The Chrome Extension settings page shows validation failures/warnings and exposes package review actions inside the execution-package detail area.
+
+Validation contract:
+
+- Package version, application id, status, job identity, and manual steps must be present.
+- `noRealBossAction` must be `true`.
+- `createsBrowserTasks` must be `false`.
+- `noBrowserTaskCreated` must be `true`.
+- `realActionsBlocked` must include `SEND_GREETING_REAL`, `UPLOAD_RESUME_REAL`, and `SUBMIT_APPLICATION_REAL`.
+- Ready packages must include approved DOCX, local resume approval, DOCX QA pass, approved audit, greeting draft, dry-run evidence, submission readiness, and local readiness approval.
+- Prepared packages must have existing JSON and Markdown archive paths.
+
+Safety boundary:
+
+- Review records do not create browser tasks.
+- Review records do not advance application status.
+- Review records do not upload, send, confirm, submit, or mark the application as submitted.
+- Approval is blocked if the execution package is not ready or validation fails.
+
+Validation:
+
+```powershell
+npm run m11:execution-package:smoke
+```
+
+Acceptance:
+
+- Unsafe package mutations fail validation.
+- Ready prepared packages validate successfully with archive files present.
+- Package review records `EXECUTION_PACKAGE_REVIEWED`.
+- Review does not create browser tasks and does not change application status.
+- Extension settings page can show validation state and submit review decisions.
+
+## M11.5 Manual Execution Checklist Ledger
+
+Goal: after a package is prepared and approved, give the user a local checklist ledger for recording manual execution progress without enabling automated BOSS actions.
+
+Delivered:
+
+- Added `GET /api/applications/:id/execution-checklist`.
+- Added `POST /api/applications/:id/execution-checklist`.
+- Checklist steps are derived only from the execution package `manualSteps`.
+- Step records are stored as `EXECUTION_CHECKLIST_STEP_RECORDED` workflow events.
+- The Chrome Extension settings page renders the checklist under the execution package detail and can record `DONE`, `FAILED`, `BLOCKED`, or `NEEDS_REFRESH`.
+
+Rules:
+
+- Manual progress can be recorded only after the execution package review is accepted as `APPROVED_FOR_MANUAL_EXECUTION`.
+- Unknown step actions are rejected.
+- Step records keep `noRealBossAction: true`, `createsBrowserTasks: false`, and `noBrowserTaskCreated: true`.
+- Recording a checklist step does not create browser tasks.
+- Recording a checklist step does not advance application status or mark the application as submitted.
+
+Validation:
+
+```powershell
+npm run m11:execution-package:smoke
+```
+
+Acceptance:
+
+- Checklist reads return package review state, blockers, step list, and progress.
+- Step records create only `EXECUTION_CHECKLIST_STEP_RECORDED` workflow events.
+- Checklist progress updates after a recorded step.
+- Browser task count and application status stay unchanged.
+- Extension settings page can display and record checklist step decisions.
+
+## M12.1/M12.2 Submission Evidence Closed Loop
+
+Goal: after the local execution package and manual checklist exist, record what the user can see on the current BOSS page without adding real BOSS automation.
+
+Delivered:
+
+- Added `server/src/services/submission-result-service.js`.
+- Added `GET /api/applications/:id/submission-evidence`.
+- Added `POST /api/applications/:id/submission-evidence`.
+- Added `SUBMISSION_EVIDENCE_RECORDED` workflow events.
+- Added content-script `READ_SUBMISSION_PAGE_RESULT` for read-only visible-page result detection.
+- Added background proxy messages `GET_SUBMISSION_EVIDENCE` and `RECORD_SUBMISSION_EVIDENCE`.
+- Added settings-page controls: `Read current BOSS result`, `Record result evidence`, and `submissionEvidenceDetail`.
+- Added `scripts/m12-submission-evidence-smoke.js`.
+
+Acceptance:
+
+- Manual/page evidence can be written and fetched for one application.
+- The latest evidence includes status, confidence, signals, blockers, and safety metadata.
+- Writing evidence creates only a workflow event.
+- Browser task count stays unchanged.
+- Application status stays unchanged.
+- Extension detection is read-only and does not call `CREATE_BROWSER_TASK`.
+
+Validation:
+
+```powershell
+npm run m12:submission-evidence:smoke
+npm run m11:execution-package:smoke
+```
+
+## 13. M13 质量基线与可回放工作流
+
+### 目标
+
+在继续扩展真实 BOSS 发送、上传或投递能力之前，先让仓库、数据库和 Agent 结果具备可验证、可升级、可回放的工程基线。
+
+### M13.1 仓库基线、测试分层与 CI
+
+状态：已完成。
+
+交付物：
+
+- `scripts/check-js-syntax.js` 自动发现项目 JavaScript 文件，替代 `package.json` 中容易漏项的手工文件清单。
+- `scripts/test-tiers.js` 和 `scripts/run-test-tier.js` 将 52 个既有 smoke 加 M13 基线 smoke 分为 `baseline`、`profile`、`agents`、`extension`、`workflow` 五层。
+- `scripts/m13-repository-baseline-smoke.js` 检查敏感文件忽略规则、必需源码/文档、受控 schema 版本、测试归类和 CI 契约。
+- `.github/workflows/ci.yml` 在 Node.js 24 环境执行 `npm ci`、安装 Playwright Chromium，并运行完整 `npm run test:ci`。
+- 保留 `npm run check` 兼容入口，并新增 `check:syntax`、`test:profile`、`test:agents`、`test:extension`、`test:workflow`、`test:baseline` 和 `test:ci`。
+
+验收标准：
+
+- 新增 `.js` 文件无需手改 `package.json` 即进入语法检查。
+- 每个 `m*:smoke` 必须且只能归入一个测试层级。
+- `.env`、模型配置、SQLite、DOCX、PDF、日志和 `server/data` 运行数据不能被提交。
+- 扩展 UI smoke 可复用系统 Chrome/Edge 或 Playwright 安装的 Chromium。
+- `npm run check`、`npm run test:baseline` 和 `npm run test:ci` 通过。
+
+### M13.2 SQLite 有序迁移
+
+状态：已完成。
+
+交付物：
+
+- 新增 `server/migrations/001_*.sql` 至 `010_*.sql`，按岗位采集、质量、application、浏览器任务、用户画像、Agent、简历、可观测、fit、claim 的依赖顺序建库。
+- 新增 `server/src/sqlite-migrations.js`，验证 migration 文件连续性、命名、事务边界和 checksum。
+- 新增 `schema_migrations` 审计表，记录版本、名称、SHA-256 checksum、`BASELINED/APPLIED`、执行耗时和时间。
+- 旧数据库在 schema 或迁移元数据变化前使用 SQLite `VACUUM INTO` 写入 `backups/*.backup.sqlite3`。
+- 每个 migration 独立运行在 `BEGIN IMMEDIATE` 事务中，成功后才写入历史并推进 `PRAGMA user_version`。
+- migration 失败时关闭连接、删除当前 WAL/SHM、恢复升级前备份；新建库失败则删除半成品数据库。
+- `getStats()` 暴露本次 `migrationStatus`，包含起止版本、应用/基线化版本、备份路径和耗时。
+- 删除集中式 `applySchema()`，后续 schema 变更只能新增顺序 migration。
+- 新增 `scripts/m13-sqlite-migrations-smoke.js`。
+
+验收：
+
+- 全新数据库按 001-010 创建，无需备份。
+- v7 数据库保留岗位数据并升级到 v10，001-007 记为 `BASELINED`，008-010 记为 `APPLIED`。
+- 已是 v10 但没有迁移历史的现有数据库先备份，再基线化 001-010，不重复执行业务 migration。
+- 损坏的 010 migration 不推进版本、不保留半成品表，并恢复原 v9 数据库。
+- migration 备份保留用于人工检查。
+- `npm run m2:sqlite:smoke`、`npm run m13:sqlite-migrations:smoke`、`npm run test:ci` 通过。
+
+### M13.3 不可变工作流输入
+
+状态：已完成。
+
+交付物：
+
+- 新增 schema v11 migration `011_workflow_input_snapshots.sql`。
+- 新增 `profile_snapshots`、`workflow_runs`、`workflow_input_snapshots`。
+- 复用 `job_snapshots` 保存每次 workflow 使用的精确 JD/job payload。
+- `agent_runs` 新增 `workflow_run_id`、`profile_snapshot_id`、`job_snapshot_id`、`prompt_version`、`agent_version`、`model_config_json`、`graph_version`。
+- 图开始前一次性持久化 application、profile、job、user rules、execution/render options、脱敏 model config 和版本 manifest。
+- Screening、Resume、Fit、Claim、Revision、Audit 节点只读取 frozen workflow input。
+- workflow result 持久化到 `workflow_runs.output_json`，失败保存结构化 error。
+- 新增 `GET /api/workflow-runs`、`GET /api/workflow-runs/:id` 和 `POST /api/workflow-runs/:id/replay`。
+- replay 是 no-write dry replay，按原 input hash 对比当前 Agent 输出，不写业务表、不改变状态、不创建 browser task。
+- 新增 `scripts/m13-workflow-input-snapshots-smoke.js`。
+
+验收：
+
+- 同一图运行内全部 Agent run 引用同一组 profile/job snapshot IDs 和版本字段。
+- model config 入库前移除 API Key/token/secret。
+- 图完成后修改用户画像和 JD，历史 workflow run 的 payload 与 input hash 不变。
+- 新图运行生成新的 snapshot IDs，已完成 application 状态不倒退。
+- dry replay 从历史输入重跑并与原输出一致，同时数据库计数和 application 状态不变。
+- `npm run m13:workflow-inputs:smoke`、`npm run m10:langgraph-resume:smoke`、`npm run test:ci` 通过。
+
+### M13.4 application 状态迁移收敛
+
+状态：已完成。
+
+交付物：
+
+- 新增 schema v12 migration `012_application_transition_invariants.sql`。
+- 新增 `server/src/services/application-transition-service.js`，集中拥有 application 状态图、typed evidence 校验、幂等查重、状态写入和 transition workflow event。
+- `application_events` 新增 application 级唯一 `idempotency_key`。
+- Screening、Resume、Audit、local approval、job sync、read-only browser callback 全部改为“先写事实，再请求迁移”。
+- `server/src` 内 `UPDATE applications` 只保留在 `ApplicationTransitionService`。
+- operator override 必须写 actor、rationale 和 idempotency key，且不能推进真实发送/投递终态。
+- `browser_tasks` 新增 `expires_at`、`attempt_count`、`max_attempts`、`last_attempt_at`、`claim_token`。
+- Chrome Extension 在 browser task 回写时携带 claim token。
+- 重复终态回调相同则幂等返回，结果冲突或重试旧 token 返回 409。
+- 过期任务在 claim/完成前转为 `FAILED/TASK_EXPIRED`；失败任务达到最大尝试次数后不能重排。
+- 新增 `scripts/m13-application-transition-invariants-smoke.js` 并纳入 workflow/CI 测试层。
+
+验收：
+
+- 非法状态边和缺少 typed evidence 的迁移均原子失败。
+- job sync 批次归属、screening recommendation/目标状态、failure source 类型/归属/失败状态均由专项 smoke 覆盖。
+- operator override 缺少显式 idempotency key 时，在状态写入前拒绝。
+- 同一 idempotency key 重复提交不新增 application/workflow event；同 key 不同语义返回冲突。
+- 重复 read-only browser callback 不重复归档消息、写 readiness 或推进 application。
+- application 已进入 `RESUME_UNLOCKED` 后，旧 `CHAT_OPENED` 回调不能使状态倒退。
+- retry 后旧 claim token 被拒绝，当前 attempt 保持 `RUNNING`。
+- 任务过期和 retry 耗尽均有明确状态、错误码和测试。
+- `npm run m13:application-transitions:smoke`、`npm run test:workflow`、`npm run test:ci` 通过。
+
+### M13.5 Agent 评测集
+
+状态：已完成。
+
+交付物：
+
+- 建立版本化、本地匿名的用户画像、JD、claim probe 和 Audit probe 固定样本集；样本包含人工风险标签、预期岗位顺序、JD 必要项状态、允许/禁止 claim 和预期 Audit 结果。
+- 新增确定性 Node.js 评测 runner，直接调用生产 `JobRiskGate`、`ScreeningAgent`、`ResumeAgent`、`ResumeFitEvaluator`、`ClaimVerifier` 和 `AuditAgent`，规则模式下不要求模型密钥且不读写真实 SQLite。
+- 输出稳定的 JSON 和 Markdown 报告，记录数据集 SHA-256、运行模式、provider、模型元数据、graph/prompt/agent 版本、阈值、逐项指标和失败样本。
+- 新增 `m13:agent-evaluation:smoke` 并归入 `test:agents`；默认评测命令在任一质量指标低于阈值时返回非零退出码。
+- 风险门禁新增否定语境识别，`不承担销售指标`、`不涉及直播带货` 不再被关键词误杀；同一 JD 中存在后续正向风险职责时仍会阻断。
+
+验收标准：
+
+- 风险门禁同时报告 recall 和 precision，并能区分真实排斥方向与“无需销售/不承担直播职责”等否定语境。
+- 同一画像下的岗位匹配分数满足人工标注顺序，报告 pairwise ranking accuracy 和所有逆序样本。
+- 人工标注的 JD 必要项能映射到 Fit 评测项，并核对 `covered/weak/missing` 状态。
+- 生成简历 claim 支持率达到阈值；人工允许/禁止 claim probe 的判定与标签一致。
+- `approve/revise/block` Audit probe 与人工预期一致。
+- JSON/Markdown 报告包含相同 run summary、输入快照和失败样本 ID，不包含真实用户姓名、联系方式、私有文件路径或模型密钥。
+- `npm run m13:agent-evaluation:smoke`、`npm run test:agents` 和 `npm run test:ci` 通过。
+
+完成结果：
+
+- 固定集包含 2 个匿名画像、9 个岗位、2 个 claim probe 和 3 个 Audit probe。
+- 9 项指标全部达到阈值；生成 claim 支持率为 `0.9615`，其余基线指标为 `1.0`。
+- 故意修改风险人工标签后，runner 会失败并定位到 `job-sales-blocked`，证明质量门禁不是恒通过检查。
+- `npm run check` 通过 103 个 JavaScript 文件；`npm run test:workflow` 通过 27 个 smoke；`npm run test:ci` 通过全部 57 个 smoke。
+
+### 开发顺序
+
+```text
+M13.1 仓库基线与 CI
+-> M13.2 SQLite 有序迁移
+-> M13.3 不可变画像/JD 快照
+-> M13.4 状态迁移收敛
+-> M13.5 Agent 评测集
+-> 再评估真实 BOSS 动作范围
+```

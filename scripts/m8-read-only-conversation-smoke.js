@@ -44,21 +44,9 @@ function runStoreChecks(dataDir) {
   const store = createJobStore({ dataDir });
   try {
     const application = seedApplication(store);
-    store.transitionApplication(application.id, {
-      toStatus: "SCORED",
-      eventType: "SCREENING_COMPLETED",
-      reason: "m8_read_only_seed"
-    });
-    store.transitionApplication(application.id, {
-      toStatus: "SHORTLISTED",
-      eventType: "SCREENING_SHORTLISTED",
-      reason: "m8_read_only_seed"
-    });
-    store.transitionApplication(application.id, {
-      toStatus: "GREETING_READY",
-      eventType: "GREETING_READY",
-      reason: "m8_read_only_seed"
-    });
+    seedApplicationTransition(store, application.id, "SCORED", "SCREENING_COMPLETED", "m8_read_only_seed");
+    seedApplicationTransition(store, application.id, "SHORTLISTED", "SCREENING_SHORTLISTED", "m8_read_only_seed");
+    seedApplicationTransition(store, application.id, "GREETING_READY", "GREETING_READY", "m8_read_only_seed");
 
     const refreshTask = store.createBrowserTask({
       applicationId: application.id,
@@ -277,9 +265,9 @@ function runWaitingForReplyStoreCheck(store) {
     ]
   });
   const application = store.getApplications().applications.find((item) => item.bossJobId === "m8-readonly-waiting");
-  store.transitionApplication(application.id, { toStatus: "SCORED", eventType: "SCREENING_COMPLETED", reason: "waiting_seed" });
-  store.transitionApplication(application.id, { toStatus: "SHORTLISTED", eventType: "SCREENING_SHORTLISTED", reason: "waiting_seed" });
-  store.transitionApplication(application.id, { toStatus: "GREETING_READY", eventType: "GREETING_READY", reason: "waiting_seed" });
+  seedApplicationTransition(store, application.id, "SCORED", "SCREENING_COMPLETED", "waiting_seed");
+  seedApplicationTransition(store, application.id, "SHORTLISTED", "SCREENING_SHORTLISTED", "waiting_seed");
+  seedApplicationTransition(store, application.id, "GREETING_READY", "GREETING_READY", "waiting_seed");
   const task = store.createBrowserTask({
     applicationId: application.id,
     taskType: "REFRESH_CONVERSATION",
@@ -354,17 +342,20 @@ async function runApiChecks(dataDir) {
     await requestJson(port, "POST", `/api/applications/${application.id}/transition`, {
       toStatus: "SCORED",
       eventType: "SCREENING_COMPLETED",
-      reason: "m8_api_seed"
+      reason: "m8_api_seed",
+      ...operatorTransitionEvidence("m8 api score seed", "m8:api:scored")
     });
     await requestJson(port, "POST", `/api/applications/${application.id}/transition`, {
       toStatus: "SHORTLISTED",
       eventType: "SCREENING_SHORTLISTED",
-      reason: "m8_api_seed"
+      reason: "m8_api_seed",
+      ...operatorTransitionEvidence("m8 api shortlist seed", "m8:api:shortlisted")
     });
     await requestJson(port, "POST", `/api/applications/${application.id}/transition`, {
       toStatus: "GREETING_READY",
       eventType: "GREETING_READY",
-      reason: "m8_api_seed"
+      reason: "m8_api_seed",
+      ...operatorTransitionEvidence("m8 api greeting seed", "m8:api:greeting-ready")
     });
     const task = await requestJson(port, "POST", "/api/browser-tasks", {
       applicationId: application.id,
@@ -509,6 +500,26 @@ function runWiringChecks() {
 function seedApplication(store) {
   store.syncJobs(createPayload());
   return store.getApplications().applications[0];
+}
+
+function seedApplicationTransition(store, applicationId, toStatus, eventType, reason) {
+  return store.transitionApplication(applicationId, {
+    toStatus,
+    eventType,
+    reason,
+    ...operatorTransitionEvidence(`${reason} ${toStatus}`, `${reason}:${applicationId}:${toStatus}`)
+  });
+}
+
+function operatorTransitionEvidence(rationale, idempotencyKey) {
+  return {
+    idempotencyKey,
+    evidence: {
+      type: "operator_override",
+      actor: "m8-read-only-conversation-smoke",
+      rationale
+    }
+  };
 }
 
 function createPayload() {

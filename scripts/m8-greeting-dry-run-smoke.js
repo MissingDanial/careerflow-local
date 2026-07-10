@@ -117,6 +117,7 @@ async function runApiChecks(dataDir) {
 function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
+  const migrationSql = read("server/migrations/007_resume_workflow.sql");
   const backgroundJs = read("extension/src/background.js");
   const optionsHtml = read("extension/src/options.html");
   const optionsJs = read("extension/src/options.js");
@@ -126,8 +127,8 @@ function runWiringChecks() {
       serverExposesGreetingEndpoints: serverJs.includes("/prepare-greeting")
         && serverJs.includes('url.pathname === "/api/messages"')
         && serverJs.includes("runMessageAgent"),
-      storePersistsConversationsAndMessages: storeJs.includes("CREATE TABLE IF NOT EXISTS conversations")
-        && storeJs.includes("CREATE TABLE IF NOT EXISTS messages")
+      storePersistsConversationsAndMessages: migrationSql.includes("CREATE TABLE IF NOT EXISTS conversations")
+        && migrationSql.includes("CREATE TABLE IF NOT EXISTS messages")
         && storeJs.includes("createGreetingDraft"),
       storeCreatesSendGreetingDryRunTask: storeJs.includes('taskType: "SEND_GREETING"')
         && storeJs.includes("dryRun: true")

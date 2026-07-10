@@ -134,11 +134,25 @@ function runWiringChecks() {
 }
 
 function seedResumeUnlocked(store, applicationId) {
-  store.transitionApplication(applicationId, { toStatus: "SCORED", eventType: "SCREENING_COMPLETED", reason: "m9_seed" });
-  store.transitionApplication(applicationId, { toStatus: "SHORTLISTED", eventType: "SCREENING_SHORTLISTED", reason: "m9_seed" });
-  store.transitionApplication(applicationId, { toStatus: "GREETING_READY", eventType: "GREETING_READY", reason: "m9_seed" });
-  store.transitionApplication(applicationId, { toStatus: "CHAT_OPENED", eventType: "REFRESH_CONVERSATION", reason: "m9_seed" });
-  store.transitionApplication(applicationId, { toStatus: "RESUME_UNLOCKED", eventType: "CHECK_RESUME_UNLOCK", reason: "m9_seed" });
+  seedApplicationTransition(store, applicationId, "SCORED", "SCREENING_COMPLETED");
+  seedApplicationTransition(store, applicationId, "SHORTLISTED", "SCREENING_SHORTLISTED");
+  seedApplicationTransition(store, applicationId, "GREETING_READY", "GREETING_READY");
+  seedApplicationTransition(store, applicationId, "CHAT_OPENED", "REFRESH_CONVERSATION");
+  seedApplicationTransition(store, applicationId, "RESUME_UNLOCKED", "CHECK_RESUME_UNLOCK");
+}
+
+function seedApplicationTransition(store, applicationId, toStatus, eventType) {
+  return store.transitionApplication(applicationId, {
+    toStatus,
+    eventType,
+    reason: "m9_seed",
+    idempotencyKey: `m9-readiness:${applicationId}:${toStatus}`,
+    evidence: {
+      type: "operator_override",
+      actor: "m9-submission-readiness-smoke",
+      rationale: `Seed ${toStatus} for submission readiness smoke`
+    }
+  });
 }
 
 function createTaskPayload(application) {
