@@ -1,5 +1,12 @@
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { runSqliteMigrations } = require("./sqlite-migrations");
+const {
+  ApplicationTransitionService,
+  canTransitionApplication,
+  normalizeApplicationStatus
+} = require("./services/application-transition-service");
 
 let DatabaseSync;
 try {
@@ -8,19 +15,37 @@ try {
   throw new Error("SQLite storage requires Node.js with node:sqlite support. Use Node.js 24 or newer for this project.");
 }
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 12;
 const DEFAULT_DB_NAME = "boss_find.sqlite3";
 
 function createJobStore(options = {}) {
   const dataDir = path.resolve(options.dataDir || path.join(__dirname, "..", "data"));
   const dbPath = path.resolve(options.dbPath || process.env.BOSS_DB_PATH || path.join(dataDir, DEFAULT_DB_NAME));
   const legacyStorePath = path.resolve(options.legacyStorePath || path.join(dataDir, "jobs.json"));
+  const migrationsDir = path.resolve(options.migrationsDir || path.join(__dirname, "..", "migrations"));
+  const backupDir = path.resolve(options.backupDir || path.join(path.dirname(dbPath), "backups"));
+  const databaseExisted = fs.existsSync(dbPath) && fs.statSync(dbPath).size > 0;
 
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const database = new DatabaseSync(dbPath);
-  const store = new SqliteJobStore(database, { dbPath, legacyStorePath });
-  store.init();
-  return store;
+  try {
+    const store = new SqliteJobStore(database, {
+      dbPath,
+      legacyStorePath,
+      migrationsDir,
+      backupDir,
+      databaseExisted
+    });
+    store.init();
+    return store;
+  } catch (error) {
+    try {
+      database.close();
+    } catch {
+      // Migration recovery may already have closed the database.
+    }
+    throw error;
+  }
 }
 
 class SqliteJobStore {
@@ -28,18 +53,38 @@ class SqliteJobStore {
     this.database = database;
     this.dbPath = options.dbPath;
     this.legacyStorePath = options.legacyStorePath;
+    this.migrationsDir = options.migrationsDir;
+    this.backupDir = options.backupDir;
+    this.databaseExisted = options.databaseExisted;
+    this.migrationStatus = null;
+    this.applicationTransitionService = new ApplicationTransitionService({
+      database: this.database,
+      insertApplicationEvent: (event) => this.insertApplicationEvent(event),
+      insertWorkflowEvent: (event, now) => this.insertWorkflowEvent(event, now)
+    });
   }
 
   init() {
     this.database.exec("PRAGMA foreign_keys = ON");
     this.database.exec("PRAGMA journal_mode = WAL");
-    this.applySchema();
+    this.migrationStatus = runSqliteMigrations({
+      database: this.database,
+      dbPath: this.dbPath,
+      migrationsDir: this.migrationsDir,
+      backupDir: this.backupDir,
+      targetVersion: SCHEMA_VERSION,
+      databaseExisted: this.databaseExisted
+    });
     this.importLegacyJsonIfNeeded();
     this.backfillApplicationsIfNeeded();
   }
 
   close() {
     this.database.close();
+  }
+
+  getMigrationStatus() {
+    return this.migrationStatus ? structuredClone(this.migrationStatus) : null;
   }
 
   syncJobs(payload) {
@@ -128,6 +173,9 @@ class SqliteJobStore {
     const resumeFitEvaluationCount = this.database.prepare("SELECT COUNT(*) AS count FROM resume_fit_evaluations").get().count;
     const resumeClaimVerificationCount = this.database.prepare("SELECT COUNT(*) AS count FROM resume_claim_verifications").get().count;
     const workflowEventCount = this.database.prepare("SELECT COUNT(*) AS count FROM workflow_events").get().count;
+    const profileSnapshotCount = this.database.prepare("SELECT COUNT(*) AS count FROM profile_snapshots").get().count;
+    const workflowRunCount = this.database.prepare("SELECT COUNT(*) AS count FROM workflow_runs").get().count;
+    const workflowInputSnapshotCount = this.database.prepare("SELECT COUNT(*) AS count FROM workflow_input_snapshots").get().count;
     const openWorkflowErrorCount = this.database.prepare(`
       SELECT COUNT(*) AS count
       FROM workflow_events
@@ -139,6 +187,7 @@ class SqliteJobStore {
       storage: "sqlite",
       databasePath: this.dbPath,
       schemaVersion: this.database.prepare("PRAGMA user_version").get().user_version,
+      migrationStatus: this.getMigrationStatus(),
       totalJobs: Number(jobStats.totalJobs || 0),
       describedJobCount: Number(jobStats.describedJobCount || 0),
       missingDescriptionCount: Number(jobStats.missingDescriptionCount || 0),
@@ -168,6 +217,9 @@ class SqliteJobStore {
       resumeFitEvaluationCount: Number(resumeFitEvaluationCount || 0),
       resumeClaimVerificationCount: Number(resumeClaimVerificationCount || 0),
       workflowEventCount: Number(workflowEventCount || 0),
+      profileSnapshotCount: Number(profileSnapshotCount || 0),
+      workflowRunCount: Number(workflowRunCount || 0),
+      workflowInputSnapshotCount: Number(workflowInputSnapshotCount || 0),
       openWorkflowErrorCount: Number(openWorkflowErrorCount || 0),
       latestQuality: this.getLatestQuality(),
       lastBatch: this.getLastBatch()
@@ -217,6 +269,66 @@ class SqliteJobStore {
   getProfile() {
     const profile = this.getOrCreateProfile();
     return this.readProfileBundle(profile.id);
+  }
+
+  getProfileFreshnessSnapshot() {
+    const counts = {
+      profiles: countRows(this.database, "candidate_profiles"),
+      resumeSources: countRows(this.database, "resume_sources"),
+      experiences: countRows(this.database, "profile_experiences"),
+      skills: countRows(this.database, "profile_skills"),
+      constraints: countRows(this.database, "profile_constraints"),
+      factDrafts: countRows(this.database, "profile_fact_drafts"),
+      pendingFactDrafts: Number(this.database.prepare("SELECT COUNT(*) AS count FROM profile_fact_drafts WHERE status = 'PENDING'").get().count || 0)
+    };
+    const candidates = [
+      latestTableTimestamp(this.database, "candidate_profiles", "updated_at", "profile"),
+      latestTableTimestamp(this.database, "resume_sources", "created_at", "resume_source"),
+      latestTableTimestamp(this.database, "profile_experiences", "updated_at", "experience"),
+      latestTableTimestamp(this.database, "profile_skills", "updated_at", "skill"),
+      latestTableTimestamp(this.database, "profile_constraints", "updated_at", "constraint"),
+      latestTableTimestamp(this.database, "profile_fact_drafts", "updated_at", "fact_draft")
+    ].filter((item) => item && item.updatedAt);
+    const latest = candidates
+      .slice()
+      .sort((left, right) => Date.parse(right.updatedAt || 0) - Date.parse(left.updatedAt || 0))[0] || null;
+    return {
+      storage: "sqlite",
+      counts,
+      latestProfileChangedAt: latest?.updatedAt || "",
+      latestProfileChangeSource: latest?.source || "",
+      latestProfileChangeId: latest?.id || null,
+      latestProfileChange: latest
+    };
+  }
+
+  getCareerContextFreshness(contextUpdatedAt = "") {
+    const snapshot = this.getProfileFreshnessSnapshot();
+    const contextTime = Date.parse(contextUpdatedAt || 0);
+    const latestProfileTime = Date.parse(snapshot.latestProfileChangedAt || 0);
+    if (!contextUpdatedAt || !Number.isFinite(contextTime)) {
+      return {
+        status: "MISSING",
+        isFresh: false,
+        contextUpdatedAt: "",
+        latestProfileChangedAt: snapshot.latestProfileChangedAt,
+        latestProfileChangeSource: snapshot.latestProfileChangeSource,
+        latestProfileChangeId: snapshot.latestProfileChangeId,
+        staleReasons: ["career_context_missing"],
+        snapshot
+      };
+    }
+    const isStale = Number.isFinite(latestProfileTime) && latestProfileTime > contextTime;
+    return {
+      status: isStale ? "STALE" : "FRESH",
+      isFresh: !isStale,
+      contextUpdatedAt,
+      latestProfileChangedAt: snapshot.latestProfileChangedAt,
+      latestProfileChangeSource: snapshot.latestProfileChangeSource,
+      latestProfileChangeId: snapshot.latestProfileChangeId,
+      staleReasons: isStale ? ["profile_changed_after_career_context"] : [],
+      snapshot
+    };
   }
 
   updateProfile(input = {}) {
@@ -978,6 +1090,293 @@ class SqliteJobStore {
     };
   }
 
+  startWorkflowRun(input = {}) {
+    const applicationId = normalizePositiveInteger(input.applicationId);
+    if (!applicationId) {
+      throw validationError("Valid application id is required");
+    }
+    const workflowName = cleanText(input.workflowName || "ResumeWorkflowGraph");
+    const graphVersion = cleanText(input.graphVersion || "");
+    const promptVersion = cleanText(input.promptVersion || "");
+    const agentVersion = cleanText(input.agentVersion || "");
+    if (!workflowName || !graphVersion || !promptVersion || !agentVersion) {
+      throw validationError("Workflow name, graph version, prompt version, and agent version are required");
+    }
+    const replayOfWorkflowRunId = normalizeOptionalPositiveInteger(input.replayOfWorkflowRunId);
+    const mode = normalizeWorkflowRunMode(input.mode || "rules");
+    const modelConfig = sanitizeModelConfig(input.modelConfig || {});
+    const now = new Date().toISOString();
+
+    let application;
+    let profile;
+    let job;
+    let userRules;
+    let executionOptions;
+    let renderOptions;
+    let profileSnapshotId;
+    let jobSnapshotId;
+
+    if (replayOfWorkflowRunId) {
+      const replaySource = this.getWorkflowRun(replayOfWorkflowRunId);
+      if (replaySource.workflowRun.applicationId !== applicationId) {
+        throw validationError("Replay workflow run does not belong to the application");
+      }
+      application = replaySource.application;
+      profile = replaySource.profile;
+      job = replaySource.job;
+      userRules = replaySource.inputSnapshot.userRules;
+      executionOptions = replaySource.inputSnapshot.executionOptions;
+      renderOptions = replaySource.inputSnapshot.renderOptions;
+      profileSnapshotId = replaySource.inputSnapshot.profileSnapshotId;
+      jobSnapshotId = replaySource.inputSnapshot.jobSnapshotId;
+    } else {
+      const current = this.getApplicationScreeningInput(applicationId, {
+        userRules: input.userRules || {}
+      });
+      application = current.application;
+      profile = current.profile;
+      job = current.job;
+      userRules = current.userRules;
+      executionOptions = normalizeObject(input.executionOptions);
+      renderOptions = normalizeObject(input.renderOptions);
+    }
+
+    const inputHash = stableJsonHash({
+      application,
+      profile,
+      job,
+      userRules,
+      executionOptions,
+      renderOptions,
+      graphVersion,
+      promptVersion,
+      agentVersion,
+      modelConfig
+    });
+
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      if (!profileSnapshotId) {
+        const profileRow = this.database.prepare(`
+          INSERT INTO profile_snapshots (
+            profile_id, content_hash, payload_json, created_at
+          ) VALUES (?, ?, ?, ?)
+        `).run(
+          normalizePositiveInteger(profile.profile?.id),
+          stableJsonHash(profile),
+          stringifyJson(profile),
+          now
+        );
+        profileSnapshotId = Number(profileRow.lastInsertRowid);
+      }
+      if (!jobSnapshotId) {
+        const jobRow = this.database.prepare(`
+          INSERT INTO job_snapshots (
+            job_id, batch_id, source_key, title, company_name, detail_url,
+            description_length, payload_json, captured_at, created_at
+          ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          normalizePositiveInteger(job.id),
+          cleanText(job.sourceKey || job.source_key || ""),
+          cleanText(job.title || ""),
+          cleanText(job.company || job.companyName || job.company_name || ""),
+          cleanText(job.detailUrl || job.detail_url || ""),
+          cleanMultiline(job.description || "").length,
+          stringifyJson(job),
+          now,
+          now
+        );
+        jobSnapshotId = Number(jobRow.lastInsertRowid);
+      }
+      const runRow = this.database.prepare(`
+        INSERT INTO workflow_runs (
+          application_id, workflow_name, status, mode, replay_of_workflow_run_id,
+          output_json, error_json, started_at, finished_at, created_at, updated_at
+        ) VALUES (?, ?, 'RUNNING', ?, ?, 'null', 'null', ?, NULL, ?, ?)
+      `).run(
+        applicationId,
+        workflowName,
+        mode,
+        replayOfWorkflowRunId || null,
+        now,
+        now,
+        now
+      );
+      const workflowRunId = Number(runRow.lastInsertRowid);
+      this.database.prepare(`
+        INSERT INTO workflow_input_snapshots (
+          workflow_run_id, profile_snapshot_id, job_snapshot_id, application_json,
+          user_rules_json, execution_options_json, render_options_json, prompt_version, agent_version,
+          model_config_json, graph_version, input_hash, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        workflowRunId,
+        profileSnapshotId,
+        jobSnapshotId,
+        stringifyJson(application),
+        stringifyJson(userRules),
+        stringifyJson(executionOptions),
+        stringifyJson(renderOptions),
+        promptVersion,
+        agentVersion,
+        stringifyJson(modelConfig),
+        graphVersion,
+        inputHash,
+        now
+      );
+      this.database.exec("COMMIT");
+      return this.getWorkflowRun(workflowRunId);
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  finishWorkflowRun(workflowRunId, input = {}) {
+    const id = normalizePositiveInteger(workflowRunId);
+    if (!id) {
+      throw validationError("Valid workflow run id is required");
+    }
+    const existing = this.database.prepare("SELECT * FROM workflow_runs WHERE id = ?").get(id);
+    if (!existing) {
+      throw validationError(`Workflow run not found: ${id}`);
+    }
+    const status = normalizeWorkflowRunFinalStatus(input.status || "");
+    if (!status) {
+      throw validationError("Workflow run final status must be SUCCEEDED, FAILED, or STOPPED");
+    }
+    const now = new Date().toISOString();
+    this.database.prepare(`
+      UPDATE workflow_runs
+      SET status = ?, output_json = ?, error_json = ?, finished_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      status,
+      stringifyJson(input.output === undefined ? null : input.output),
+      stringifyJson(input.error === undefined ? null : input.error),
+      now,
+      now,
+      id
+    );
+    return this.getWorkflowRun(id);
+  }
+
+  getWorkflowRun(workflowRunId) {
+    const id = normalizePositiveInteger(workflowRunId);
+    if (!id) {
+      throw validationError("Valid workflow run id is required");
+    }
+    const run = this.database.prepare(`
+      SELECT
+        workflow_runs.*,
+        jobs.source_key,
+        jobs.title,
+        jobs.company_name
+      FROM workflow_runs
+      JOIN applications ON applications.id = workflow_runs.application_id
+      JOIN jobs ON jobs.id = applications.job_id
+      WHERE workflow_runs.id = ?
+    `).get(id);
+    if (!run) {
+      throw validationError(`Workflow run not found: ${id}`);
+    }
+    const inputSnapshot = this.database.prepare(`
+      SELECT *
+      FROM workflow_input_snapshots
+      WHERE workflow_run_id = ?
+    `).get(id);
+    if (!inputSnapshot) {
+      throw validationError(`Workflow input snapshot not found: ${id}`);
+    }
+    const profileSnapshot = this.database.prepare(`
+      SELECT *
+      FROM profile_snapshots
+      WHERE id = ?
+    `).get(inputSnapshot.profile_snapshot_id);
+    const jobSnapshot = this.database.prepare(`
+      SELECT *
+      FROM job_snapshots
+      WHERE id = ?
+    `).get(inputSnapshot.job_snapshot_id);
+    if (!profileSnapshot || !jobSnapshot) {
+      throw validationError(`Workflow snapshot references are incomplete: ${id}`);
+    }
+    const agentRuns = this.database.prepare(`
+      SELECT
+        agent_runs.*,
+        jobs.source_key,
+        jobs.title,
+        jobs.company_name
+      FROM agent_runs
+      LEFT JOIN applications ON applications.id = agent_runs.application_id
+      LEFT JOIN jobs ON jobs.id = applications.job_id
+      WHERE agent_runs.workflow_run_id = ?
+      ORDER BY agent_runs.id ASC
+    `).all(id).map(rowToAgentRun);
+    return {
+      storage: "sqlite",
+      workflowRun: rowToWorkflowRun(run),
+      inputSnapshot: rowToWorkflowInputSnapshot(inputSnapshot),
+      application: parseJsonValue(inputSnapshot.application_json, {}),
+      profile: parseJsonValue(profileSnapshot.payload_json, {}),
+      job: parseJsonValue(jobSnapshot.payload_json, {}),
+      agentRuns
+    };
+  }
+
+  getWorkflowRuns(options = {}) {
+    const limit = Math.max(1, Math.min(200, Number(options.limit) || 50));
+    const applicationId = normalizePositiveInteger(options.applicationId || 0);
+    const params = [];
+    const where = applicationId ? "WHERE workflow_runs.application_id = ?" : "";
+    if (applicationId) {
+      params.push(applicationId);
+    }
+    params.push(limit);
+    const rows = this.database.prepare(`
+      SELECT
+        workflow_runs.*,
+        jobs.source_key,
+        jobs.title,
+        jobs.company_name
+      FROM workflow_runs
+      JOIN applications ON applications.id = workflow_runs.application_id
+      JOIN jobs ON jobs.id = applications.job_id
+      ${where}
+      ORDER BY workflow_runs.id DESC
+      LIMIT ?
+    `).all(...params);
+    return {
+      storage: "sqlite",
+      workflowRuns: rows.map(rowToWorkflowRun)
+    };
+  }
+
+  getWorkflowRunInput(workflowRunId) {
+    const snapshot = this.getWorkflowRun(workflowRunId);
+    return {
+      storage: "sqlite",
+      workflowRun: snapshot.workflowRun,
+      manifest: {
+        workflowRunId: snapshot.workflowRun.id,
+        inputSnapshotId: snapshot.inputSnapshot.id,
+        profileSnapshotId: snapshot.inputSnapshot.profileSnapshotId,
+        jobSnapshotId: snapshot.inputSnapshot.jobSnapshotId,
+        promptVersion: snapshot.inputSnapshot.promptVersion,
+        agentVersion: snapshot.inputSnapshot.agentVersion,
+        modelConfig: snapshot.inputSnapshot.modelConfig,
+        graphVersion: snapshot.inputSnapshot.graphVersion,
+        inputHash: snapshot.inputSnapshot.inputHash
+      },
+      application: snapshot.application,
+      profile: snapshot.profile,
+      job: snapshot.job,
+      userRules: snapshot.inputSnapshot.userRules,
+      executionOptions: snapshot.inputSnapshot.executionOptions,
+      renderOptions: snapshot.inputSnapshot.renderOptions
+    };
+  }
+
   getScreeningCandidates(options = {}) {
     const limit = Math.max(1, Math.min(100, Number(options.limit) || 10));
     const minDescriptionLength = Math.max(1, Math.min(5000, Number(options.minDescriptionLength) || 80));
@@ -1167,12 +1566,38 @@ class SqliteJobStore {
         throw validationError(`Application not found: ${applicationId}`);
       }
     }
+    const workflowRunId = normalizeOptionalPositiveInteger(input.workflowRunId);
+    let workflowInput = null;
+    if (workflowRunId) {
+      workflowInput = this.database.prepare(`
+        SELECT
+          workflow_runs.application_id,
+          workflow_input_snapshots.profile_snapshot_id,
+          workflow_input_snapshots.job_snapshot_id,
+          workflow_input_snapshots.prompt_version,
+          workflow_input_snapshots.agent_version,
+          workflow_input_snapshots.model_config_json,
+          workflow_input_snapshots.graph_version
+        FROM workflow_runs
+        JOIN workflow_input_snapshots
+          ON workflow_input_snapshots.workflow_run_id = workflow_runs.id
+        WHERE workflow_runs.id = ?
+      `).get(workflowRunId);
+      if (!workflowInput) {
+        throw validationError(`Workflow run not found: ${workflowRunId}`);
+      }
+      if (applicationId && Number(workflowInput.application_id) !== applicationId) {
+        throw validationError("Agent run application does not match workflow run");
+      }
+    }
     const now = new Date().toISOString();
     const result = this.database.prepare(`
       INSERT INTO agent_runs (
         agent_name, application_id, step, status, provider, input_json, output_json,
-        error_code, error_message, fallback_used, started_at, finished_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        error_code, error_message, fallback_used, started_at, finished_at, created_at, updated_at,
+        workflow_run_id, profile_snapshot_id, job_snapshot_id, prompt_version, agent_version,
+        model_config_json, graph_version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       agentName,
       applicationId || null,
@@ -1187,7 +1612,14 @@ class SqliteJobStore {
       now,
       null,
       now,
-      now
+      now,
+      workflowRunId || null,
+      workflowInput?.profile_snapshot_id || null,
+      workflowInput?.job_snapshot_id || null,
+      workflowInput?.prompt_version || cleanText(input.promptVersion || ""),
+      workflowInput?.agent_version || cleanText(input.agentVersion || ""),
+      workflowInput?.model_config_json || stringifyJson(sanitizeModelConfig(input.modelConfig || {})),
+      workflowInput?.graph_version || cleanText(input.graphVersion || "")
     );
     const agentRunId = Number(result.lastInsertRowid);
     this.insertWorkflowEvent({
@@ -1203,7 +1635,13 @@ class SqliteJobStore {
       metadata: {
         agentName,
         step,
-        provider: cleanText(input.provider || "")
+        provider: cleanText(input.provider || ""),
+        workflowRunId: workflowRunId || null,
+        profileSnapshotId: workflowInput?.profile_snapshot_id || null,
+        jobSnapshotId: workflowInput?.job_snapshot_id || null,
+        promptVersion: workflowInput?.prompt_version || cleanText(input.promptVersion || ""),
+        agentVersion: workflowInput?.agent_version || cleanText(input.agentVersion || ""),
+        graphVersion: workflowInput?.graph_version || cleanText(input.graphVersion || "")
       }
     }, now);
     return this.getAgentRun(agentRunId);
@@ -1572,7 +2010,7 @@ class SqliteJobStore {
       ...(result.metadata || {}),
       ...inputMetadata
     };
-    const transitionStatus = screeningRecommendationToStatus(result.recommendation);
+    const requestedTransitionStatus = screeningRecommendationToStatus(result.recommendation);
     const now = new Date().toISOString();
 
     this.database.exec("BEGIN IMMEDIATE");
@@ -1587,6 +2025,13 @@ class SqliteJobStore {
           throw validationError(`Agent run not found: ${agentRunId}`);
         }
       }
+      const preserveOnInvalidTransition = Boolean(input.preserveApplicationStatusOnInvalidTransition);
+      const skipApplicationTransition = Boolean(
+        input.skipApplicationTransition
+        || metadata.noApplicationStatusChange
+        || (preserveOnInvalidTransition && !canTransitionApplication(application.status, requestedTransitionStatus))
+      );
+      const transitionStatus = skipApplicationTransition ? application.status : requestedTransitionStatus;
       const insert = this.database.prepare(`
         INSERT INTO screenings (
           application_id, agent_run_id, match_score, risk_score, recommendation,
@@ -1609,44 +2054,62 @@ class SqliteJobStore {
         stringifyJson(metadata),
         now
       );
-      if (!canTransitionApplication(application.status, transitionStatus)) {
-        throw validationError(`Invalid application transition: ${application.status} -> ${transitionStatus}`);
-      }
-      if (application.status !== transitionStatus) {
-        this.database.prepare(`
-          UPDATE applications
-          SET status = ?, status_reason = ?, updated_at = ?
-          WHERE id = ?
-        `).run(transitionStatus, "screening_completed", now, applicationId);
-      }
-      this.insertApplicationEvent(
+      const screeningId = Number(insert.lastInsertRowid);
+      let transitionResult = {
         applicationId,
-        application.status,
-        transitionStatus,
-        "SCREENING_COMPLETED",
-        "screening_completed",
-        {
-          screeningId: Number(insert.lastInsertRowid),
-          agentRunId: agentRunId || null,
-          matchScore: result.matchScore,
-          riskScore: result.riskScore,
-          recommendation: result.recommendation,
-          provider,
-          fallbackUsed: Boolean(metadata.fallbackUsed)
-        },
-        now
-      );
+        fromStatus: application.status,
+        toStatus: application.status,
+        changed: false,
+        idempotent: false
+      };
+      if (!skipApplicationTransition) {
+        transitionResult = this.transitionApplicationWithinTransaction(applicationId, {
+          toStatus: transitionStatus,
+          eventType: "SCREENING_COMPLETED",
+          reason: "screening_completed",
+          evidence: {
+            type: "screening",
+            sourceId: screeningId
+          },
+          metadata: {
+            screeningId,
+            agentRunId: agentRunId || null,
+            matchScore: result.matchScore,
+            riskScore: result.riskScore,
+            recommendation: result.recommendation,
+            provider,
+            fallbackUsed: Boolean(metadata.fallbackUsed)
+          },
+          now
+        });
+      }
+      if (skipApplicationTransition || !transitionResult.changed) {
+        this.insertApplicationEvent(
+          applicationId,
+          application.status,
+          application.status,
+          "SCREENING_COMPLETED",
+          skipApplicationTransition ? "screening_completed_no_status_change" : "screening_completed_status_unchanged",
+          {
+            screeningId,
+            agentRunId: agentRunId || null,
+            matchScore: result.matchScore,
+            riskScore: result.riskScore,
+            recommendation: result.recommendation,
+            provider,
+            fallbackUsed: Boolean(metadata.fallbackUsed),
+            noApplicationStatusChange: true
+          },
+          now,
+          `screening:${screeningId}:fact`
+        );
+      }
       this.database.exec("COMMIT");
       return {
         storage: "sqlite",
         ok: true,
-        screening: this.getScreening(Number(insert.lastInsertRowid)),
-        transition: {
-          applicationId,
-          fromStatus: application.status,
-          toStatus: transitionStatus,
-          changed: application.status !== transitionStatus
-        }
+        screening: this.getScreening(screeningId),
+        transition: transitionResult
       };
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -1778,35 +2241,62 @@ class SqliteJobStore {
         now,
         now
       );
-      const skipApplicationTransition = Boolean(input.skipApplicationTransition || metadata.noApplicationStatusChange);
-      const toStatus = skipApplicationTransition ? application.status : "RESUME_DRAFTED";
-      if (!skipApplicationTransition && canTransitionApplication(application.status, toStatus) && application.status !== toStatus) {
-        this.database.prepare(`
-          UPDATE applications
-          SET status = ?, status_reason = ?, updated_at = ?
-          WHERE id = ?
-        `).run(toStatus, "resume_drafted", now, applicationId);
-      }
-      this.insertApplicationEvent(
-        applicationId,
-        application.status,
-        skipApplicationTransition || canTransitionApplication(application.status, toStatus) ? toStatus : application.status,
-        skipApplicationTransition ? "RESUME_VERSION_CREATED" : "RESUME_DRAFTED",
-        skipApplicationTransition ? "resume_version_created_no_status_change" : "resume_drafted",
-        {
-          resumeVersionId: Number(insert.lastInsertRowid),
-          screeningId: screeningId || null,
-          agentRunId: agentRunId || null,
-          provider,
-          noApplicationStatusChange: skipApplicationTransition
-        },
-        now
+      const resumeVersionId = Number(insert.lastInsertRowid);
+      const requestedStatus = "RESUME_DRAFTED";
+      const skipApplicationTransition = Boolean(
+        input.skipApplicationTransition
+        || metadata.noApplicationStatusChange
+        || !canTransitionApplication(application.status, requestedStatus)
       );
+      let transitionResult = {
+        applicationId,
+        fromStatus: application.status,
+        toStatus: application.status,
+        changed: false,
+        idempotent: false
+      };
+      if (!skipApplicationTransition) {
+        transitionResult = this.transitionApplicationWithinTransaction(applicationId, {
+          toStatus: requestedStatus,
+          eventType: "RESUME_DRAFTED",
+          reason: "resume_drafted",
+          evidence: {
+            type: "resume_version",
+            sourceId: resumeVersionId
+          },
+          metadata: {
+            resumeVersionId,
+            screeningId: screeningId || null,
+            agentRunId: agentRunId || null,
+            provider
+          },
+          now
+        });
+      }
+      if (skipApplicationTransition || !transitionResult.changed) {
+        this.insertApplicationEvent(
+          applicationId,
+          application.status,
+          application.status,
+          "RESUME_VERSION_CREATED",
+          "resume_version_created_no_status_change",
+          {
+            resumeVersionId,
+            screeningId: screeningId || null,
+            agentRunId: agentRunId || null,
+            provider,
+            noApplicationStatusChange: true
+          },
+          now,
+          `resume-version:${resumeVersionId}:fact`
+        );
+      }
       this.database.exec("COMMIT");
       return {
         storage: "sqlite",
         ok: true,
-        resumeVersion: this.getResumeVersion(Number(insert.lastInsertRowid))
+        resumeVersion: this.getResumeVersion(resumeVersionId),
+        transition: transitionResult
       };
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -1916,35 +2406,45 @@ class SqliteJobStore {
         applicationId: resumeVersion.applicationId,
         fromStatus: application?.status || "",
         toStatus: application?.status || "",
-        changed: false
+        changed: false,
+        idempotent: false
       };
       if (application && canTransitionApplication(application.status, "GREETING_READY")) {
-        this.database.prepare(`
-          UPDATE applications
-          SET status = ?, status_reason = ?, updated_at = ?
-          WHERE id = ?
-        `).run("GREETING_READY", "resume_locally_approved", now, resumeVersion.applicationId);
-        transition = {
-          applicationId: resumeVersion.applicationId,
-          fromStatus: application.status,
+        transition = this.transitionApplicationWithinTransaction(resumeVersion.applicationId, {
           toStatus: "GREETING_READY",
-          changed: application.status !== "GREETING_READY"
-        };
+          eventType: "RESUME_LOCALLY_APPROVED",
+          reason: "resume_locally_approved",
+          evidence: {
+            type: "local_resume_approval",
+            sourceId: resumeVersion.id
+          },
+          metadata: {
+            resumeVersionId: resumeVersion.id,
+            approver,
+            approvalNote,
+            noBrowserTaskCreated: true
+          },
+          now
+        });
       }
-      this.insertApplicationEvent(
-        resumeVersion.applicationId,
-        transition.fromStatus,
-        transition.toStatus,
-        "RESUME_LOCALLY_APPROVED",
-        "resume_locally_approved",
-        {
-          resumeVersionId: resumeVersion.id,
-          approver,
-          approvalNote,
-          noBrowserTaskCreated: true
-        },
-        now
-      );
+      if (!transition.changed) {
+        this.insertApplicationEvent(
+          resumeVersion.applicationId,
+          application?.status || "",
+          application?.status || "",
+          "RESUME_LOCALLY_APPROVED",
+          "resume_locally_approved_no_status_change",
+          {
+            resumeVersionId: resumeVersion.id,
+            approver,
+            approvalNote,
+            noBrowserTaskCreated: true,
+            noApplicationStatusChange: true
+          },
+          now,
+          `resume-local-approval:${resumeVersion.id}:fact`
+        );
+      }
       this.database.exec("COMMIT");
       return {
         storage: "sqlite",
@@ -2335,36 +2835,65 @@ class SqliteJobStore {
         SET status = ?, updated_at = ?
         WHERE id = ?
       `).run(auditStatus, now, resumeVersionId);
+      const resumeAuditId = Number(insert.lastInsertRowid);
       const toStatus = auditStatus === "APPROVED" ? "RESUME_AUDITED" : "NEEDS_USER_REVIEW";
       const application = this.database.prepare("SELECT * FROM applications WHERE id = ?").get(resumeVersion.applicationId);
-      if (application && canTransitionApplication(application.status, toStatus) && application.status !== toStatus) {
-        this.database.prepare(`
-          UPDATE applications
-          SET status = ?, status_reason = ?, updated_at = ?
-          WHERE id = ?
-        `).run(toStatus, "resume_audited", now, resumeVersion.applicationId);
+      let transitionResult = {
+        applicationId: resumeVersion.applicationId,
+        fromStatus: application?.status || "",
+        toStatus: application?.status || "",
+        changed: false,
+        idempotent: false
+      };
+      if (application && canTransitionApplication(application.status, toStatus)) {
+        transitionResult = this.transitionApplicationWithinTransaction(resumeVersion.applicationId, {
+          toStatus,
+          eventType: "RESUME_AUDITED",
+          reason: auditStatus.toLowerCase(),
+          evidence: auditStatus === "APPROVED"
+            ? { type: "resume_audit", sourceId: resumeAuditId }
+            : {
+              type: "failure",
+              sourceType: "resume_audit",
+              sourceId: resumeAuditId,
+              errorCode: `RESUME_AUDIT_${auditStatus}`
+            },
+          metadata: {
+            resumeVersionId,
+            resumeAuditId,
+            agentRunId: agentRunId || null,
+            recommendation: audit.recommendation,
+            provider
+          },
+          now
+        });
       }
-      this.insertApplicationEvent(
-        resumeVersion.applicationId,
-        application?.status || "",
-        application && canTransitionApplication(application.status, toStatus) ? toStatus : application?.status || "",
-        "RESUME_AUDITED",
-        auditStatus.toLowerCase(),
-        {
-          resumeVersionId,
-          resumeAuditId: Number(insert.lastInsertRowid),
-          agentRunId: agentRunId || null,
-          recommendation: audit.recommendation,
-          provider
-        },
-        now
-      );
+      if (!transitionResult.changed) {
+        this.insertApplicationEvent(
+          resumeVersion.applicationId,
+          application?.status || "",
+          application?.status || "",
+          "RESUME_AUDITED",
+          `${auditStatus.toLowerCase()}_no_status_change`,
+          {
+            resumeVersionId,
+            resumeAuditId,
+            agentRunId: agentRunId || null,
+            recommendation: audit.recommendation,
+            provider,
+            noApplicationStatusChange: true
+          },
+          now,
+          `resume-audit:${resumeAuditId}:fact`
+        );
+      }
       this.database.exec("COMMIT");
       return {
         storage: "sqlite",
         ok: true,
-        resumeAudit: this.getResumeAudit(Number(insert.lastInsertRowid)),
-        resumeVersion: this.getResumeVersion(resumeVersionId)
+        resumeAudit: this.getResumeAudit(resumeAuditId),
+        resumeVersion: this.getResumeVersion(resumeVersionId),
+        transition: transitionResult
       };
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -2905,7 +3434,13 @@ class SqliteJobStore {
     }
 
     const now = new Date().toISOString();
-    return this.createBrowserTaskWithinTransaction({ applicationId, taskType, payload }, now);
+    return this.createBrowserTaskWithinTransaction({
+      applicationId,
+      taskType,
+      payload,
+      expiresAt: input.expiresAt || input.expiry || "",
+      maxAttempts: input.maxAttempts
+    }, now);
   }
 
   createBrowserTaskWithinTransaction(input = {}, now = new Date().toISOString()) {
@@ -2915,6 +3450,8 @@ class SqliteJobStore {
     }
     const payload = input.payload && typeof input.payload === "object" ? input.payload : {};
     const applicationId = resolveBrowserTaskApplicationId(this.database, input, payload);
+    const expiresAt = resolveBrowserTaskExpiry(input.expiresAt || payload.expiresAt, taskType, now);
+    const maxAttempts = normalizeBrowserTaskMaxAttempts(input.maxAttempts || payload.maxAttempts);
     const existingTask = this.findOpenBrowserTask({ applicationId, taskType, payload });
     if (existingTask) {
       return {
@@ -2924,14 +3461,21 @@ class SqliteJobStore {
     }
     const result = this.database.prepare(`
       INSERT INTO browser_tasks (
-        application_id, task_type, status, payload_json, result_json, error_message, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        application_id, task_type, status, payload_json, result_json, error_message,
+        expires_at, attempt_count, max_attempts, last_attempt_at, claim_token,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       applicationId,
       taskType,
       "QUEUED",
       stringifyJson(payload),
       stringifyJson(null),
+      "",
+      expiresAt,
+      0,
+      maxAttempts,
+      null,
       "",
       now,
       now
@@ -2951,7 +3495,9 @@ class SqliteJobStore {
       metadata: {
         taskType,
         payloadSummary: summarizeWorkflowEventPayload(payload),
-        noRealBossAction: browserTaskIsDryRunOnly(taskType)
+        noRealBossAction: browserTaskIsDryRunOnly(taskType),
+        expiresAt,
+        maxAttempts
       }
     }, now);
     return this.getBrowserTask(browserTaskId);
@@ -2962,6 +3508,7 @@ class SqliteJobStore {
     const jobId = cleanText(payload.jobId || payload.bossJobId || extractJobId(detailUrl));
     const title = cleanText(payload.title || "");
     const company = cleanText(payload.company || "");
+    const now = new Date().toISOString();
 
     if (applicationId !== null && applicationId !== undefined) {
       const row = this.database.prepare(`
@@ -2970,9 +3517,11 @@ class SqliteJobStore {
         WHERE application_id = ?
           AND task_type = ?
           AND status IN ('QUEUED', 'RUNNING')
+          AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)
+          AND attempt_count < max_attempts
         ORDER BY id ASC
         LIMIT 1
-      `).get(applicationId, taskType);
+      `).get(applicationId, taskType, now);
       return row ? this.getBrowserTask(Number(row.id)) : null;
     }
 
@@ -2982,8 +3531,10 @@ class SqliteJobStore {
       WHERE application_id IS NULL
         AND task_type = ?
         AND status IN ('QUEUED', 'RUNNING')
+        AND (expires_at IS NULL OR expires_at = '' OR expires_at > ?)
+        AND attempt_count < max_attempts
       ORDER BY id ASC
-    `).all(taskType);
+    `).all(taskType, now);
     for (const row of rows) {
       const existingPayload = parseJsonValue(row.payload_json, {});
       const existingDetailUrl = cleanText(existingPayload.detailUrl || existingPayload.url || "");
@@ -3088,8 +3639,13 @@ class SqliteJobStore {
     const now = new Date().toISOString();
     this.database.exec("BEGIN IMMEDIATE");
     try {
+      const expiredCount = this.expireBrowserTasksWithinTransaction(now, {
+        taskTypes: requestedTypes
+      });
       const whereParts = ["status = 'QUEUED'"];
-      const params = [];
+      const params = [now];
+      whereParts.push("(expires_at IS NULL OR expires_at = '' OR expires_at > ?)");
+      whereParts.push("attempt_count < max_attempts");
       if (requestedTypes.length) {
         whereParts.push(`task_type IN (${requestedTypes.map(() => "?").join(", ")})`);
         params.push(...requestedTypes);
@@ -3115,15 +3671,22 @@ class SqliteJobStore {
         return {
           storage: "sqlite",
           claimed: false,
-          task: null
+          task: null,
+          expiredCount
         };
       }
 
+      const claimToken = crypto.randomUUID();
       this.database.prepare(`
         UPDATE browser_tasks
-        SET status = 'RUNNING', error_message = '', updated_at = ?
+        SET status = 'RUNNING',
+            error_message = '',
+            attempt_count = attempt_count + 1,
+            last_attempt_at = ?,
+            claim_token = ?,
+            updated_at = ?
         WHERE id = ? AND status = 'QUEUED'
-      `).run(now, row.id);
+      `).run(now, claimToken, now, row.id);
       const claimedTask = this.database.prepare("SELECT * FROM browser_tasks WHERE id = ?").get(row.id);
       this.insertWorkflowEvent({
         applicationId: claimedTask?.application_id || null,
@@ -3137,7 +3700,10 @@ class SqliteJobStore {
         message: `${claimedTask?.task_type || "Browser task"} claimed by browser executor.`,
         metadata: {
           taskType: claimedTask?.task_type || "",
-          sourceUrl: requestedSourceUrl || ""
+          sourceUrl: requestedSourceUrl || "",
+          attemptCount: Number(claimedTask?.attempt_count || 0),
+          maxAttempts: Number(claimedTask?.max_attempts || 0),
+          expiresAt: claimedTask?.expires_at || ""
         }
       }, now);
 
@@ -3146,6 +3712,7 @@ class SqliteJobStore {
         storage: "sqlite",
         claimed: true,
         claimedAt: now,
+        expiredCount,
         task: this.getBrowserTask(Number(row.id))
       };
     } catch (error) {
@@ -3172,18 +3739,64 @@ class SqliteJobStore {
       if (!existing) {
         throw validationError(`Browser task not found: ${id}`);
       }
-      if (!canTransitionBrowserTask(existing.status, toStatus)) {
-        throw validationError(`Invalid browser task transition: ${existing.status} -> ${toStatus}`);
-      }
-
       const result = Object.prototype.hasOwnProperty.call(transition, "result")
         ? transition.result
         : parseJsonValue(existing.result_json, null);
       const errorMessage = cleanText(transition.errorMessage || transition.error || "");
+      const claimToken = cleanText(transition.claimToken || transition.leaseToken || "");
+
+      if (existing.status === toStatus) {
+        const sameResult = stableStringify(parseJsonValue(existing.result_json, null)) === stableStringify(result);
+        const sameError = cleanText(existing.error_message || "") === (errorMessage || cleanText(existing.error_message || ""));
+        if (!sameResult || !sameError) {
+          throw conflictError(`Browser task callback conflicts with terminal result: ${id}`);
+        }
+        this.database.exec("COMMIT");
+        return {
+          ok: true,
+          taskId: id,
+          fromStatus: existing.status,
+          toStatus,
+          changed: false,
+          idempotent: true,
+          updatedAt: existing.updated_at || now,
+          task: this.getBrowserTask(id)
+        };
+      }
+      if (!canTransitionBrowserTask(existing.status, toStatus)) {
+        throw validationError(`Invalid browser task transition: ${existing.status} -> ${toStatus}`);
+      }
+      if (existing.status === "RUNNING" && Number(existing.attempt_count || 0) > 1 && !claimToken) {
+        throw conflictError("Retry callback requires the current browser task claim token");
+      }
+      if (claimToken && claimToken !== cleanText(existing.claim_token || "")) {
+        throw conflictError("Stale browser task callback claim token");
+      }
+      if (browserTaskIsExpired(existing, now) && !new Set(["FAILED", "CANCELED"]).has(toStatus)) {
+        const expiredResult = {
+          ok: false,
+          errorCode: "TASK_EXPIRED",
+          message: "Browser task expired before callback completion.",
+          expiresAt: existing.expires_at || ""
+        };
+        this.markBrowserTaskExpiredWithinTransaction(existing, expiredResult, now);
+        this.database.exec("COMMIT");
+        return {
+          ok: false,
+          taskId: id,
+          fromStatus: existing.status,
+          toStatus: "FAILED",
+          changed: true,
+          expired: true,
+          idempotent: false,
+          updatedAt: now,
+          task: this.getBrowserTask(id)
+        };
+      }
 
       this.database.prepare(`
         UPDATE browser_tasks
-        SET status = ?, result_json = ?, error_message = ?, updated_at = ?
+        SET status = ?, result_json = ?, error_message = ?, claim_token = '', updated_at = ?
         WHERE id = ?
       `).run(
         toStatus,
@@ -3234,6 +3847,7 @@ class SqliteJobStore {
         fromStatus: existing.status,
         toStatus,
         changed: existing.status !== toStatus,
+        idempotent: false,
         updatedAt: now,
         task: this.getBrowserTask(id)
       };
@@ -3241,6 +3855,64 @@ class SqliteJobStore {
       this.database.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  expireBrowserTasksWithinTransaction(now = new Date().toISOString(), options = {}) {
+    const taskTypes = normalizeTaskTypeList(options.taskTypes || options.taskType || []);
+    const whereParts = [
+      "status IN ('QUEUED', 'RUNNING')",
+      "expires_at IS NOT NULL",
+      "expires_at != ''",
+      "expires_at <= ?"
+    ];
+    const params = [now];
+    if (taskTypes.length) {
+      whereParts.push(`task_type IN (${taskTypes.map(() => "?").join(", ")})`);
+      params.push(...taskTypes);
+    }
+    const rows = this.database.prepare(`
+      SELECT *
+      FROM browser_tasks
+      WHERE ${whereParts.join(" AND ")}
+      ORDER BY id ASC
+    `).all(...params);
+    for (const row of rows) {
+      this.markBrowserTaskExpiredWithinTransaction(row, {
+        ok: false,
+        errorCode: "TASK_EXPIRED",
+        message: "Browser task expired before it was claimed or completed.",
+        expiresAt: row.expires_at || ""
+      }, now);
+    }
+    return rows.length;
+  }
+
+  markBrowserTaskExpiredWithinTransaction(taskRow, result, now) {
+    this.database.prepare(`
+      UPDATE browser_tasks
+      SET status = 'FAILED', result_json = ?, error_message = 'TASK_EXPIRED', claim_token = '', updated_at = ?
+      WHERE id = ?
+    `).run(stringifyJson(result), now, taskRow.id);
+    this.insertBrowserTaskFailureEvent(taskRow, result, "TASK_EXPIRED", now);
+    this.insertWorkflowEvent({
+      applicationId: taskRow.application_id || null,
+      sourceType: "browser_task",
+      sourceId: Number(taskRow.id),
+      eventType: "BROWSER_TASK_EXPIRED",
+      severity: "warning",
+      status: "FAILED",
+      progressCurrent: 1,
+      progressTotal: 1,
+      message: `${taskRow.task_type} expired before completion.`,
+      errorCode: "TASK_EXPIRED",
+      errorMessage: "Browser task expired before completion.",
+      metadata: {
+        taskType: taskRow.task_type,
+        expiresAt: taskRow.expires_at || "",
+        attemptCount: Number(taskRow.attempt_count || 0),
+        maxAttempts: Number(taskRow.max_attempts || 0)
+      }
+    }, now);
   }
 
   applySuccessfulBrowserTaskResult(taskRow, result = {}, now = new Date().toISOString()) {
@@ -3345,18 +4017,15 @@ class SqliteJobStore {
       reason = "resume_unlock_detected";
     }
     if (toApplicationStatus && canTransitionApplication(application.status, toApplicationStatus)) {
-      this.database.prepare(`
-        UPDATE applications
-        SET status = ?, status_reason = ?, updated_at = ?
-        WHERE id = ?
-      `).run(toApplicationStatus, reason, now, applicationId);
-      this.insertApplicationEvent(
-        applicationId,
-        application.status,
-        toApplicationStatus,
-        taskType,
+      this.transitionApplicationWithinTransaction(applicationId, {
+        toStatus: toApplicationStatus,
+        eventType: taskType,
         reason,
-        {
+        evidence: {
+          type: "browser_task_result",
+          sourceId: Number(taskRow.id || 0)
+        },
+        metadata: {
           browserTaskId: Number(taskRow.id || 0),
           conversationId: nextConversationId,
           readOnly: true,
@@ -3367,7 +4036,7 @@ class SqliteJobStore {
           resumeUnlock
         },
         now
-      );
+      });
     }
     if (taskType === "UPLOAD_RESUME" || taskType === "SUBMIT_APPLICATION") {
       this.insertApplicationEvent(
@@ -3532,7 +4201,7 @@ class SqliteJobStore {
     try {
       const stmt = this.database.prepare(`
         UPDATE browser_tasks
-        SET status = 'CANCELED', error_message = ?, updated_at = ?
+        SET status = 'CANCELED', error_message = ?, claim_token = '', updated_at = ?
         WHERE id = ?
       `);
       for (const row of cancelableRows) {
@@ -3583,23 +4252,31 @@ class SqliteJobStore {
     const statuses = normalizeBrowserTaskStatusList(options.statuses || options.status || ["FAILED", "CANCELED"]);
     const sourceUrl = normalizeComparableUrl(options.sourceUrl || options.pageUrl || "");
     const reason = cleanText(options.reason || "USER_RETRY");
+    const refreshExpiry = Boolean(options.refreshExpiry);
     if (!statuses.length) {
       throw validationError("At least one valid browser task status is required");
     }
 
     const candidates = this.selectBrowserTasksForScope({ statuses, taskTypes, sourceUrl });
-    const requeueableRows = candidates.filter((row) => canTransitionBrowserTask(row.status, "QUEUED"));
     const now = new Date().toISOString();
+    const requeueableRows = candidates.filter((row) => (
+      canTransitionBrowserTask(row.status, "QUEUED")
+      && Number(row.attempt_count || 0) < Number(row.max_attempts || 3)
+      && (!browserTaskIsExpired(row, now) || refreshExpiry)
+    ));
 
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const stmt = this.database.prepare(`
         UPDATE browser_tasks
-        SET status = 'QUEUED', error_message = '', updated_at = ?
+        SET status = 'QUEUED', error_message = '', expires_at = ?, claim_token = '', updated_at = ?
         WHERE id = ?
       `);
       for (const row of requeueableRows) {
-        stmt.run(now, row.id);
+        const expiresAt = refreshExpiry
+          ? resolveBrowserTaskExpiry("", row.task_type, now)
+          : row.expires_at || null;
+        stmt.run(expiresAt, now, row.id);
         this.insertWorkflowEvent({
           applicationId: row.application_id || null,
           sourceType: "browser_task",
@@ -3614,7 +4291,11 @@ class SqliteJobStore {
             taskType: row.task_type,
             previousStatus: row.status,
             reason,
-            sourceUrl: sourceUrl || ""
+            sourceUrl: sourceUrl || "",
+            attemptCount: Number(row.attempt_count || 0),
+            maxAttempts: Number(row.max_attempts || 0),
+            expiresAt,
+            refreshExpiry
           }
         }, now);
       }
@@ -3633,6 +4314,8 @@ class SqliteJobStore {
       matched: candidates.length,
       changed: requeueableRows.length,
       skipped: candidates.length - requeueableRows.length,
+      retryExhausted: candidates.filter((row) => Number(row.attempt_count || 0) >= Number(row.max_attempts || 3)).length,
+      expired: candidates.filter((row) => browserTaskIsExpired(row, now)).length,
       reason,
       updatedAt: now,
       counts: this.getBrowserTaskDiagnostics({ sourceUrl, limit: 10 }).counts,
@@ -3678,75 +4361,11 @@ class SqliteJobStore {
   }
 
   transitionApplication(applicationId, transition = {}) {
-    const id = Number(applicationId);
-    if (!Number.isInteger(id) || id <= 0) {
-      throw validationError("Valid application id is required");
-    }
+    return this.applicationTransitionService.transition(applicationId, transition);
+  }
 
-    const toStatus = normalizeApplicationStatus(transition.toStatus || transition.status);
-    if (!toStatus) {
-      throw validationError("Target status is required");
-    }
-
-    const now = new Date().toISOString();
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
-      const application = this.database.prepare("SELECT * FROM applications WHERE id = ?").get(id);
-      if (!application) {
-        throw validationError(`Application not found: ${id}`);
-      }
-
-      if (!canTransitionApplication(application.status, toStatus)) {
-        throw validationError(`Invalid application transition: ${application.status} -> ${toStatus}`);
-      }
-
-      const reason = cleanText(transition.reason || "manual_transition");
-      const eventType = cleanText(transition.eventType || "APPLICATION_TRANSITIONED");
-      if (application.status !== toStatus) {
-        this.database.prepare(`
-          UPDATE applications
-          SET status = ?, status_reason = ?, updated_at = ?
-          WHERE id = ?
-        `).run(toStatus, reason, now, id);
-      }
-
-      const applicationEventId = this.insertApplicationEvent(id, application.status, toStatus, eventType, reason, transition.metadata || {}, now);
-      this.insertWorkflowEvent({
-        applicationId: id,
-        sourceType: "application_event",
-        sourceId: applicationEventId,
-        eventType,
-        severity: reasonSeverity(reason, transition.metadata),
-        status: toStatus,
-        progressCurrent: 1,
-        progressTotal: 1,
-        message: `Application moved from ${application.status} to ${toStatus}.`,
-        errorCode: isErrorLikeEvent(eventType, reason) ? reason : "",
-        errorMessage: isErrorLikeEvent(eventType, reason) ? cleanText(transition.metadata?.error?.message || transition.metadata?.message || reason) : "",
-        metadata: {
-          fromStatus: application.status,
-          toStatus,
-          reason,
-          eventType,
-          transitionMetadata: transition.metadata || {}
-        }
-      }, now);
-      this.database.exec("COMMIT");
-
-      return {
-        ok: true,
-        applicationId: id,
-        fromStatus: application.status,
-        toStatus,
-        changed: application.status !== toStatus,
-        eventType,
-        reason,
-        updatedAt: now
-      };
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
+  transitionApplicationWithinTransaction(applicationId, transition = {}) {
+    return this.applicationTransitionService.transitionWithinTransaction(applicationId, transition);
   }
 
   getMissingDescriptions(options = {}) {
@@ -3813,438 +4432,6 @@ class SqliteJobStore {
       keyCount: keys.size,
       keys: Array.from(keys)
     };
-  }
-
-  applySchema() {
-    this.database.exec(`
-      CREATE TABLE IF NOT EXISTS capture_batches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source TEXT NOT NULL,
-        exported_at TEXT,
-        received_at TEXT NOT NULL,
-        received_jobs INTEGER NOT NULL,
-        page_count INTEGER NOT NULL,
-        stats_json TEXT NOT NULL DEFAULT '{}',
-        pages_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS companies (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS jobs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_key TEXT NOT NULL UNIQUE,
-        job_id TEXT,
-        title TEXT,
-        salary TEXT,
-        company_id INTEGER REFERENCES companies(id),
-        company_name TEXT,
-        location TEXT,
-        experience TEXT,
-        education TEXT,
-        recruiter TEXT,
-        tags_json TEXT NOT NULL DEFAULT '[]',
-        welfare_json TEXT NOT NULL DEFAULT '[]',
-        description TEXT,
-        detail_url TEXT,
-        source_url TEXT,
-        page_title TEXT,
-        raw_text TEXT,
-        first_seen_at TEXT NOT NULL,
-        last_seen_at TEXT NOT NULL,
-        captured_at TEXT,
-        sync_source TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS job_snapshots (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-        batch_id INTEGER REFERENCES capture_batches(id) ON DELETE SET NULL,
-        source_key TEXT NOT NULL,
-        title TEXT,
-        company_name TEXT,
-        detail_url TEXT,
-        description_length INTEGER NOT NULL,
-        payload_json TEXT NOT NULL,
-        captured_at TEXT,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS job_tags (
-        job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-        tag TEXT NOT NULL,
-        PRIMARY KEY (job_id, tag)
-      );
-
-      CREATE TABLE IF NOT EXISTS job_welfare (
-        job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-        welfare TEXT NOT NULL,
-        PRIMARY KEY (job_id, welfare)
-      );
-
-      CREATE TABLE IF NOT EXISTS applications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id) ON DELETE CASCADE,
-        status TEXT NOT NULL,
-        status_reason TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS application_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        from_status TEXT,
-        to_status TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        reason TEXT,
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS browser_tasks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id INTEGER REFERENCES applications(id) ON DELETE SET NULL,
-        task_type TEXT NOT NULL,
-        status TEXT NOT NULL,
-        payload_json TEXT NOT NULL DEFAULT '{}',
-        result_json TEXT NOT NULL DEFAULT 'null',
-        error_message TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS capture_quality (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        batch_id INTEGER NOT NULL REFERENCES capture_batches(id) ON DELETE CASCADE,
-        page_count INTEGER NOT NULL,
-        received_jobs INTEGER NOT NULL,
-        valid_jobs INTEGER NOT NULL,
-        stored_jobs INTEGER NOT NULL,
-        described_jobs INTEGER NOT NULL,
-        description_coverage REAL NOT NULL,
-        required_complete_jobs INTEGER NOT NULL,
-        required_field_coverage REAL NOT NULL,
-        invalid_jobs INTEGER NOT NULL,
-        login_required_pages INTEGER NOT NULL,
-        captcha_required_pages INTEGER NOT NULL,
-        selector_counts_json TEXT NOT NULL DEFAULT '{}',
-        missing_fields_json TEXT NOT NULL DEFAULT '{}',
-        search_context_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS browser_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        batch_id INTEGER REFERENCES capture_batches(id) ON DELETE SET NULL,
-        event_type TEXT NOT NULL,
-        severity TEXT NOT NULL,
-        page_url TEXT,
-        page_title TEXT,
-        message TEXT NOT NULL,
-        details_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS candidate_profiles (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        display_name TEXT,
-        headline TEXT,
-        location TEXT,
-        target_json TEXT NOT NULL DEFAULT '{}',
-        summary TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS resume_sources (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        profile_id INTEGER NOT NULL REFERENCES candidate_profiles(id) ON DELETE CASCADE,
-        source_type TEXT NOT NULL,
-        file_name TEXT,
-        file_path TEXT,
-        raw_text TEXT NOT NULL,
-        parsed_json TEXT NOT NULL DEFAULT '{}',
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS profile_experiences (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        profile_id INTEGER NOT NULL REFERENCES candidate_profiles(id) ON DELETE CASCADE,
-        kind TEXT NOT NULL,
-        title TEXT,
-        organization TEXT,
-        role TEXT,
-        start_date TEXT,
-        end_date TEXT,
-        facts_json TEXT NOT NULL DEFAULT '[]',
-        skills_json TEXT NOT NULL DEFAULT '[]',
-        evidence_text TEXT,
-        evidence_source TEXT,
-        confidence TEXT NOT NULL,
-        allowed_rewrites_json TEXT NOT NULL DEFAULT '[]',
-        forbidden_claims_json TEXT NOT NULL DEFAULT '[]',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS profile_skills (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        profile_id INTEGER NOT NULL REFERENCES candidate_profiles(id) ON DELETE CASCADE,
-        name TEXT NOT NULL,
-        category TEXT,
-        proficiency TEXT NOT NULL,
-        evidence_json TEXT NOT NULL DEFAULT '[]',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE(profile_id, name)
-      );
-
-      CREATE TABLE IF NOT EXISTS profile_constraints (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        profile_id INTEGER NOT NULL REFERENCES candidate_profiles(id) ON DELETE CASCADE,
-        rule_type TEXT NOT NULL,
-        content TEXT NOT NULL,
-        severity TEXT NOT NULL,
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS profile_fact_drafts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        profile_id INTEGER NOT NULL REFERENCES candidate_profiles(id) ON DELETE CASCADE,
-        resume_source_id INTEGER REFERENCES resume_sources(id) ON DELETE SET NULL,
-        draft_type TEXT NOT NULL,
-        status TEXT NOT NULL,
-        title TEXT,
-        content_json TEXT NOT NULL DEFAULT '{}',
-        evidence_text TEXT,
-        confidence TEXT NOT NULL,
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        resolved_entity_type TEXT,
-        resolved_entity_id INTEGER,
-        resolved_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS agent_runs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_name TEXT NOT NULL,
-        application_id INTEGER REFERENCES applications(id) ON DELETE CASCADE,
-        step TEXT NOT NULL,
-        status TEXT NOT NULL,
-        provider TEXT,
-        input_json TEXT NOT NULL DEFAULT '{}',
-        output_json TEXT NOT NULL DEFAULT 'null',
-        error_code TEXT,
-        error_message TEXT,
-        fallback_used INTEGER NOT NULL DEFAULT 0,
-        started_at TEXT NOT NULL,
-        finished_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS workflow_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id INTEGER REFERENCES applications(id) ON DELETE CASCADE,
-        source_type TEXT NOT NULL,
-        source_id INTEGER,
-        event_type TEXT NOT NULL,
-        severity TEXT NOT NULL,
-        status TEXT,
-        progress_current INTEGER,
-        progress_total INTEGER,
-        message TEXT NOT NULL,
-        error_code TEXT,
-        error_message TEXT,
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        resolution_status TEXT NOT NULL DEFAULT 'OPEN',
-        resolution_note TEXT,
-        resolved_by TEXT,
-        resolved_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS screenings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        agent_run_id INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
-        match_score INTEGER NOT NULL,
-        risk_score INTEGER NOT NULL,
-        recommendation TEXT NOT NULL,
-        hard_conditions_json TEXT NOT NULL DEFAULT '[]',
-        matched_points_json TEXT NOT NULL DEFAULT '[]',
-        risk_points_json TEXT NOT NULL DEFAULT '[]',
-        resume_strategy_json TEXT NOT NULL DEFAULT '[]',
-        requires_user_confirmation INTEGER NOT NULL DEFAULT 0,
-        confidence TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS resume_versions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        screening_id INTEGER REFERENCES screenings(id) ON DELETE SET NULL,
-        agent_run_id INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
-        version_number INTEGER NOT NULL,
-        status TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        resume_fields_json TEXT NOT NULL DEFAULT '{}',
-        source_mapping_json TEXT NOT NULL DEFAULT '[]',
-        diff_summary_json TEXT NOT NULL DEFAULT '[]',
-        compression_notes_json TEXT NOT NULL DEFAULT '[]',
-        unsupported_claims_json TEXT NOT NULL DEFAULT '[]',
-        render_metadata_json TEXT NOT NULL DEFAULT '{}',
-        file_path TEXT,
-        file_format TEXT,
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS resume_fit_evaluations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        resume_version_id INTEGER NOT NULL REFERENCES resume_versions(id) ON DELETE CASCADE,
-        application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        agent_run_id INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
-        provider TEXT NOT NULL,
-        coverage_score INTEGER NOT NULL,
-        fit_level TEXT NOT NULL,
-        confidence TEXT NOT NULL,
-        requirement_count INTEGER NOT NULL,
-        covered_count INTEGER NOT NULL,
-        weak_count INTEGER NOT NULL,
-        missing_count INTEGER NOT NULL,
-        jd_requirements_json TEXT NOT NULL DEFAULT '{}',
-        coverage_items_json TEXT NOT NULL DEFAULT '[]',
-        blockers_json TEXT NOT NULL DEFAULT '[]',
-        recommendations_json TEXT NOT NULL DEFAULT '[]',
-        policy_json TEXT NOT NULL DEFAULT '{}',
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS resume_claim_verifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        resume_version_id INTEGER NOT NULL REFERENCES resume_versions(id) ON DELETE CASCADE,
-        application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        agent_run_id INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
-        provider TEXT NOT NULL,
-        total_claims INTEGER NOT NULL,
-        supported_count INTEGER NOT NULL,
-        weak_count INTEGER NOT NULL,
-        unsupported_count INTEGER NOT NULL,
-        needs_user_confirmation_count INTEGER NOT NULL,
-        truthfulness_passed INTEGER NOT NULL DEFAULT 0,
-        coverage_ratio REAL NOT NULL DEFAULT 0,
-        claims_json TEXT NOT NULL DEFAULT '[]',
-        unsupported_claims_json TEXT NOT NULL DEFAULT '[]',
-        needs_user_confirmation_json TEXT NOT NULL DEFAULT '[]',
-        recommendations_json TEXT NOT NULL DEFAULT '[]',
-        policy_json TEXT NOT NULL DEFAULT '{}',
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS resume_audits (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        resume_version_id INTEGER NOT NULL REFERENCES resume_versions(id) ON DELETE CASCADE,
-        agent_run_id INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
-        status TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        truthfulness_passed INTEGER NOT NULL DEFAULT 0,
-        format_passed INTEGER NOT NULL DEFAULT 0,
-        page_limit_passed INTEGER NOT NULL DEFAULT 0,
-        unsupported_claims_json TEXT NOT NULL DEFAULT '[]',
-        source_issues_json TEXT NOT NULL DEFAULT '[]',
-        exaggeration_risk TEXT NOT NULL,
-        job_fit_review TEXT NOT NULL,
-        risk_score_adjustment INTEGER NOT NULL DEFAULT 0,
-        recommendation TEXT NOT NULL,
-        requires_user_confirmation INTEGER NOT NULL DEFAULT 0,
-        render_metadata_json TEXT NOT NULL DEFAULT '{}',
-        risk_flags_json TEXT NOT NULL DEFAULT '[]',
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS conversations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id INTEGER NOT NULL UNIQUE REFERENCES applications(id) ON DELETE CASCADE,
-        status TEXT NOT NULL,
-        recruiter_name TEXT,
-        conversation_url TEXT,
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-        application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        resume_version_id INTEGER REFERENCES resume_versions(id) ON DELETE SET NULL,
-        agent_run_id INTEGER REFERENCES agent_runs(id) ON DELETE SET NULL,
-        direction TEXT NOT NULL,
-        channel TEXT NOT NULL,
-        status TEXT NOT NULL,
-        message_text TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        metadata_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_jobs_job_id ON jobs(job_id);
-      CREATE INDEX IF NOT EXISTS idx_jobs_detail_url ON jobs(detail_url);
-      CREATE INDEX IF NOT EXISTS idx_jobs_last_seen ON jobs(last_seen_at);
-      CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
-      CREATE INDEX IF NOT EXISTS idx_application_events_application ON application_events(application_id);
-      CREATE INDEX IF NOT EXISTS idx_browser_tasks_status ON browser_tasks(status);
-      CREATE INDEX IF NOT EXISTS idx_browser_tasks_application ON browser_tasks(application_id);
-      CREATE INDEX IF NOT EXISTS idx_job_snapshots_job ON job_snapshots(job_id);
-      CREATE INDEX IF NOT EXISTS idx_capture_quality_batch ON capture_quality(batch_id);
-      CREATE INDEX IF NOT EXISTS idx_browser_events_batch ON browser_events(batch_id);
-      CREATE INDEX IF NOT EXISTS idx_browser_events_type ON browser_events(event_type);
-      CREATE INDEX IF NOT EXISTS idx_resume_sources_profile ON resume_sources(profile_id);
-      CREATE INDEX IF NOT EXISTS idx_profile_experiences_profile ON profile_experiences(profile_id);
-      CREATE INDEX IF NOT EXISTS idx_profile_skills_profile ON profile_skills(profile_id);
-      CREATE INDEX IF NOT EXISTS idx_profile_constraints_profile ON profile_constraints(profile_id);
-      CREATE INDEX IF NOT EXISTS idx_profile_fact_drafts_profile ON profile_fact_drafts(profile_id);
-      CREATE INDEX IF NOT EXISTS idx_profile_fact_drafts_resume_source ON profile_fact_drafts(resume_source_id);
-      CREATE INDEX IF NOT EXISTS idx_profile_fact_drafts_status ON profile_fact_drafts(status);
-      CREATE INDEX IF NOT EXISTS idx_agent_runs_application ON agent_runs(application_id);
-      CREATE INDEX IF NOT EXISTS idx_agent_runs_agent ON agent_runs(agent_name);
-      CREATE INDEX IF NOT EXISTS idx_workflow_events_application ON workflow_events(application_id);
-      CREATE INDEX IF NOT EXISTS idx_workflow_events_source ON workflow_events(source_type, source_id);
-      CREATE INDEX IF NOT EXISTS idx_workflow_events_resolution ON workflow_events(resolution_status, severity);
-      CREATE INDEX IF NOT EXISTS idx_screenings_application ON screenings(application_id);
-      CREATE INDEX IF NOT EXISTS idx_resume_versions_application ON resume_versions(application_id);
-      CREATE INDEX IF NOT EXISTS idx_resume_versions_screening ON resume_versions(screening_id);
-      CREATE INDEX IF NOT EXISTS idx_resume_fit_evaluations_resume_version ON resume_fit_evaluations(resume_version_id);
-      CREATE INDEX IF NOT EXISTS idx_resume_fit_evaluations_application ON resume_fit_evaluations(application_id);
-      CREATE INDEX IF NOT EXISTS idx_resume_claim_verifications_resume_version ON resume_claim_verifications(resume_version_id);
-      CREATE INDEX IF NOT EXISTS idx_resume_claim_verifications_application ON resume_claim_verifications(application_id);
-      CREATE INDEX IF NOT EXISTS idx_resume_audits_resume_version ON resume_audits(resume_version_id);
-      CREATE INDEX IF NOT EXISTS idx_conversations_application ON conversations(application_id);
-      CREATE INDEX IF NOT EXISTS idx_messages_application ON messages(application_id);
-      CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
-      PRAGMA user_version = ${SCHEMA_VERSION};
-    `);
   }
 
   importLegacyJsonIfNeeded() {
@@ -4367,15 +4554,22 @@ class SqliteJobStore {
       return;
     }
 
-    this.database.prepare(`
-      UPDATE applications
-      SET status = ?, status_reason = ?, updated_at = ?
-      WHERE id = ?
-    `).run(nextStatus, "job_sync", now, existing.id);
-    this.insertApplicationEvent(existing.id, existing.status, nextStatus, "JOB_SYNCED", "job_sync", {
-      batchId,
-      descriptionLength: String(job.description || "").length
-    }, now);
+    this.transitionApplicationWithinTransaction(existing.id, {
+      toStatus: nextStatus,
+      eventType: "JOB_SYNCED",
+      reason: "job_sync",
+      evidence: {
+        type: "job_sync",
+        sourceType: "capture_batch",
+        sourceId: batchId
+      },
+      metadata: {
+        batchId,
+        descriptionLength: String(job.description || "").length
+      },
+      idempotencyKey: `job-sync:${batchId}:${existing.id}:${nextStatus}`,
+      now
+    });
   }
 
   backfillApplicationsIfNeeded() {
@@ -4411,11 +4605,22 @@ class SqliteJobStore {
     }
   }
 
-  insertApplicationEvent(applicationId, fromStatus, toStatus, eventType, reason, metadata, now) {
+  insertApplicationEvent(applicationId, fromStatus, toStatus, eventType, reason, metadata, now, idempotencyKey = "") {
+    if (applicationId && typeof applicationId === "object") {
+      const event = applicationId;
+      applicationId = event.applicationId;
+      fromStatus = event.fromStatus;
+      toStatus = event.toStatus;
+      eventType = event.eventType;
+      reason = event.reason;
+      metadata = event.metadata;
+      now = event.now;
+      idempotencyKey = event.idempotencyKey;
+    }
     const result = this.database.prepare(`
       INSERT INTO application_events (
-        application_id, from_status, to_status, event_type, reason, metadata_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        application_id, from_status, to_status, event_type, reason, metadata_json, idempotency_key, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       applicationId,
       fromStatus || null,
@@ -4423,6 +4628,7 @@ class SqliteJobStore {
       eventType,
       reason || "",
       stringifyJson(metadata || {}),
+      cleanText(idempotencyKey || ""),
       now
     );
     return Number(result.lastInsertRowid);
@@ -4928,6 +5134,27 @@ function rowToBrowserEvent(row) {
   };
 }
 
+function countRows(database, tableName) {
+  return Number(database.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get().count || 0);
+}
+
+function latestTableTimestamp(database, tableName, columnName, source) {
+  const row = database.prepare(`
+    SELECT id, ${columnName} AS updated_at
+    FROM ${tableName}
+    ORDER BY ${columnName} DESC, id DESC
+    LIMIT 1
+  `).get();
+  if (!row?.updated_at) {
+    return null;
+  }
+  return {
+    source,
+    id: Number(row.id || 0),
+    updatedAt: row.updated_at
+  };
+}
+
 function rowToProfile(row) {
   return {
     id: Number(row.id || 0),
@@ -5054,6 +5281,7 @@ function rowToApplicationEvent(row) {
     toStatus: row.to_status || "",
     eventType: row.event_type || "",
     reason: row.reason || "",
+    idempotencyKey: row.idempotency_key || "",
     metadata: parseJsonValue(row.metadata_json, {}),
     createdAt: row.created_at || ""
   };
@@ -5075,6 +5303,11 @@ function rowToBrowserTask(row) {
     payload: parseJsonValue(row.payload_json, {}),
     result: parseJsonValue(row.result_json, null),
     errorMessage: row.error_message || "",
+    expiresAt: row.expires_at || "",
+    attemptCount: Number(row.attempt_count || 0),
+    maxAttempts: Number(row.max_attempts || 0),
+    lastAttemptAt: row.last_attempt_at || "",
+    claimToken: row.claim_token || "",
     createdAt: row.created_at || "",
     updatedAt: row.updated_at || ""
   };
@@ -5096,10 +5329,57 @@ function rowToAgentRun(row) {
     errorCode: row.error_code || "",
     errorMessage: row.error_message || "",
     fallbackUsed: Boolean(row.fallback_used),
+    workflowRunId: row.workflow_run_id === null || row.workflow_run_id === undefined ? null : Number(row.workflow_run_id || 0),
+    profileSnapshotId: row.profile_snapshot_id === null || row.profile_snapshot_id === undefined ? null : Number(row.profile_snapshot_id || 0),
+    jobSnapshotId: row.job_snapshot_id === null || row.job_snapshot_id === undefined ? null : Number(row.job_snapshot_id || 0),
+    promptVersion: row.prompt_version || "",
+    agentVersion: row.agent_version || "",
+    modelConfig: parseJsonValue(row.model_config_json, {}),
+    graphVersion: row.graph_version || "",
     startedAt: row.started_at || "",
     finishedAt: row.finished_at || "",
     createdAt: row.created_at || "",
     updatedAt: row.updated_at || ""
+  };
+}
+
+function rowToWorkflowRun(row) {
+  return {
+    id: Number(row.id || 0),
+    applicationId: Number(row.application_id || 0),
+    sourceKey: row.source_key || "",
+    title: row.title || "",
+    company: row.company_name || "",
+    workflowName: row.workflow_name || "",
+    status: row.status || "",
+    mode: row.mode || "",
+    replayOfWorkflowRunId: row.replay_of_workflow_run_id === null || row.replay_of_workflow_run_id === undefined
+      ? null
+      : Number(row.replay_of_workflow_run_id || 0),
+    output: parseJsonValue(row.output_json, null),
+    error: parseJsonValue(row.error_json, null),
+    startedAt: row.started_at || "",
+    finishedAt: row.finished_at || "",
+    createdAt: row.created_at || "",
+    updatedAt: row.updated_at || ""
+  };
+}
+
+function rowToWorkflowInputSnapshot(row) {
+  return {
+    id: Number(row.id || 0),
+    workflowRunId: Number(row.workflow_run_id || 0),
+    profileSnapshotId: Number(row.profile_snapshot_id || 0),
+    jobSnapshotId: Number(row.job_snapshot_id || 0),
+    userRules: parseJsonValue(row.user_rules_json, {}),
+    executionOptions: parseJsonValue(row.execution_options_json, {}),
+    renderOptions: parseJsonValue(row.render_options_json, {}),
+    promptVersion: row.prompt_version || "",
+    agentVersion: row.agent_version || "",
+    modelConfig: parseJsonValue(row.model_config_json, {}),
+    graphVersion: row.graph_version || "",
+    inputHash: row.input_hash || "",
+    createdAt: row.created_at || ""
   };
 }
 
@@ -5471,6 +5751,44 @@ function stringifyJson(value) {
   return JSON.stringify(value ?? null);
 }
 
+function normalizeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function stableJsonHash(value) {
+  return crypto.createHash("sha256").update(stableStringify(value), "utf8").digest("hex");
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function sanitizeModelConfig(value) {
+  const blocked = /(?:api[_-]?key|authorization|bearer|password|secret|token)/i;
+  if (Array.isArray(value)) {
+    return value.map(sanitizeModelConfig);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const output = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!blocked.test(key)) {
+      output[key] = sanitizeModelConfig(item);
+    }
+  }
+  return output;
+}
+
 function parseJsonArray(value) {
   try {
     const parsed = JSON.parse(value || "[]");
@@ -5647,6 +5965,16 @@ function normalizeOptionalPositiveInteger(value) {
 function normalizeAgentRunStatus(value) {
   const status = cleanText(value).toUpperCase();
   return new Set(["RUNNING", "SUCCEEDED", "FAILED"]).has(status) ? status : "";
+}
+
+function normalizeWorkflowRunMode(value) {
+  const mode = cleanText(value).toLowerCase();
+  return new Set(["rules", "auto", "llm"]).has(mode) ? mode : "rules";
+}
+
+function normalizeWorkflowRunFinalStatus(value) {
+  const status = cleanText(value).toUpperCase();
+  return new Set(["SUCCEEDED", "FAILED", "STOPPED"]).has(status) ? status : "";
 }
 
 function normalizeWorkflowEventInput(input = {}) {
@@ -6542,59 +6870,9 @@ function normalizeConstraintSeverity(value) {
   return new Set(["info", "warning", "blocker"]).has(severity) ? severity : "warning";
 }
 
-function normalizeApplicationStatus(value) {
-  const status = cleanText(value).toUpperCase();
-  return APPLICATION_STATUSES.has(status) ? status : "";
-}
-
 function normalizeApplicationStatusList(value) {
   const values = Array.isArray(value) ? value : [value];
   return Array.from(new Set(values.map(normalizeApplicationStatus).filter(Boolean)));
-}
-
-const APPLICATION_STATUSES = new Set([
-  "LIST_CAPTURED",
-  "DETAIL_CAPTURED",
-  "SCORED",
-  "SHORTLISTED",
-  "RESUME_DRAFTED",
-  "RESUME_AUDITED",
-  "GREETING_READY",
-  "GREETING_SENT",
-  "CHAT_OPENED",
-  "RESUME_UNLOCKED",
-  "SUBMISSION_READY",
-  "SUBMITTED",
-  "SKIPPED",
-  "NEEDS_USER_REVIEW",
-  "NEEDS_MANUAL_ACTION",
-  "FAILED"
-]);
-
-const APPLICATION_TRANSITIONS = {
-  LIST_CAPTURED: new Set(["DETAIL_CAPTURED", "SKIPPED", "NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]),
-  DETAIL_CAPTURED: new Set(["SCORED", "SHORTLISTED", "SKIPPED", "NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]),
-  SCORED: new Set(["SHORTLISTED", "SKIPPED", "NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]),
-  SHORTLISTED: new Set(["RESUME_DRAFTED", "GREETING_READY", "SKIPPED", "NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]),
-  RESUME_DRAFTED: new Set(["RESUME_AUDITED", "NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]),
-  RESUME_AUDITED: new Set(["GREETING_READY", "NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]),
-  GREETING_READY: new Set(["GREETING_SENT", "CHAT_OPENED", "NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]),
-  GREETING_SENT: new Set(["CHAT_OPENED", "RESUME_UNLOCKED", "NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]),
-  CHAT_OPENED: new Set(["RESUME_UNLOCKED", "NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]),
-  RESUME_UNLOCKED: new Set(["SUBMISSION_READY", "NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]),
-  SUBMISSION_READY: new Set(["SUBMITTED", "NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]),
-  NEEDS_USER_REVIEW: new Set(["SCORED", "SHORTLISTED", "RESUME_DRAFTED", "RESUME_AUDITED", "GREETING_READY", "NEEDS_MANUAL_ACTION", "SKIPPED", "FAILED"]),
-  NEEDS_MANUAL_ACTION: new Set(["LIST_CAPTURED", "DETAIL_CAPTURED", "SCORED", "SHORTLISTED", "GREETING_READY", "GREETING_SENT", "CHAT_OPENED", "RESUME_UNLOCKED", "SUBMISSION_READY", "SKIPPED", "FAILED"]),
-  FAILED: new Set(["LIST_CAPTURED", "DETAIL_CAPTURED", "NEEDS_MANUAL_ACTION"]),
-  SKIPPED: new Set([]),
-  SUBMITTED: new Set([])
-};
-
-function canTransitionApplication(fromStatus, toStatus) {
-  if (fromStatus === toStatus) {
-    return true;
-  }
-  return Boolean(APPLICATION_TRANSITIONS[fromStatus]?.has(toStatus));
 }
 
 const BROWSER_TASK_TYPES = new Set([
@@ -6696,6 +6974,41 @@ function canTransitionBrowserTask(fromStatus, toStatus) {
   return Boolean(BROWSER_TASK_TRANSITIONS[from]?.has(to));
 }
 
+function resolveBrowserTaskExpiry(value, taskType, now = new Date().toISOString()) {
+  const explicit = cleanText(value || "");
+  if (explicit) {
+    const parsed = Date.parse(explicit);
+    if (!Number.isFinite(parsed)) {
+      throw validationError("Valid browser task expiry timestamp is required");
+    }
+    return new Date(parsed).toISOString();
+  }
+  const configuredTtl = Number(process.env.BOSS_BROWSER_TASK_TTL_MS || 0);
+  const ttlMs = Number.isFinite(configuredTtl) && configuredTtl > 0
+    ? configuredTtl
+    : browserTaskDefaultTtlMs(taskType);
+  return new Date(Date.parse(now) + ttlMs).toISOString();
+}
+
+function browserTaskDefaultTtlMs(taskType) {
+  return new Set(["UPLOAD_RESUME", "SUBMIT_APPLICATION"]).has(normalizeTaskType(taskType))
+    ? 10 * 60 * 1000
+    : 30 * 60 * 1000;
+}
+
+function normalizeBrowserTaskMaxAttempts(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 3;
+  }
+  return Math.max(1, Math.min(10, Math.trunc(parsed)));
+}
+
+function browserTaskIsExpired(task, now = new Date().toISOString()) {
+  const expiresAt = cleanText(task?.expires_at || task?.expiresAt || "");
+  return Boolean(expiresAt && Date.parse(expiresAt) <= Date.parse(now));
+}
+
 function advanceApplicationStatus(currentStatus, candidateStatus) {
   const order = {
     LIST_CAPTURED: 10,
@@ -6774,7 +7087,15 @@ function validationError(message) {
   return error;
 }
 
+function conflictError(message) {
+  const error = new Error(message);
+  error.statusCode = 409;
+  error.code = "BROWSER_TASK_CALLBACK_CONFLICT";
+  return error;
+}
+
 module.exports = {
+  SCHEMA_VERSION,
   createJobStore,
   normalizeJob,
   isValidJob

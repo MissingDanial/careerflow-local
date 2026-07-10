@@ -66,7 +66,11 @@ function main() {
       recordsSnapshots: stats.snapshotCount === 2,
       recordsBatches: stats.batchCount === 2,
       recordsCompany: stats.companyCount === 1,
-      reportsSqlite: current.storage === "sqlite"
+      reportsSqlite: current.storage === "sqlite",
+      appliesOrderedMigrations: stats.migrationStatus.currentVersion === 0
+        && stats.migrationStatus.finalVersion === stats.schemaVersion
+        && stats.migrationStatus.applied.length === stats.schemaVersion,
+      doesNotBackupFreshDatabase: stats.migrationStatus.backupCreated === false
     };
 
     const ok = Object.values(checks).every(Boolean);

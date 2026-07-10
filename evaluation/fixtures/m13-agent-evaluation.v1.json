@@ -1,0 +1,510 @@
+{
+  "id": "boss-find-anonymous-agent-baseline",
+  "version": "m13.agent-evaluation.dataset.v1",
+  "thresholds": {
+    "riskGateRecall": 1,
+    "riskGatePrecision": 1,
+    "rankingPairAccuracy": 1,
+    "screeningRecommendationAccuracy": 1,
+    "jdMustHaveRecognition": 1,
+    "jdMustHaveStatusAccuracy": 0.8,
+    "generatedClaimSupportRate": 0.85,
+    "claimVerdictAccuracy": 1,
+    "auditConsistency": 1
+  },
+  "profiles": [
+    {
+      "id": "profile-product-01",
+      "profile": {
+        "id": 1001,
+        "displayName": "匿名候选人 A",
+        "headline": "AI 产品与自动化方向",
+        "target": {
+          "roles": ["AI产品经理", "产品经理"],
+          "locations": ["上海"],
+          "jobTypes": ["实习", "校招"]
+        },
+        "contact": {}
+      },
+      "experiences": [
+        {
+          "id": 1101,
+          "kind": "education",
+          "title": "信息管理本科",
+          "organization": "匿名大学",
+          "role": "本科",
+          "startDate": "2022-09",
+          "endDate": "2026-06",
+          "facts": ["完成产品设计、数据分析和软件工程相关课程。"],
+          "skills": ["数据分析", "产品设计"],
+          "evidenceText": "匿名教育经历。"
+        },
+        {
+          "id": 1102,
+          "kind": "project",
+          "title": "本地岗位工作流",
+          "organization": "个人项目",
+          "role": "产品设计与开发",
+          "startDate": "2025-10",
+          "endDate": "至今",
+          "facts": [
+            "围绕岗位采集、风险门禁、匹配评分和定制简历搭建本地工作流。",
+            "使用 JavaScript、Node.js、SQLite、Chrome Extension 和 LangGraph 实现可回放流程。",
+            "通过用户访谈和流程数据分析持续优化岗位筛选与简历生成体验。",
+            "与产品、开发和运营角色协作定义需求、验收标准和错误恢复方案。"
+          ],
+          "skills": ["产品设计", "用户研究", "数据分析", "大模型", "提示词", "JavaScript", "LangGraph"],
+          "evidenceText": "本地优先 AI 求职工作流项目。"
+        },
+        {
+          "id": 1103,
+          "kind": "internship",
+          "title": "智能工具产品迭代",
+          "organization": "匿名团队",
+          "role": "产品实习生",
+          "startDate": "2025-06",
+          "endDate": "2025-09",
+          "facts": [
+            "整理用户反馈并形成需求优先级，参与产品从概念到上线的迭代。",
+            "设计核心流程指标并使用数据分析定位用户体验问题。",
+            "和研发、运营共同评审方案并跟进验收。"
+          ],
+          "skills": ["用户研究", "用户体验", "跨部门协作", "数据分析"],
+          "evidenceText": "匿名产品实习经历。"
+        }
+      ],
+      "skills": [
+        { "id": 1201, "name": "产品设计", "category": "product", "proficiency": "熟练", "evidence": ["本地岗位工作流"] },
+        { "id": 1202, "name": "用户研究", "category": "product", "proficiency": "熟练", "evidence": ["智能工具产品迭代"] },
+        { "id": 1203, "name": "数据分析", "category": "analysis", "proficiency": "熟练", "evidence": ["流程指标设计"] },
+        { "id": 1204, "name": "大模型", "category": "ai", "proficiency": "熟悉", "evidence": ["本地岗位工作流"] },
+        { "id": 1205, "name": "提示词", "category": "ai", "proficiency": "熟练", "evidence": ["岗位评分与简历生成"] },
+        { "id": 1206, "name": "JavaScript", "category": "engineering", "proficiency": "熟练", "evidence": ["本地岗位工作流"] },
+        { "id": 1207, "name": "LangGraph", "category": "engineering", "proficiency": "熟悉", "evidence": ["可回放流程"] },
+        { "id": 1208, "name": "用户体验", "category": "product", "proficiency": "熟练", "evidence": ["智能工具产品迭代"] },
+        { "id": 1209, "name": "跨部门协作", "category": "product", "proficiency": "熟练", "evidence": ["方案评审与验收"] }
+      ],
+      "constraints": [
+        { "id": 1301, "ruleType": "excluded_direction", "content": "销售", "severity": "blocker", "metadata": { "keywords": ["电销", "商务拓展"] } },
+        { "id": 1302, "ruleType": "excluded_direction", "content": "直播", "severity": "blocker", "metadata": { "keywords": ["主播", "带货"] } }
+      ]
+    },
+    {
+      "id": "profile-engineering-01",
+      "profile": {
+        "id": 2001,
+        "displayName": "匿名候选人 B",
+        "headline": "Node.js 后端与自动化方向",
+        "target": {
+          "roles": ["Node.js后端工程师", "后端工程师"],
+          "locations": ["杭州"],
+          "jobTypes": ["校招"]
+        },
+        "contact": {}
+      },
+      "experiences": [
+        {
+          "id": 2101,
+          "kind": "education",
+          "title": "软件工程本科",
+          "organization": "匿名大学",
+          "role": "本科",
+          "startDate": "2022-09",
+          "endDate": "2026-06",
+          "facts": ["完成数据库、操作系统和软件测试相关课程。"],
+          "skills": ["数据库", "软件测试"],
+          "evidenceText": "匿名教育经历。"
+        },
+        {
+          "id": 2102,
+          "kind": "project",
+          "title": "本地任务与证据服务",
+          "organization": "课程项目",
+          "role": "后端开发",
+          "startDate": "2025-03",
+          "endDate": "2025-08",
+          "facts": [
+            "使用 Node.js 和 SQLite 实现任务状态、幂等键和审计事件持久化。",
+            "设计 REST API、输入校验、错误码和失败重试策略。",
+            "通过 JavaScript 自动化测试和 CI 检查关键状态迁移。",
+            "实现数据采集结果去重、批量同步和可追踪日志。"
+          ],
+          "skills": ["Node.js", "SQLite", "REST API", "JavaScript", "CI", "自动化", "数据采集"],
+          "evidenceText": "本地任务与证据服务项目。"
+        }
+      ],
+      "skills": [
+        { "id": 2201, "name": "Node.js", "category": "backend", "proficiency": "熟练", "evidence": ["任务与证据服务"] },
+        { "id": 2202, "name": "SQLite", "category": "database", "proficiency": "熟练", "evidence": ["任务与证据服务"] },
+        { "id": 2203, "name": "REST API", "category": "backend", "proficiency": "熟练", "evidence": ["任务与证据服务"] },
+        { "id": 2204, "name": "JavaScript", "category": "engineering", "proficiency": "熟练", "evidence": ["任务与证据服务"] },
+        { "id": 2205, "name": "CI", "category": "quality", "proficiency": "熟悉", "evidence": ["自动化测试"] },
+        { "id": 2206, "name": "自动化", "category": "quality", "proficiency": "熟练", "evidence": ["状态迁移测试"] },
+        { "id": 2207, "name": "数据采集", "category": "backend", "proficiency": "熟悉", "evidence": ["批量同步"] }
+      ],
+      "constraints": [
+        { "id": 2301, "ruleType": "excluded_direction", "content": "销售", "severity": "blocker", "metadata": {} },
+        { "id": 2302, "ruleType": "excluded_direction", "content": "直播", "severity": "blocker", "metadata": {} }
+      ]
+    }
+  ],
+  "jobCases": [
+    {
+      "id": "job-product-ai-strong",
+      "profileId": "profile-product-01",
+      "job": {
+        "title": "AI产品经理",
+        "company": "匿名 AI 公司",
+        "location": "上海",
+        "salary": "面议",
+        "experience": "不限",
+        "education": "本科",
+        "tags": ["用户研究", "数据分析", "大模型", "提示词"],
+        "welfare": ["弹性工作"],
+        "description": "参与多端 AI 产品设计和迭代，以用户需求为核心提出并实施解决方案。通过用户研究和数据分析持续优化交互与用户体验，和技术团队理解大模型能力并转化为产品特性。需要与研发、运营和市场开展跨部门协作，推动产品从概念、验证到上线。熟练应用提示词并有 AI 项目经验者优先。"
+      },
+      "labels": {
+        "riskBlocked": false,
+        "rankingGroup": "product-fit",
+        "expectedRank": 1,
+        "expectedScreeningRecommendation": "auto_prepare",
+        "expectedAuditRecommendation": "approve",
+        "mustHaveRequirements": [
+          { "text": "用户研究", "expectedStatus": "covered" },
+          { "text": "数据分析", "expectedStatus": "covered" },
+          { "text": "大模型", "expectedStatus": "covered" },
+          { "text": "提示词", "expectedStatus": "covered" }
+        ]
+      }
+    },
+    {
+      "id": "job-product-general-medium",
+      "profileId": "profile-product-01",
+      "job": {
+        "title": "产品经理",
+        "company": "匿名工具公司",
+        "location": "上海",
+        "salary": "面议",
+        "experience": "不限",
+        "education": "本科",
+        "tags": ["产品设计", "用户研究"],
+        "welfare": [],
+        "description": "负责效率工具的需求梳理、原型方案和版本迭代，通过用户研究验证关键流程。参与项目排期、工程评审和上线验收，推动功能从需求定义到发布。要求具备清晰表达和文档组织能力，能够跟进问题闭环。"
+      },
+      "labels": {
+        "riskBlocked": false,
+        "rankingGroup": "product-fit",
+        "expectedRank": 2,
+        "expectedScreeningRecommendation": "auto_prepare",
+        "expectedAuditRecommendation": "approve",
+        "mustHaveRequirements": [
+          { "text": "产品设计", "expectedStatus": "covered" },
+          { "text": "用户研究", "expectedStatus": "covered" }
+        ]
+      }
+    },
+    {
+      "id": "job-content-weak",
+      "profileId": "profile-product-01",
+      "job": {
+        "title": "内容运营",
+        "company": "匿名内容公司",
+        "location": "上海",
+        "salary": "面议",
+        "experience": "不限",
+        "education": "本科",
+        "tags": ["短视频", "内容策划", "社群运营"],
+        "welfare": [],
+        "description": "负责品牌内容选题、稿件排期和社群日常维护，跟踪内容发布后的阅读、互动和转化数据。需要独立完成内容策划，协调设计资源并维护内容日历，对热点敏感，能够持续产出符合品牌调性的图文和短视频方案。"
+      },
+      "labels": {
+        "riskBlocked": false,
+        "rankingGroup": "product-fit",
+        "expectedRank": 3,
+        "expectedScreeningRecommendation": "skip",
+        "expectedAuditRecommendation": "",
+        "mustHaveRequirements": []
+      }
+    },
+    {
+      "id": "job-product-negated-risk",
+      "profileId": "profile-product-01",
+      "job": {
+        "title": "AI产品经理",
+        "company": "匿名软件公司",
+        "location": "上海",
+        "salary": "面议",
+        "experience": "不限",
+        "education": "本科",
+        "tags": ["产品设计", "大模型"],
+        "welfare": [],
+        "description": "负责企业 AI 工具的产品设计、需求分析和版本迭代。该岗位不承担销售指标，不涉及直播带货或主播运营，主要和研发及客户成功团队确认产品需求。需要理解大模型能力边界，能够完成原型、验收标准和上线复盘。"
+      },
+      "labels": {
+        "riskBlocked": false,
+        "rankingGroup": "",
+        "expectedRank": null,
+        "expectedScreeningRecommendation": "auto_prepare",
+        "expectedAuditRecommendation": "approve",
+        "mustHaveRequirements": [
+          { "text": "产品设计", "expectedStatus": "covered" },
+          { "text": "大模型", "expectedStatus": "covered" }
+        ]
+      }
+    },
+    {
+      "id": "job-sales-blocked",
+      "profileId": "profile-product-01",
+      "job": {
+        "title": "AI产品销售顾问",
+        "company": "匿名服务公司",
+        "location": "上海",
+        "salary": "面议",
+        "experience": "不限",
+        "education": "本科",
+        "tags": ["销售", "客户开发"],
+        "welfare": [],
+        "description": "负责 AI 产品销售、客户开发和商务拓展，完成月度业绩指标。通过电话和线下拜访挖掘客户需求，推进报价、合同和回款，并持续维护客户关系。"
+      },
+      "labels": {
+        "riskBlocked": true,
+        "rankingGroup": "",
+        "expectedRank": null,
+        "expectedScreeningRecommendation": "skip",
+        "expectedAuditRecommendation": "",
+        "mustHaveRequirements": []
+      }
+    },
+    {
+      "id": "job-livestream-blocked",
+      "profileId": "profile-product-01",
+      "job": {
+        "title": "直播产品运营",
+        "company": "匿名电商公司",
+        "location": "上海",
+        "salary": "面议",
+        "experience": "不限",
+        "education": "本科",
+        "tags": ["直播", "主播运营"],
+        "welfare": [],
+        "description": "负责直播间排期、主播运营和带货活动复盘，协调选品、脚本、场控及投流资源。跟踪观看、成交和留存指标，持续优化直播活动方案并完成业务目标。"
+      },
+      "labels": {
+        "riskBlocked": true,
+        "rankingGroup": "",
+        "expectedRank": null,
+        "expectedScreeningRecommendation": "skip",
+        "expectedAuditRecommendation": "",
+        "mustHaveRequirements": []
+      }
+    },
+    {
+      "id": "job-backend-strong",
+      "profileId": "profile-engineering-01",
+      "job": {
+        "title": "Node.js后端工程师",
+        "company": "匿名技术公司",
+        "location": "杭州",
+        "salary": "面议",
+        "experience": "不限",
+        "education": "本科",
+        "tags": ["Node.js", "SQLite", "REST API", "CI"],
+        "welfare": [],
+        "description": "负责 Node.js 后端服务设计与开发，使用 SQLite 管理本地业务数据，设计 REST API、幂等处理和错误恢复。参与自动化测试、CI 检查和代码评审，要求关注状态一致性、日志可追踪性与接口稳定性。"
+      },
+      "labels": {
+        "riskBlocked": false,
+        "rankingGroup": "engineering-fit",
+        "expectedRank": 1,
+        "expectedScreeningRecommendation": "auto_prepare",
+        "expectedAuditRecommendation": "approve",
+        "mustHaveRequirements": [
+          { "text": "Node.js", "expectedStatus": "covered" },
+          { "text": "SQLite", "expectedStatus": "covered" },
+          { "text": "REST API", "expectedStatus": "covered" },
+          { "text": "CI", "expectedStatus": "covered" }
+        ]
+      }
+    },
+    {
+      "id": "job-automation-medium",
+      "profileId": "profile-engineering-01",
+      "job": {
+        "title": "自动化工具工程师",
+        "company": "匿名数据公司",
+        "location": "杭州",
+        "salary": "面议",
+        "experience": "不限",
+        "education": "本科",
+        "tags": ["JavaScript", "自动化", "数据采集"],
+        "welfare": [],
+        "description": "开发内部自动化工具，负责数据采集、结果去重和任务日志。需要使用 JavaScript 编写脚本和接口，参与需求确认、异常诊断和测试，保证工具在本地环境稳定运行。"
+      },
+      "labels": {
+        "riskBlocked": false,
+        "rankingGroup": "engineering-fit",
+        "expectedRank": 2,
+        "expectedScreeningRecommendation": "auto_prepare",
+        "expectedAuditRecommendation": "approve",
+        "mustHaveRequirements": [
+          { "text": "JavaScript", "expectedStatus": "covered" },
+          { "text": "自动化", "expectedStatus": "covered" },
+          { "text": "数据采集", "expectedStatus": "covered" }
+        ]
+      }
+    },
+    {
+      "id": "job-java-weak",
+      "profileId": "profile-engineering-01",
+      "job": {
+        "title": "Java后端工程师",
+        "company": "匿名企业软件公司",
+        "location": "杭州",
+        "salary": "面议",
+        "experience": "不限",
+        "education": "本科",
+        "tags": ["Java", "Spring Boot", "MySQL"],
+        "welfare": [],
+        "description": "负责 Java 企业应用开发和维护，熟悉 Spring Boot、MySQL、消息队列和微服务治理。参与接口设计、性能测试、线上问题排查及发布流程，要求具备扎实的 Java 基础。"
+      },
+      "labels": {
+        "riskBlocked": false,
+        "rankingGroup": "engineering-fit",
+        "expectedRank": 3,
+        "expectedScreeningRecommendation": "review_needed",
+        "expectedAuditRecommendation": "",
+        "mustHaveRequirements": []
+      }
+    }
+  ],
+  "claimCases": [
+    {
+      "id": "claim-product-supported-and-forbidden",
+      "profileId": "profile-product-01",
+      "resumeFields": {
+        "summary": "围绕岗位采集、风险门禁、匹配评分和定制简历搭建本地工作流。",
+        "skills": ["JavaScript"],
+        "projects": [
+          {
+            "title": "本地岗位工作流",
+            "role": "产品设计与开发",
+            "skills": ["JavaScript"],
+            "bullets": [
+              "围绕岗位采集、风险门禁、匹配评分和定制简历搭建本地工作流。",
+              "主导公司商业化增长，年度收入提升300%。"
+            ]
+          }
+        ],
+        "education": [],
+        "awards": []
+      },
+      "sourceMapping": [
+        { "resumeField": "summary", "sourceType": "experience", "sourceId": 1102, "sourceFact": "围绕岗位采集、风险门禁、匹配评分和定制简历搭建本地工作流。" },
+        { "resumeField": "skills[0]", "sourceType": "skill", "sourceId": 1206, "sourceFact": "JavaScript" },
+        { "resumeField": "projects[0].title", "sourceType": "experience", "sourceId": 1102, "sourceFact": "本地岗位工作流" },
+        { "resumeField": "projects[0].role", "sourceType": "experience", "sourceId": 1102, "sourceFact": "产品设计与开发" },
+        { "resumeField": "projects[0].skills[0]", "sourceType": "experience", "sourceId": 1102, "sourceFact": "JavaScript" },
+        { "resumeField": "projects[0].bullets[0]", "sourceType": "experience", "sourceId": 1102, "sourceFact": "围绕岗位采集、风险门禁、匹配评分和定制简历搭建本地工作流。" }
+      ],
+      "labels": [
+        { "field": "summary", "policy": "allowed", "expectedStatus": "SUPPORTED" },
+        { "field": "projects[0].bullets[0]", "policy": "allowed", "expectedStatus": "SUPPORTED" },
+        { "field": "projects[0].bullets[1]", "policy": "forbidden", "expectedStatus": ["NEEDS_USER_CONFIRMATION", "UNSUPPORTED"] }
+      ]
+    },
+    {
+      "id": "claim-engineering-supported-and-forbidden",
+      "profileId": "profile-engineering-01",
+      "resumeFields": {
+        "summary": "使用 Node.js 和 SQLite 实现任务状态、幂等键和审计事件持久化。",
+        "skills": ["Node.js", "SQLite"],
+        "projects": [
+          {
+            "title": "本地任务与证据服务",
+            "role": "后端开发",
+            "skills": ["Node.js", "SQLite"],
+            "bullets": [
+              "设计 REST API、输入校验、错误码和失败重试策略。",
+              "独立架构千万级并发平台并将成本降低80%。"
+            ]
+          }
+        ],
+        "education": [],
+        "awards": []
+      },
+      "sourceMapping": [
+        { "resumeField": "summary", "sourceType": "experience", "sourceId": 2102, "sourceFact": "使用 Node.js 和 SQLite 实现任务状态、幂等键和审计事件持久化。" },
+        { "resumeField": "skills[0]", "sourceType": "skill", "sourceId": 2201, "sourceFact": "Node.js" },
+        { "resumeField": "skills[1]", "sourceType": "skill", "sourceId": 2202, "sourceFact": "SQLite" },
+        { "resumeField": "projects[0].title", "sourceType": "experience", "sourceId": 2102, "sourceFact": "本地任务与证据服务" },
+        { "resumeField": "projects[0].role", "sourceType": "experience", "sourceId": 2102, "sourceFact": "后端开发" },
+        { "resumeField": "projects[0].skills[0]", "sourceType": "experience", "sourceId": 2102, "sourceFact": "Node.js" },
+        { "resumeField": "projects[0].skills[1]", "sourceType": "experience", "sourceId": 2102, "sourceFact": "SQLite" },
+        { "resumeField": "projects[0].bullets[0]", "sourceType": "experience", "sourceId": 2102, "sourceFact": "设计 REST API、输入校验、错误码和失败重试策略。" }
+      ],
+      "labels": [
+        { "field": "summary", "policy": "allowed", "expectedStatus": "SUPPORTED" },
+        { "field": "projects[0].bullets[0]", "policy": "allowed", "expectedStatus": "SUPPORTED" },
+        { "field": "projects[0].bullets[1]", "policy": "forbidden", "expectedStatus": ["NEEDS_USER_CONFIRMATION", "UNSUPPORTED"] }
+      ]
+    }
+  ],
+  "auditCases": [
+    {
+      "id": "audit-approve-supported",
+      "profileId": "profile-product-01",
+      "job": { "title": "AI产品经理" },
+      "screening": { "matchScore": 88, "riskScore": 20, "recommendation": "auto_prepare" },
+      "resumeFields": {
+        "summary": "基于已确认经历生成的岗位版简历。",
+        "skills": ["产品设计"],
+        "projects": [
+          { "title": "本地岗位工作流", "bullets": ["围绕岗位采集、风险门禁、匹配评分和定制简历搭建本地工作流。"] }
+        ]
+      },
+      "sourceMapping": [
+        { "resumeField": "summary", "sourceType": "profile", "sourceId": null, "sourceFact": "已确认用户画像" },
+        { "resumeField": "projects[0].title", "sourceType": "experience", "sourceId": 1102, "sourceFact": "本地岗位工作流" },
+        { "resumeField": "projects[0].bullets[0]", "sourceType": "experience", "sourceId": 1102, "sourceFact": "围绕岗位采集、风险门禁、匹配评分和定制简历搭建本地工作流。" }
+      ],
+      "unsupportedClaims": [],
+      "renderMetadata": { "renderQuality": { "ok": true, "warnings": [] } },
+      "expectedRecommendation": "approve"
+    },
+    {
+      "id": "audit-revise-page-limit",
+      "profileId": "profile-product-01",
+      "job": { "title": "AI产品经理" },
+      "screening": { "matchScore": 88, "riskScore": 20, "recommendation": "auto_prepare" },
+      "resumeFields": {
+        "summary": "基于已确认经历生成的岗位版简历。",
+        "__repeatSummary": { "text": "这是一段用于验证两页限制的匿名已确认经历描述。", "times": 180 },
+        "skills": ["产品设计"],
+        "projects": []
+      },
+      "sourceMapping": [
+        { "resumeField": "summary", "sourceType": "profile", "sourceId": null, "sourceFact": "已确认用户画像" }
+      ],
+      "unsupportedClaims": [],
+      "renderMetadata": { "renderQuality": { "ok": true, "warnings": [] } },
+      "expectedRecommendation": "revise"
+    },
+    {
+      "id": "audit-block-unsupported",
+      "profileId": "profile-engineering-01",
+      "job": { "title": "Node.js后端工程师" },
+      "screening": { "matchScore": 90, "riskScore": 15, "recommendation": "auto_prepare" },
+      "resumeFields": {
+        "summary": "包含未被事实库支持的关键表述。",
+        "skills": ["Node.js"],
+        "projects": [
+          { "title": "未知商业化项目", "bullets": ["独立架构千万级并发平台并将成本降低80%。"] }
+        ]
+      },
+      "sourceMapping": [],
+      "unsupportedClaims": ["独立架构千万级并发平台并将成本降低80%。"],
+      "renderMetadata": { "renderQuality": { "ok": true, "warnings": [] } },
+      "expectedRecommendation": "block"
+    }
+  ]
+}

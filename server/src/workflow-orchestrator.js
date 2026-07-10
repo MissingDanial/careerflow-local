@@ -569,6 +569,8 @@ function planExecutionPackage(context) {
     }, action("PREPARE_MANUAL_EXECUTION_PACKAGE", "EXECUTION_PACKAGE", {
       priority: "medium",
       label: "Prepare local manual execution package",
+      method: "POST",
+      endpoint: `/api/applications/${context.application.id}/execution-package`,
       noRealBossAction: true,
       blocksRealUpload: true,
       blocksRealSubmit: true

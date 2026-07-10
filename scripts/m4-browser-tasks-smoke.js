@@ -318,6 +318,7 @@ async function runApiChecks(dataDir) {
 function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
+  const migrationSql = read("server/migrations/004_browser_tasks.sql");
   const packageJson = read("package.json");
   return {
     checks: {
@@ -326,7 +327,7 @@ function runWiringChecks() {
       serverExposesBrowserTaskDiagnostics: serverJs.includes('url.pathname === "/api/browser-tasks/diagnostics"') && serverJs.includes("getBrowserTaskDiagnostics"),
       serverExposesBrowserTaskDetail: serverJs.includes('/api/browser-tasks') && serverJs.includes('browserTaskMatch'),
       serverExposesBrowserTaskTransition: serverJs.includes('browserTaskTransitionMatch') && serverJs.includes('transitionBrowserTask'),
-      storeDefinesBrowserTaskTable: storeJs.includes("CREATE TABLE IF NOT EXISTS browser_tasks"),
+      storeDefinesBrowserTaskTable: migrationSql.includes("CREATE TABLE IF NOT EXISTS browser_tasks"),
       storeDefinesBrowserTaskStateMachine: storeJs.includes("BROWSER_TASK_TRANSITIONS") && storeJs.includes("canTransitionBrowserTask"),
       storeDefinesBrowserTaskClaim: storeJs.includes("claimBrowserTask(options") && storeJs.includes("status = 'QUEUED'"),
       storeDefinesBrowserTaskDiagnostics: storeJs.includes("getBrowserTaskDiagnostics") && storeJs.includes("buildBrowserTaskFailureEvent"),

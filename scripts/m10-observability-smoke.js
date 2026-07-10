@@ -114,7 +114,7 @@ async function runApiChecks(port) {
 
   return {
     checks: {
-      apiStatsExposeSchemaV8AndCounts: stats.schemaVersion === 8
+      apiStatsExposeObservabilityCounts: stats.schemaVersion >= 8
         && stats.workflowEventCount >= 1
         && typeof stats.openWorkflowErrorCount === "number",
       apiTimelineIncludesAgentBrowserAndWorkflow: timeline.items.some((item) => item.sourceType === "agent_run")
@@ -149,6 +149,7 @@ function runWiringChecks() {
   const packageJson = read("package.json");
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
+  const migrationSql = read("server/migrations/008_workflow_observability.sql");
   const readme = read("README.md");
   const docsWorkflow = read("docs/03_AGENT_WORKFLOW.md");
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
@@ -158,7 +159,7 @@ function runWiringChecks() {
       serverExposesObservabilityEndpoints: serverJs.includes("/api/workflow-events")
         && serverJs.includes("/api/workflow-errors")
         && serverJs.includes("/timeline"),
-      storeDefinesWorkflowEventsAndTimeline: storeJs.includes("CREATE TABLE IF NOT EXISTS workflow_events")
+      storeDefinesWorkflowEventsAndTimeline: migrationSql.includes("CREATE TABLE IF NOT EXISTS workflow_events")
         && storeJs.includes("getApplicationTimeline")
         && storeJs.includes("resolveWorkflowError")
         && storeJs.includes("recordWorkflowEvent"),

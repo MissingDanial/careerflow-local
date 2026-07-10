@@ -60,6 +60,8 @@ function runStoreChecks(dataDir) {
       toStatus: "SCORED",
       eventType: "SCREENING_COMPLETED",
       reason: "m4_smoke",
+      idempotencyKey: "m4:store:scored",
+      evidence: operatorEvidence("m4 store transition smoke"),
       metadata: { score: 82 }
     });
     const transitionedApplications = store.getApplications();
@@ -147,6 +149,8 @@ async function runApiChecks(dataDir) {
       toStatus: "SCORED",
       eventType: "SCREENING_COMPLETED",
       reason: "api_smoke",
+      idempotencyKey: "m4:api:scored",
+      evidence: operatorEvidence("m4 api transition smoke"),
       metadata: { score: 88 }
     });
     const transitionedApplications = await requestJson(port, "GET", "/api/applications?limit=10");
@@ -184,13 +188,15 @@ async function runApiChecks(dataDir) {
 function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
+  const migrationSql = read("server/migrations/003_applications.sql");
   const packageJson = read("package.json");
   return {
     checks: {
       serverExposesApplicationsEndpoint: serverJs.includes('url.pathname === "/api/applications"'),
       serverExposesApplicationEventsEndpoint: serverJs.includes('url.pathname === "/api/application-events"'),
       serverExposesTransitionEndpoint: serverJs.includes('/api/applications') && serverJs.includes('/transition'),
-      storeDefinesApplicationTables: storeJs.includes("CREATE TABLE IF NOT EXISTS applications") && storeJs.includes("CREATE TABLE IF NOT EXISTS application_events"),
+      storeDefinesApplicationTables: migrationSql.includes("CREATE TABLE IF NOT EXISTS applications")
+        && migrationSql.includes("CREATE TABLE IF NOT EXISTS application_events"),
       storeAdvancesStatus: storeJs.includes("advanceApplicationStatus") && storeJs.includes("DETAIL_CAPTURED"),
       storeDefinesTransitionService: storeJs.includes("transitionApplication(applicationId") && storeJs.includes("canTransitionApplication"),
       packageRunsThisSmoke: packageJson.includes("m4-applications-smoke.js")
@@ -214,6 +220,14 @@ function createPayload({ jobId = "m4-application-one", title = "Workflow PM", de
         description
       }
     ]
+  };
+}
+
+function operatorEvidence(rationale) {
+  return {
+    type: "operator_override",
+    actor: "m4-applications-smoke",
+    rationale
   };
 }
 

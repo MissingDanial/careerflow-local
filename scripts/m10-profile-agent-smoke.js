@@ -95,6 +95,7 @@ async function runApiChecks(port, dataDir) {
     fileName: "m10-profile-agent-resume.txt",
     rawText: sampleResumeText()
   });
+  const missingContext = await requestJson(port, "GET", "/api/profile/career-context");
   const drafts = await requestJson(port, "POST", `/api/profile/resume-sources/${resume.id}/drafts`, {});
   const pendingBefore = await requestJson(port, "GET", "/api/profile/fact-drafts?status=PENDING&limit=100");
   const generated = await requestJson(port, "POST", "/api/profile/career-context", {
@@ -108,24 +109,53 @@ async function runApiChecks(port, dataDir) {
   });
   const fetched = await requestJson(port, "GET", "/api/profile/career-context");
   const pendingAfter = await requestJson(port, "GET", "/api/profile/fact-drafts?status=PENDING&limit=100");
+  const confirmableDraft = pendingAfter.drafts.find((draft) => draft.draftType !== "question");
+  if (!confirmableDraft) {
+    throw new Error("Expected at least one confirmable profile fact draft");
+  }
+  await sleep(20);
+  await requestJson(port, "POST", `/api/profile/fact-drafts/${confirmableDraft.id}/confirm`, {
+    content: confirmableDraft.content || {}
+  });
+  const staleContext = await requestJson(port, "GET", "/api/profile/career-context");
+  const regenerated = await requestJson(port, "POST", "/api/profile/career-context", {
+    resumeSourceId: resume.id,
+    answers: [
+      {
+        id: "target_roles_missing",
+        answer: "优先 AI 产品、AI 产品工程和产品经理。"
+      }
+    ]
+  });
   const agentRuns = await requestJson(port, "GET", "/api/agent-runs?limit=20");
   const workflowEvents = await requestJson(port, "GET", "/api/workflow-events?limit=50");
   const workflowErrors = await requestJson(port, "GET", "/api/workflow-errors?sourceType=agent_run&limit=50");
   const stats = await requestJson(port, "GET", "/api/stats");
   const contextPath = path.join(dataDir, "career_context", "career_agent_context.md");
+  const graphSource = read("server/src/resume-workflow-graph.js");
 
   return {
     checks: {
+      apiCareerContextStartsMissing: missingContext.careerContext.exists === false
+        && missingContext.freshness?.status === "MISSING",
       apiCreatesPendingDrafts: drafts.created > 0
         && pendingBefore.drafts.length === drafts.created,
       apiGeneratesCareerContextFile: generated.ok === true
         && generated.careerContext.file
         && fs.existsSync(contextPath)
-        && fs.readFileSync(contextPath, "utf8").includes("# Career Agent Context"),
+        && fs.readFileSync(contextPath, "utf8").includes("# Career Agent Context")
+        && generated.freshness?.status === "FRESH",
       apiReadsCareerContextFile: fetched.careerContext.exists === true
-        && fetched.careerContext.markdown.includes("后续 Agent 必须追问的问题"),
+        && fetched.careerContext.markdown.includes("后续 Agent 必须追问的问题")
+        && fetched.freshness?.status === "FRESH",
       apiKeepsPendingDraftsPending: pendingAfter.drafts.length === pendingBefore.drafts.length
         && pendingAfter.drafts.every((draft) => draft.status === "PENDING"),
+      apiMarksCareerContextStaleAfterFactChange: staleContext.freshness?.status === "STALE"
+        && staleContext.freshness?.latestProfileChangedAt
+        && staleContext.freshness?.staleReasons?.includes("profile_changed_after_career_context"),
+      apiRegeneratesFreshCareerContextAfterFactChange: regenerated.freshness?.status === "FRESH",
+      resumeWorkflowDoesNotImportProfileAgent: !/require\(["']\.\/profile-agent["']\)/.test(graphSource)
+        && !graphSource.includes("ProfileAgent"),
       apiRecordsProfileAgentRun: agentRuns.runs.some((run) => run.agentName === "ProfileAgent"
         && run.step === "generate_career_context"
         && run.status === "SUCCEEDED"),
@@ -143,6 +173,8 @@ async function runApiChecks(port, dataDir) {
       pendingDraftsAfter: pendingAfter.drafts.length,
       contextFile: generated.careerContext.file?.filePath || "",
       missingQuestions: generated.missingQuestions.length,
+      staleStatusAfterConfirm: staleContext.freshness?.status || "",
+      regeneratedFreshness: regenerated.freshness?.status || "",
       workflowEvents: workflowEvents.events.length
     }
   };
@@ -217,8 +249,7 @@ function runWiringChecks() {
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
   return {
     checks: {
-      packageRunsProfileAgentSmokeAndCheck: packageJson.includes("server/src/profile-agent.js")
-        && packageJson.includes("server/src/services/profile-service.js")
+      packageRunsProfileAgentSmokeAndCheck: packageJson.includes("check:syntax")
         && packageJson.includes("m10:profile-agent:smoke"),
       serverExposesCareerContextEndpoints: serverJs.includes("/api/profile/career-context")
         && serverJs.includes("profileService.generateCareerContext")
@@ -339,7 +370,7 @@ function requestJson(port, method, pathname, body = null) {
           return;
         }
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          reject(new Error(data?.error || `HTTP ${response.statusCode}`));
+          reject(new Error(data?.error || data?.message || `HTTP ${response.statusCode}: ${text}`));
           return;
         }
         resolve(data);

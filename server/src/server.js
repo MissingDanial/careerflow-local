@@ -12,9 +12,12 @@ const { runClaimVerifier } = require("./claim-verifier");
 const { runResumeRevisionAgent } = require("./resume-revision-agent");
 const { runMessageAgent } = require("./message-agent");
 const { renderResumeDocx } = require("./document-renderer");
+const { DEFAULT_RESUME_TEMPLATE, listResumeTemplates } = require("./resume-template-registry");
 const { planApplicationWorkflow } = require("./workflow-orchestrator");
 const { createProfileService } = require("./services/profile-service");
 const { createResumeWorkflowService } = require("./services/resume-workflow-service");
+const { createExecutionPackageService } = require("./services/execution-package-service");
+const { createSubmissionResultService } = require("./services/submission-result-service");
 const {
   httpError,
   structuredError,
@@ -28,6 +31,8 @@ const DATA_DIR = process.env.BOSS_DATA_DIR || path.join(__dirname, "..", "data")
 const store = createJobStore({ dataDir: DATA_DIR });
 const profileService = createProfileService({ store, dataDir: DATA_DIR });
 const resumeWorkflowService = createResumeWorkflowService({ store, dataDir: DATA_DIR });
+const executionPackageService = createExecutionPackageService({ store, dataDir: DATA_DIR });
+const submissionResultService = createSubmissionResultService({ store, dataDir: DATA_DIR });
 
 const server = http.createServer(async (request, response) => {
   setCors(response);
@@ -226,6 +231,30 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/workflow-runs") {
+      sendJson(response, 200, resumeWorkflowService.getWorkflowRuns({
+        applicationId: url.searchParams.get("applicationId") || "",
+        limit: Number(url.searchParams.get("limit") || 50)
+      }));
+      return;
+    }
+
+    const workflowRunMatch = url.pathname.match(/^\/api\/workflow-runs\/([0-9]+)$/);
+    if (request.method === "GET" && workflowRunMatch) {
+      sendJson(response, 200, resumeWorkflowService.getWorkflowRun(Number(workflowRunMatch[1])));
+      return;
+    }
+
+    const workflowReplayMatch = url.pathname.match(/^\/api\/workflow-runs\/([0-9]+)\/replay$/);
+    if (request.method === "POST" && workflowReplayMatch) {
+      const payload = await readJson(request);
+      sendJson(response, 200, await resumeWorkflowService.replayWorkflowRun(
+        Number(workflowReplayMatch[1]),
+        payload
+      ));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/workflow-events") {
       sendJson(response, 200, store.getWorkflowEvents({
         applicationId: url.searchParams.get("applicationId") || "",
@@ -389,6 +418,14 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/resume-templates") {
+      sendJson(response, 200, {
+        defaultTemplate: DEFAULT_RESUME_TEMPLATE,
+        templates: listResumeTemplates()
+      });
+      return;
+    }
+
     const prepareResumeMatch = url.pathname.match(/^\/api\/applications\/([0-9]+)\/prepare-resume$/);
     if (request.method === "POST" && prepareResumeMatch) {
       const payload = await readJson(request);
@@ -400,6 +437,75 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && prepareGreetingMatch) {
       const payload = await readJson(request);
       sendJson(response, 200, await prepareGreeting(Number(prepareGreetingMatch[1]), payload));
+      return;
+    }
+
+    const executionPackageMatch = url.pathname.match(/^\/api\/applications\/([0-9]+)\/execution-package$/);
+    if (request.method === "GET" && executionPackageMatch) {
+      sendJson(response, 200, executionPackageService.readPackage(Number(executionPackageMatch[1]), {
+        requestedBy: url.searchParams.get("requestedBy") || "user"
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && executionPackageMatch) {
+      const payload = await readJson(request);
+      sendJson(response, 200, executionPackageService.preparePackage(Number(executionPackageMatch[1]), {
+        requestedBy: payload.requestedBy || payload.reviewer || "user"
+      }));
+      return;
+    }
+
+    const executionPackageReviewMatch = url.pathname.match(/^\/api\/applications\/([0-9]+)\/execution-package\/review$/);
+    if (request.method === "POST" && executionPackageReviewMatch) {
+      const payload = await readJson(request);
+      sendJson(response, 200, executionPackageService.reviewPackage(Number(executionPackageReviewMatch[1]), {
+        decision: payload.decision || payload.status || "",
+        reviewer: payload.reviewer || payload.approver || "user",
+        note: payload.note || payload.reason || "",
+        requireArchive: payload.requireArchive !== false,
+        noRealBossAction: true
+      }));
+      return;
+    }
+
+    const executionChecklistMatch = url.pathname.match(/^\/api\/applications\/([0-9]+)\/execution-checklist$/);
+    if (request.method === "GET" && executionChecklistMatch) {
+      sendJson(response, 200, executionPackageService.readChecklist(Number(executionChecklistMatch[1]), {
+        requestedBy: url.searchParams.get("requestedBy") || "user",
+        requireArchive: url.searchParams.get("requireArchive") !== "0"
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && executionChecklistMatch) {
+      const payload = await readJson(request);
+      sendJson(response, 200, executionPackageService.recordChecklistStep(Number(executionChecklistMatch[1]), {
+        stepAction: payload.stepAction || payload.action || "",
+        decision: payload.decision || payload.status || "",
+        note: payload.note || payload.reason || "",
+        evidenceUrl: payload.evidenceUrl || payload.url || "",
+        reviewer: payload.reviewer || payload.operator || "user",
+        requestedBy: payload.requestedBy || payload.reviewer || "user",
+        noRealBossAction: true
+      }));
+      return;
+    }
+
+    const submissionEvidenceMatch = url.pathname.match(/^\/api\/applications\/([0-9]+)\/submission-evidence$/);
+    if (request.method === "GET" && submissionEvidenceMatch) {
+      sendJson(response, 200, submissionResultService.getEvidence(Number(submissionEvidenceMatch[1]), {
+        limit: Number(url.searchParams.get("limit") || 20)
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && submissionEvidenceMatch) {
+      const payload = await readJson(request);
+      sendJson(response, 200, submissionResultService.recordEvidence(Number(submissionEvidenceMatch[1]), {
+        ...payload,
+        noRealBossAction: true
+      }));
       return;
     }
 
@@ -630,6 +736,12 @@ async function screenApplication(applicationId, payload = {}) {
         toStatus: "NEEDS_USER_REVIEW",
         eventType: "SCREENING_FAILED",
         reason: error.code || "SCREENING_AGENT_FAILED",
+        evidence: {
+          type: "failure",
+          sourceType: "agent_run",
+          sourceId: finishedRun.id,
+          errorCode: error.code || "SCREENING_AGENT_FAILED"
+        },
         metadata: {
           agentRunId: finishedRun.id,
           error: structuredError(error)
@@ -890,6 +1002,12 @@ async function prepareResume(applicationId, payload = {}) {
         toStatus: "NEEDS_USER_REVIEW",
         eventType: "RESUME_AGENT_FAILED",
         reason: error.code || "RESUME_AGENT_FAILED",
+        evidence: {
+          type: "failure",
+          sourceType: "agent_run",
+          sourceId: finishedRun.id,
+          errorCode: error.code || "RESUME_AGENT_FAILED"
+        },
         metadata: {
           agentRunId: finishedRun.id,
           error: structuredError(error)
@@ -1315,6 +1433,12 @@ async function auditResume(resumeVersionId, payload = {}) {
         toStatus: "NEEDS_USER_REVIEW",
         eventType: "AUDIT_AGENT_FAILED",
         reason: error.code || "AUDIT_AGENT_FAILED",
+        evidence: {
+          type: "failure",
+          sourceType: "agent_run",
+          sourceId: finishedRun.id,
+          errorCode: error.code || "AUDIT_AGENT_FAILED"
+        },
         metadata: {
           resumeVersionId,
           agentRunId: finishedRun.id,
@@ -1430,6 +1554,12 @@ async function prepareGreeting(applicationId, payload = {}) {
         toStatus: "NEEDS_USER_REVIEW",
         eventType: "MESSAGE_AGENT_FAILED",
         reason: error.code || "MESSAGE_AGENT_FAILED",
+        evidence: {
+          type: "failure",
+          sourceType: "agent_run",
+          sourceId: finishedRun.id,
+          errorCode: error.code || "MESSAGE_AGENT_FAILED"
+        },
         metadata: {
           agentRunId: finishedRun.id,
           error: structuredError(error)

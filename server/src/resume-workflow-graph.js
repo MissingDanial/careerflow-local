@@ -7,14 +7,20 @@ const { runClaimVerifier } = require("./claim-verifier");
 const { runResumeRevisionAgent } = require("./resume-revision-agent");
 const { runAuditAgent } = require("./audit-agent");
 const { renderResumeDocx } = require("./document-renderer");
+const { DEFAULT_RESUME_TEMPLATE } = require("./resume-template-registry");
 
-const GRAPH_VERSION = "m10.4.resume-workflow-graph.v1";
+const GRAPH_VERSION = "m13.3.resume-workflow-graph.v2";
+const PROMPT_VERSION = "m13.3.resume-workflow.prompts.v1";
+const AGENT_VERSION = "m13.3.resume-workflow.agents.v1";
 const GRAPH_AGENT_NAME = "ResumeWorkflowGraph";
 const DEFAULT_MAX_REVISIONS = 1;
 
 const ResumeWorkflowState = Annotation.Root({
   store: Annotation({ reducer: (_left, right) => right, default: () => null }),
   applicationId: Annotation({ reducer: (_left, right) => right, default: () => 0 }),
+  workflowRunId: Annotation({ reducer: (_left, right) => right, default: () => 0 }),
+  workflowInput: Annotation({ reducer: (_left, right) => right, default: () => ({}) }),
+  inputManifest: Annotation({ reducer: (_left, right) => right, default: () => ({}) }),
   mode: Annotation({ reducer: (_left, right) => right, default: () => "rules" }),
   modelConfig: Annotation({ reducer: (_left, right) => right, default: () => ({}) }),
   renderDocx: Annotation({ reducer: (_left, right) => right, default: () => true }),
@@ -46,6 +52,33 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
   if (!applicationId) {
     throw workflowError("RESUME_WORKFLOW_APPLICATION_REQUIRED", "A valid application id is required.");
   }
+  const mode = normalizeMode(input.mode || options.mode || "rules");
+  const modelConfig = input.modelConfig || options.modelConfig || {};
+  const userRules = input.userRules || options.userRules || {};
+  const maxRevisions = Math.max(
+    0,
+    Math.min(3, Number(input.maxRevisions ?? options.maxRevisions ?? DEFAULT_MAX_REVISIONS) || 0)
+  );
+  const renderDocx = input.renderDocx ?? options.renderDocx ?? true;
+  const renderOptions = input.renderOptions || options.renderOptions || {};
+  const workflowRunSnapshot = store.startWorkflowRun({
+    applicationId,
+    workflowName: GRAPH_AGENT_NAME,
+    mode,
+    graphVersion: GRAPH_VERSION,
+    promptVersion: PROMPT_VERSION,
+    agentVersion: AGENT_VERSION,
+    modelConfig,
+    userRules,
+    executionOptions: {
+      maxRevisions,
+      renderDocx
+    },
+    renderOptions
+  });
+  const workflowRunId = workflowRunSnapshot.workflowRun.id;
+  const workflowInput = store.getWorkflowRunInput(workflowRunId);
+  const inputManifest = workflowInput.manifest;
 
   recordWorkflowEvent(store, {
     applicationId,
@@ -57,6 +90,7 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
     message: `ResumeWorkflowGraph started for application ${applicationId}.`,
     metadata: {
       graphVersion: GRAPH_VERSION,
+      ...inputManifest,
       noRealBossAction: true,
       noBrowserTaskCreated: true
     }
@@ -67,12 +101,15 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
     const state = await graph.invoke({
       store,
       applicationId,
-      mode: normalizeMode(input.mode || options.mode || "rules"),
-      modelConfig: input.modelConfig || options.modelConfig || {},
-      renderDocx: input.renderDocx ?? options.renderDocx ?? true,
-      renderOptions: input.renderOptions || options.renderOptions || {},
-      userRules: input.userRules || options.userRules || {},
-      maxRevisions: Math.max(0, Math.min(3, Number(input.maxRevisions ?? options.maxRevisions ?? DEFAULT_MAX_REVISIONS) || 0))
+      workflowRunId,
+      workflowInput,
+      inputManifest,
+      mode,
+      modelConfig,
+      renderDocx: Boolean(workflowInput.executionOptions.renderDocx),
+      renderOptions: workflowInput.renderOptions,
+      userRules: workflowInput.userRules,
+      maxRevisions: Number(workflowInput.executionOptions.maxRevisions || 0)
     }, {
       recursionLimit: 20
     });
@@ -91,11 +128,15 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
       errorMessage: ok ? "" : state.stopReason || "Resume workflow did not produce an audited resume.",
       metadata: summarizeGraphState(state)
     });
-    return {
+    const result = {
       ok,
       storage: "sqlite",
       graphVersion: GRAPH_VERSION,
+      promptVersion: PROMPT_VERSION,
+      agentVersion: AGENT_VERSION,
       applicationId,
+      workflowRunId,
+      inputSnapshot: inputManifest,
       stopReason: state.stopReason || "",
       revisionCount: state.revisionCount || 0,
       nodeEvents: state.nodeEvents || [],
@@ -107,6 +148,11 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
       resumeAudit: state.resumeAudit || null,
       rendered: state.rendered || null
     };
+    store.finishWorkflowRun(workflowRunId, {
+      status: ok ? "SUCCEEDED" : "STOPPED",
+      output: summarizeWorkflowOutput(result)
+    });
+    return result;
   } catch (error) {
     recordWorkflowEvent(store, {
       applicationId,
@@ -120,11 +166,20 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
       errorMessage: error.message || String(error),
       metadata: {
         graphVersion: GRAPH_VERSION,
+        ...inputManifest,
         error: structuredError(error),
         noRealBossAction: true,
         noBrowserTaskCreated: true
       }
     });
+    try {
+      store.finishWorkflowRun(workflowRunId, {
+        status: "FAILED",
+        error: structuredError(error)
+      });
+    } catch {
+      // Preserve the original graph failure.
+    }
     throw error;
   }
 }
@@ -170,6 +225,7 @@ function withNodeTelemetry(nodeName, handler) {
         message: `${GRAPH_AGENT_NAME} node ${nodeName} started.`,
         metadata: {
           graphVersion: GRAPH_VERSION,
+          ...snapshotTrace(state),
           nodeName,
           startedAt,
           revisionCount: state.revisionCount || 0
@@ -185,6 +241,7 @@ function withNodeTelemetry(nodeName, handler) {
         message: `${GRAPH_AGENT_NAME} node ${nodeName} succeeded.`,
         metadata: {
           graphVersion: GRAPH_VERSION,
+          ...snapshotTrace(state),
           nodeName,
           startedAt,
           finishedAt,
@@ -214,6 +271,7 @@ function withNodeTelemetry(nodeName, handler) {
         errorMessage: structured.message,
         metadata: {
           graphVersion: GRAPH_VERSION,
+          ...snapshotTrace(state),
           nodeName,
           startedAt,
           finishedAt,
@@ -227,9 +285,7 @@ function withNodeTelemetry(nodeName, handler) {
 }
 
 async function loadContextNode(state) {
-  const input = state.store.getApplicationScreeningInput(state.applicationId, {
-    userRules: state.userRules || {}
-  });
+  const input = state.workflowInput;
   return {
     application: input.application,
     job: input.job,
@@ -239,19 +295,11 @@ async function loadContextNode(state) {
 }
 
 async function screenApplicationNode(state) {
-  const latest = state.store.getLatestScreeningForApplication(state.applicationId);
-  if (latest && !state.userRules?.forceRescreen) {
-    return {
-      screening: latest,
-      stopReason: latest.recommendation === "skip" ? "screening_recommendation_skip" : ""
-    };
-  }
-  const screeningInput = state.store.getApplicationScreeningInput(state.applicationId, {
-    userRules: state.userRules || {}
-  });
+  const screeningInput = buildFrozenScreeningInput(state);
   const agentRun = state.store.startAgentRun({
     agentName: "ScreeningAgent",
     applicationId: state.applicationId,
+    workflowRunId: state.workflowRunId,
     step: "langgraph_score_job",
     provider: state.mode,
     input: {
@@ -259,7 +307,7 @@ async function screenApplicationNode(state) {
       job: screeningInput.job,
       profileSummary: summarizeProfileForTrace(screeningInput.profile),
       userRules: screeningInput.userRules,
-      graphVersion: GRAPH_VERSION
+      ...snapshotTrace(state)
     }
   });
   try {
@@ -283,9 +331,11 @@ async function screenApplicationNode(state) {
       agentRunId: finishedRun.id,
       provider: agentResult.provider,
       result: agentResult.result,
+      preserveApplicationStatusOnInvalidTransition: true,
       metadata: {
         generatedBy: GRAPH_AGENT_NAME,
         graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
         fallbackUsed: agentResult.fallbackUsed,
         fallbackReason: agentResult.fallbackReason || "",
         fallbackMessage: agentResult.fallbackMessage || "",
@@ -313,13 +363,11 @@ function routeAfterScreening(state) {
 }
 
 async function prepareResumeNode(state) {
-  const resumeInput = state.store.getApplicationResumeInput(state.applicationId, {
-    screeningId: state.screening?.id || "",
-    userRules: state.userRules || {}
-  });
+  const resumeInput = buildFrozenResumeInput(state, state.screening);
   const agentRun = state.store.startAgentRun({
     agentName: "ResumeAgent",
     applicationId: state.applicationId,
+    workflowRunId: state.workflowRunId,
     step: "langgraph_prepare_resume",
     provider: state.mode,
     input: {
@@ -327,7 +375,7 @@ async function prepareResumeNode(state) {
       job: resumeInput.job,
       screening: resumeInput.screening,
       profileSummary: summarizeProfileForTrace(resumeInput.profile),
-      graphVersion: GRAPH_VERSION
+      ...snapshotTrace(state)
     }
   });
   try {
@@ -352,6 +400,7 @@ async function prepareResumeNode(state) {
       metadata: {
         generatedBy: GRAPH_AGENT_NAME,
         graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
         nodeName: "prepare_resume",
         mode: state.mode
       }
@@ -380,12 +429,11 @@ async function prepareResumeNode(state) {
 
 async function evaluateFitNode(state) {
   const resumeVersion = assertResumeVersion(state.resumeVersion);
-  const resumeInput = state.store.getApplicationResumeInput(resumeVersion.applicationId, {
-    screeningId: resumeVersion.screeningId || ""
-  });
+  const resumeInput = buildFrozenResumeInput(state, state.screening);
   const agentRun = state.store.startAgentRun({
     agentName: "ResumeFitEvaluator",
     applicationId: resumeVersion.applicationId,
+    workflowRunId: state.workflowRunId,
     step: "langgraph_evaluate_resume_fit",
     provider: state.mode,
     input: {
@@ -393,7 +441,7 @@ async function evaluateFitNode(state) {
       application: resumeInput.application,
       job: resumeInput.job,
       resumeFields: resumeVersion.resumeFields,
-      graphVersion: GRAPH_VERSION
+      ...snapshotTrace(state)
     }
   });
   try {
@@ -421,6 +469,7 @@ async function evaluateFitNode(state) {
       metadata: {
         evaluatedBy: GRAPH_AGENT_NAME,
         graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
         mode: state.mode,
         revisionCount: state.revisionCount || 0
       }
@@ -439,6 +488,7 @@ async function evaluateFitNode(state) {
       errorMessage: saved.resumeFitEvaluation.blockers.length ? `${saved.resumeFitEvaluation.blockers.length} must-have JD requirement(s) are missing.` : "",
       metadata: {
         graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
         resumeVersionId: resumeVersion.id,
         resumeFitEvaluationId: saved.resumeFitEvaluation.id,
         noRealBossAction: true,
@@ -464,12 +514,11 @@ async function evaluateFitNode(state) {
 
 async function verifyClaimsNode(state) {
   const resumeVersion = assertResumeVersion(state.resumeVersion);
-  const resumeInput = state.store.getApplicationResumeInput(resumeVersion.applicationId, {
-    screeningId: resumeVersion.screeningId || ""
-  });
+  const resumeInput = buildFrozenResumeInput(state, state.screening);
   const agentRun = state.store.startAgentRun({
     agentName: "ClaimVerifier",
     applicationId: resumeVersion.applicationId,
+    workflowRunId: state.workflowRunId,
     step: "langgraph_verify_resume_claims",
     provider: state.mode,
     input: {
@@ -478,7 +527,7 @@ async function verifyClaimsNode(state) {
       profileSummary: summarizeProfileForTrace(resumeInput.profile),
       resumeFields: resumeVersion.resumeFields,
       sourceMapping: resumeVersion.sourceMapping,
-      graphVersion: GRAPH_VERSION
+      ...snapshotTrace(state)
     }
   });
   try {
@@ -507,6 +556,7 @@ async function verifyClaimsNode(state) {
       metadata: {
         verifiedBy: GRAPH_AGENT_NAME,
         graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
         mode: state.mode,
         revisionCount: state.revisionCount || 0
       }
@@ -527,6 +577,7 @@ async function verifyClaimsNode(state) {
         : "",
       metadata: {
         graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
         resumeVersionId: resumeVersion.id,
         resumeClaimVerificationId: saved.resumeClaimVerification.id,
         noRealBossAction: true,
@@ -586,12 +637,11 @@ function routeAfterRevisionDecision(state) {
 
 async function reviseResumeNode(state) {
   const resumeVersion = assertResumeVersion(state.resumeVersion);
-  const resumeInput = state.store.getApplicationResumeInput(resumeVersion.applicationId, {
-    screeningId: resumeVersion.screeningId || ""
-  });
+  const resumeInput = buildFrozenResumeInput(state, state.screening);
   const agentRun = state.store.startAgentRun({
     agentName: "ResumeRevisionAgent",
     applicationId: resumeVersion.applicationId,
+    workflowRunId: state.workflowRunId,
     step: "langgraph_revise_resume_from_checks",
     provider: state.mode,
     input: {
@@ -601,7 +651,7 @@ async function reviseResumeNode(state) {
       application: resumeInput.application,
       job: resumeInput.job,
       profileSummary: summarizeProfileForTrace(resumeInput.profile),
-      graphVersion: GRAPH_VERSION
+      ...snapshotTrace(state)
     }
   });
   try {
@@ -634,6 +684,7 @@ async function reviseResumeNode(state) {
       metadata: {
         generatedBy: GRAPH_AGENT_NAME,
         graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
         revisedFromVersionId: resumeVersion.id,
         resumeFitEvaluationId: state.resumeFitEvaluation?.id || null,
         resumeClaimVerificationId: state.resumeClaimVerification?.id || null,
@@ -659,6 +710,7 @@ async function reviseResumeNode(state) {
       errorMessage: actionCount ? "" : "No safe evidence-bound revision was available.",
       metadata: {
         graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
         baseResumeVersionId: resumeVersion.id,
         resumeVersionId: rendered.resumeVersion.id,
         actionCount,
@@ -691,12 +743,11 @@ async function reviseResumeNode(state) {
 
 async function auditResumeNode(state) {
   const resumeVersion = assertResumeVersion(state.resumeVersion);
-  const resumeInput = state.store.getApplicationResumeInput(resumeVersion.applicationId, {
-    screeningId: resumeVersion.screeningId || ""
-  });
+  const resumeInput = buildFrozenResumeInput(state, state.screening);
   const agentRun = state.store.startAgentRun({
     agentName: "AuditAgent",
     applicationId: resumeVersion.applicationId,
+    workflowRunId: state.workflowRunId,
     step: "langgraph_audit_resume",
     provider: state.mode,
     input: {
@@ -705,7 +756,7 @@ async function auditResumeNode(state) {
       job: resumeInput.job,
       screening: resumeInput.screening,
       profileSummary: summarizeProfileForTrace(resumeInput.profile),
-      graphVersion: GRAPH_VERSION
+      ...snapshotTrace(state)
     }
   });
   try {
@@ -738,6 +789,7 @@ async function auditResumeNode(state) {
       metadata: {
         auditedBy: GRAPH_AGENT_NAME,
         graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
         mode: state.mode
       }
     });
@@ -785,7 +837,7 @@ function withRenderMetadata(result = {}, renderOptions = {}) {
       ...(result.renderMetadata || {}),
       ...(result.renderHints || {}),
       maxPages: 2,
-      template: renderOptions.templateName || renderOptions.template || result.renderHints?.template || "boss-find-fixed-docx-v1",
+      template: renderOptions.templateName || renderOptions.template || result.renderHints?.template || DEFAULT_RESUME_TEMPLATE,
       referenceDocxPath: renderOptions.referenceDocxPath || "",
       photoPath: renderOptions.photoPath || "",
       graphVersion: GRAPH_VERSION
@@ -798,6 +850,39 @@ function assertResumeVersion(resumeVersion) {
     throw workflowError("RESUME_WORKFLOW_RESUME_VERSION_REQUIRED", "Resume version is required for this graph node.");
   }
   return resumeVersion;
+}
+
+function buildFrozenScreeningInput(state) {
+  return {
+    storage: "sqlite",
+    application: state.workflowInput.application,
+    job: state.workflowInput.job,
+    profile: state.workflowInput.profile,
+    userRules: state.workflowInput.userRules || {}
+  };
+}
+
+function buildFrozenResumeInput(state, screening) {
+  if (!screening) {
+    throw workflowError("RESUME_WORKFLOW_SCREENING_REQUIRED", "Frozen workflow input requires a screening result.");
+  }
+  return {
+    ...buildFrozenScreeningInput(state),
+    screening
+  };
+}
+
+function snapshotTrace(state = {}) {
+  const manifest = state.inputManifest || {};
+  return {
+    workflowRunId: state.workflowRunId || manifest.workflowRunId || null,
+    inputSnapshotId: manifest.inputSnapshotId || null,
+    profileSnapshotId: manifest.profileSnapshotId || null,
+    jobSnapshotId: manifest.jobSnapshotId || null,
+    promptVersion: manifest.promptVersion || PROMPT_VERSION,
+    agentVersion: manifest.agentVersion || AGENT_VERSION,
+    inputHash: manifest.inputHash || ""
+  };
 }
 
 function recordWorkflowEvent(store, input = {}) {
@@ -826,6 +911,9 @@ function recordWorkflowEvent(store, input = {}) {
 function summarizeGraphState(state = {}) {
   return {
     graphVersion: GRAPH_VERSION,
+    promptVersion: PROMPT_VERSION,
+    agentVersion: AGENT_VERSION,
+    ...snapshotTrace(state),
     applicationId: state.applicationId || null,
     screeningId: state.screening?.id || null,
     resumeVersionId: state.resumeVersion?.id || null,
@@ -835,6 +923,28 @@ function summarizeGraphState(state = {}) {
     revisionCount: state.revisionCount || 0,
     stopReason: state.stopReason || "",
     renderedFilePath: state.rendered?.filePath || state.resumeVersion?.filePath || "",
+    noRealBossAction: true,
+    noBrowserTaskCreated: true
+  };
+}
+
+function summarizeWorkflowOutput(result = {}) {
+  return {
+    ok: Boolean(result.ok),
+    graphVersion: result.graphVersion || GRAPH_VERSION,
+    promptVersion: result.promptVersion || PROMPT_VERSION,
+    agentVersion: result.agentVersion || AGENT_VERSION,
+    applicationId: result.applicationId || null,
+    workflowRunId: result.workflowRunId || null,
+    inputSnapshot: result.inputSnapshot || null,
+    stopReason: result.stopReason || "",
+    revisionCount: result.revisionCount || 0,
+    screening: result.screening || null,
+    resumeVersion: result.resumeVersion || null,
+    resumeFitEvaluation: result.resumeFitEvaluation || null,
+    resumeClaimVerification: result.resumeClaimVerification || null,
+    resumeAudit: result.resumeAudit || null,
+    rendered: result.rendered || null,
     noRealBossAction: true,
     noBrowserTaskCreated: true
   };
@@ -894,7 +1004,9 @@ function positiveInteger(value) {
 }
 
 module.exports = {
+  AGENT_VERSION,
   GRAPH_VERSION,
+  PROMPT_VERSION,
   buildResumeWorkflowGraph,
   runResumeWorkflowGraph
 };

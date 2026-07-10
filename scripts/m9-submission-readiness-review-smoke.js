@@ -196,7 +196,13 @@ async function seedResumeUnlocked(port, applicationId) {
     await requestJson(port, "POST", `/api/applications/${applicationId}/transition`, {
       toStatus,
       eventType,
-      reason: "m9_review_seed"
+      reason: "m9_review_seed",
+      idempotencyKey: `m9-review:${applicationId}:${toStatus}`,
+      evidence: {
+        type: "operator_override",
+        actor: "m9-submission-readiness-review-smoke",
+        rationale: `Seed ${toStatus} for readiness review smoke`
+      }
     });
   }
 }

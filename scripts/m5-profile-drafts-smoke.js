@@ -192,17 +192,18 @@ async function runApiChecks(dataDir) {
 function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
+  const migrationSql = read("server/migrations/005_candidate_profile.sql");
   const packageJson = read("package.json");
   return {
     checks: {
       serverExposesProfileDraftEndpoints: serverJs.includes("/api/profile/fact-drafts")
         && serverJs.includes("/drafts")
         && serverJs.includes("generateProfileFactDrafts"),
-      storeDefinesProfileDraftTable: storeJs.includes("CREATE TABLE IF NOT EXISTS profile_fact_drafts")
+      storeDefinesProfileDraftTable: migrationSql.includes("CREATE TABLE IF NOT EXISTS profile_fact_drafts")
         && storeJs.includes("confirmProfileFactDraft")
         && storeJs.includes("pendingFactDraftCount"),
       packageRunsProfileDraftSmoke: packageJson.includes("m5:drafts:smoke")
-        && packageJson.includes("server/src/profile-draft-generator.js")
+        && packageJson.includes("check:syntax")
     }
   };
 }

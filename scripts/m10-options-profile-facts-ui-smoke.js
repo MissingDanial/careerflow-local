@@ -22,6 +22,14 @@ async function main() {
   try {
     await page.addInitScript(() => {
       const calls = [];
+      let contextFreshness = {
+        status: "FRESH",
+        isFresh: true,
+        contextUpdatedAt: "2026-07-08T10:02:00.000Z",
+        latestProfileChangedAt: "2026-07-08T10:01:00.000Z",
+        latestProfileChangeSource: "fact_draft",
+        staleReasons: []
+      };
       let drafts = [
         {
           id: 101,
@@ -122,10 +130,19 @@ async function main() {
                     missingQuestions: careerQuestions
                   }
                 },
+                freshness: contextFreshness,
                 missingQuestions: careerQuestions
               }
             };
           case "GENERATE_CAREER_CONTEXT":
+            contextFreshness = {
+              status: "FRESH",
+              isFresh: true,
+              contextUpdatedAt: "2026-07-08T10:04:00.000Z",
+              latestProfileChangedAt: "2026-07-08T10:03:00.000Z",
+              latestProfileChangeSource: "fact_draft",
+              staleReasons: []
+            };
             return {
               response: {
                 ok: true,
@@ -137,6 +154,7 @@ async function main() {
                     missingQuestions: []
                   }
                 },
+                freshness: contextFreshness,
                 missingQuestions: []
               }
             };
@@ -172,6 +190,14 @@ async function main() {
             };
           case "CONFIRM_PROFILE_FACT_DRAFT":
             drafts = drafts.filter((draft) => draft.id !== Number(message.draftId));
+            contextFreshness = {
+              status: "STALE",
+              isFresh: false,
+              contextUpdatedAt: "2026-07-08T10:02:00.000Z",
+              latestProfileChangedAt: "2026-07-08T10:03:00.000Z",
+              latestProfileChangeSource: "experience",
+              staleReasons: ["profile_changed_after_career_context"]
+            };
             return {
               response: {
                 ok: true,
@@ -182,6 +208,14 @@ async function main() {
             };
           case "REJECT_PROFILE_FACT_DRAFT":
             drafts = drafts.filter((draft) => draft.id !== Number(message.draftId));
+            contextFreshness = {
+              status: "STALE",
+              isFresh: false,
+              contextUpdatedAt: "2026-07-08T10:04:00.000Z",
+              latestProfileChangedAt: "2026-07-08T10:05:00.000Z",
+              latestProfileChangeSource: "fact_draft",
+              staleReasons: ["profile_changed_after_career_context"]
+            };
             return {
               response: {
                 ok: true,
@@ -216,6 +250,10 @@ async function main() {
     await page.waitForFunction(() => document.querySelector("#status")?.textContent.includes("诊断已刷新"));
 
     const initialDraftText = await page.locator("#profileFactDrafts").innerText();
+    await page.fill("#profileAgentUserUpdate", "新增项目：ProfileAgent 画像入口，用于补充经历、目标岗位和风险约束，先生成待确认草稿。");
+    await page.click("#stageProfileAgentUpdate");
+    await page.waitForFunction(() => document.querySelector("#profileAgentUpdateStatus")?.textContent.includes("已生成"));
+    const portalStatus = await page.locator("#profileAgentUpdateStatus").innerText();
     await page.fill('textarea[data-question-id="pending_experience_100"]', "Boss Find 本地求职自动化项目，负责产品流程、Chrome 插件采集、Node.js 后端和 LangGraph 简历闭环。");
     await page.fill('textarea[data-question-id="skills_missing"]', "LangGraph、Node.js、SQLite、Chrome Extension、产品设计");
     await page.click("#generateProfileFactDrafts");
@@ -239,18 +277,26 @@ async function main() {
     const afterRejectText = await page.locator("#profileFactDrafts").innerText();
 
     const calls = await page.evaluate(() => window.__bossFindSmoke.calls);
-    const generateCall = calls.find((call) => call.type === "GENERATE_PROFILE_FACT_DRAFTS");
+    const portalGenerateCall = calls.find((call) => call.type === "GENERATE_PROFILE_FACT_DRAFTS"
+      && call.options?.answers?.some((answer) => answer.id === "profile_user_update"));
+    const generateCall = calls.find((call) => call.type === "GENERATE_PROFILE_FACT_DRAFTS"
+      && call.options?.answers?.some((answer) => answer.id === "pending_experience_100"));
     const confirmCall = calls.find((call) => call.type === "CONFIRM_PROFILE_FACT_DRAFT" && Number(call.draftId) === 101);
     const checks = {
       pageLoadedProfileFactPanel: initialDraftText.includes("#101")
         && initialDraftText.includes("Boss Find")
         && initialDraftText.includes("#102")
         && initialDraftText.includes("LangGraph"),
+      profilePortalStagesUserUpdate: Boolean(portalGenerateCall)
+        && portalGenerateCall.options.answers.length === 1
+        && portalGenerateCall.options.answers[0].answer.includes("ProfileAgent 画像入口")
+        && portalStatus.includes("已生成"),
       generateUsesCurrentAnswers: Boolean(generateCall)
         && Array.isArray(generateCall.options?.answers)
-        && generateCall.options.answers.length === 2
+        && generateCall.options.answers.length === 3
         && generateCall.options.answers.some((answer) => answer.id === "pending_experience_100" && answer.answer.includes("Boss Find"))
-        && generateCall.options.answers.some((answer) => answer.id === "skills_missing" && answer.answer.includes("LangGraph")),
+        && generateCall.options.answers.some((answer) => answer.id === "skills_missing" && answer.answer.includes("LangGraph"))
+        && generateCall.options.answers.some((answer) => answer.id === "profile_user_update" && answer.answer.includes("ProfileAgent 画像入口")),
       generateRefreshesPendingDrafts: afterGenerateText.includes("#103")
         && afterGenerateText.includes("目标岗位方向")
         && calls.filter((call) => call.type === "GET_PROFILE_FACT_DRAFTS").length >= 2,
@@ -262,7 +308,7 @@ async function main() {
         && afterConfirmText.includes("#102"),
       factChangeMarksCareerContextStale: staleText.includes("事实库已变更")
         && calls.some((call) => call.type === "GENERATE_CAREER_CONTEXT")
-        && freshText.includes("确认或拒绝事实草稿后"),
+        && freshText.includes("直接复用持久化画像"),
       rejectSendsExpectedMessage: calls.some((call) => call.type === "REJECT_PROFILE_FACT_DRAFT"
         && Number(call.draftId) === 102
         && call.options?.reason === "options_profile_fact_rejected")

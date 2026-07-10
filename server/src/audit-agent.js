@@ -9,19 +9,24 @@ function runAuditAgent(input = {}, options = {}) {
   const unsupportedClaims = collectUnsupportedClaims(context);
   const sourceIssues = auditSourceMapping(context);
   const pageEstimate = estimatePages(context.resumeFields);
+  const renderQuality = context.renderMetadata.renderQuality && typeof context.renderMetadata.renderQuality === "object"
+    ? context.renderMetadata.renderQuality
+    : null;
+  const renderQualityPassed = !renderQuality || renderQuality.ok !== false;
   const truthfulnessPassed = unsupportedClaims.length === 0 && sourceIssues.length === 0;
   const formatPassed = hasMinimumResumeShape(context.resumeFields);
   const pageLimitPassed = pageEstimate <= 2;
   const riskFlags = [
     ...unsupportedClaims.map((claim) => `Unsupported claim: ${claim}`),
     ...sourceIssues,
+    ...(renderQualityPassed ? [] : normalizeStringArray(renderQuality?.warnings).map((warning) => `Render QA: ${warning}`)),
     ...(pageLimitPassed ? [] : [`Estimated page count ${pageEstimate} exceeds 2.`]),
     ...(context.screening.recommendation === "skip" ? ["Screening recommendation is skip."] : [])
   ];
   const exaggerationRisk = truthfulnessPassed ? (riskFlags.length ? "medium" : "low") : "high";
-  const recommendation = truthfulnessPassed && formatPassed && pageLimitPassed && context.screening.recommendation !== "skip"
+  const recommendation = truthfulnessPassed && formatPassed && pageLimitPassed && renderQualityPassed && context.screening.recommendation !== "skip"
     ? "approve"
-    : truthfulnessPassed && formatPassed
+    : truthfulnessPassed && formatPassed && renderQualityPassed
       ? "revise"
       : "block";
 
@@ -42,8 +47,10 @@ function runAuditAgent(input = {}, options = {}) {
       recommendation,
       requiresUserConfirmation: recommendation !== "approve" || context.screening.riskScore >= 50,
       renderMetadata: {
+        ...context.renderMetadata,
         estimatedPages: pageEstimate,
-        maxPages: 2
+        maxPages: 2,
+        renderQualityPassed
       },
       riskFlags,
       metadata: {

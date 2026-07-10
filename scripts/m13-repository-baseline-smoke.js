@@ -1,0 +1,197 @@
+#!/usr/bin/env node
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+const { spawnSync } = require("child_process");
+const { TEST_TIERS } = require("./test-tiers");
+
+const ROOT = path.join(__dirname, "..");
+const packageJson = readJson("package.json");
+const sqliteStoreSource = readText("server/src/sqlite-store.js");
+const ciWorkflowSource = readText(".github/workflows/ci.yml");
+const developmentPlan = readText("docs/04_DEVELOPMENT_PLAN.md");
+const readme = readText("README.md");
+
+main();
+
+function main() {
+  const requiredPaths = [
+    ".gitignore",
+    "README.md",
+    "package-lock.json",
+    "extension/manifest.json",
+    "extension/src/background.js",
+    "extension/src/content.js",
+    "server/data/.gitkeep",
+    "server/src/server.js",
+    "server/src/sqlite-store.js",
+    "server/src/sqlite-migrations.js",
+    "server/src/services/application-transition-service.js",
+    "server/src/agent-evaluation-runner.js",
+    "server/src/resume-workflow-graph.js",
+    "evaluation/fixtures/m13-agent-evaluation.v1.json",
+    "scripts/check-js-syntax.js",
+    "scripts/run-agent-evaluation.js",
+    "scripts/run-test-tier.js",
+    "scripts/test-tiers.js",
+    "scripts/m13-repository-baseline-smoke.js",
+    "scripts/m13-sqlite-migrations-smoke.js",
+    "scripts/m13-workflow-input-snapshots-smoke.js",
+    "scripts/m13-application-transition-invariants-smoke.js",
+    "scripts/m13-agent-evaluation-smoke.js",
+    ".github/workflows/ci.yml",
+    ...Array.from({ length: 12 }, (_, index) => {
+      const version = String(index + 1).padStart(3, "0");
+      const migrationNames = [
+        "core_job_capture",
+        "capture_quality",
+        "applications",
+        "browser_tasks",
+        "candidate_profile",
+        "agent_screening",
+        "resume_workflow",
+        "workflow_observability",
+        "resume_fit_evaluations",
+        "resume_claim_verifications",
+        "workflow_input_snapshots",
+        "application_transition_invariants"
+      ];
+      return `server/migrations/${version}_${migrationNames[index]}.sql`;
+    }),
+    ...Array.from({ length: 8 }, (_, index) => `docs/${String(index + 1).padStart(2, "0")}_${
+      [
+        "PRD",
+        "TECH_ARCHITECTURE",
+        "AGENT_WORKFLOW",
+        "DEVELOPMENT_PLAN",
+        "OPEN_SOURCE_REUSE",
+        "BOSS_PLATFORM_LOGIC",
+        "BROWSER_EXECUTOR_POC",
+        "FIRECRAWL_DECISION"
+      ][index]
+    }.md`)
+  ];
+  const requiredScripts = [
+    "check",
+    "check:syntax",
+    "test:profile",
+    "test:agents",
+    "test:extension",
+    "test:workflow",
+    "test:baseline",
+    "test:ci",
+    "agent:evaluate",
+    "m13:repository-baseline:smoke",
+    "m13:sqlite-migrations:smoke",
+    "m13:workflow-inputs:smoke",
+    "m13:application-transitions:smoke",
+    "m13:agent-evaluation:smoke"
+  ];
+  const ignoredSentinels = [
+    ".env",
+    ".env.local",
+    "gpt5.5.txt",
+    "private.docx",
+    "private.pdf",
+    "server/data/boss_find.sqlite3",
+    "server/logs/server.log"
+  ];
+  const trackedFiles = listTrackedFiles();
+  const milestoneSmokeScripts = Object.keys(packageJson.scripts || {})
+    .filter((name) => /^m\d+:.+:smoke$/.test(name))
+    .sort();
+  const assignedSmokeScripts = Object.values(TEST_TIERS).flat();
+  const uniqueAssignedSmokeScripts = [...new Set(assignedSmokeScripts)].sort();
+  const checks = {
+    requiredPathsPresent: requiredPaths.every((relativePath) => fs.existsSync(path.join(ROOT, relativePath))),
+    requiredPackageScriptsPresent: requiredScripts.every((name) => typeof packageJson.scripts?.[name] === "string"),
+    nodeRuntimePinned: packageJson.engines?.node === ">=24",
+    schemaVersionPinned: /const SCHEMA_VERSION = 12;/.test(sqliteStoreSource)
+      && /runSqliteMigrations\(\{/.test(sqliteStoreSource)
+      && !/applySchema\(\)/.test(sqliteStoreSource),
+    privateArtifactsIgnored: ignoredSentinels.every(isIgnoredByGit),
+    envExampleRemainsTrackable: !isIgnoredByGit(".env.example"),
+    noTrackedGeneratedArtifacts: trackedFiles.every(isAllowedTrackedFile),
+    everyMilestoneSmokeAssigned: arraysEqual(milestoneSmokeScripts, uniqueAssignedSmokeScripts),
+    noSmokeAssignedTwice: assignedSmokeScripts.length === uniqueAssignedSmokeScripts.length,
+    ciUsesOfficialActions: ciWorkflowSource.includes("actions/checkout@v6")
+      && ciWorkflowSource.includes("actions/setup-node@v6")
+      && ciWorkflowSource.includes("node-version: 24")
+      && ciWorkflowSource.includes("npm ci")
+      && ciWorkflowSource.includes("npm run test:ci"),
+    m13PlanDocumented: developmentPlan.includes("## 13. M13 质量基线与可回放工作流")
+      && developmentPlan.includes("### M13.1 仓库基线、测试分层与 CI")
+      && developmentPlan.includes("### M13.2 SQLite 有序迁移")
+      && developmentPlan.includes("### M13.3 不可变工作流输入")
+      && developmentPlan.includes("### M13.4 application 状态迁移收敛")
+      && developmentPlan.includes("### M13.5 Agent 评测集")
+      && developmentPlan.includes("m13:agent-evaluation:smoke"),
+    readmeUsesCurrentMilestone: readme.includes("M13.1")
+      && readme.includes("npm run test:ci")
+  };
+
+  console.log(JSON.stringify({
+    ok: Object.values(checks).every(Boolean),
+    checks,
+    counts: {
+      trackedFiles: trackedFiles.length,
+      milestoneSmokeScripts: milestoneSmokeScripts.length,
+      assignedSmokeScripts: assignedSmokeScripts.length,
+      testTiers: Object.keys(TEST_TIERS).length
+    }
+  }, null, 2));
+
+  if (Object.values(checks).some((value) => !value)) {
+    process.exitCode = 1;
+  }
+}
+
+function readText(relativePath) {
+  return fs.readFileSync(path.join(ROOT, relativePath), "utf8");
+}
+
+function readJson(relativePath) {
+  return JSON.parse(readText(relativePath));
+}
+
+function listTrackedFiles() {
+  const result = spawnSync("git", ["ls-files", "-z"], {
+    cwd: ROOT,
+    encoding: "utf8"
+  });
+  if (result.status !== 0) {
+    throw new Error(String(result.stderr || "git ls-files failed").trim());
+  }
+  return result.stdout.split("\0").filter(Boolean).map(normalizePath);
+}
+
+function isIgnoredByGit(relativePath) {
+  const result = spawnSync("git", ["check-ignore", "--no-index", "-q", relativePath], {
+    cwd: ROOT,
+    encoding: "utf8"
+  });
+  return result.status === 0;
+}
+
+function isAllowedTrackedFile(relativePath) {
+  const normalized = normalizePath(relativePath);
+  if (normalized === ".env.example" || normalized === "server/data/.gitkeep") {
+    return true;
+  }
+  if (normalized === "gpt5.5.txt" || /^\.env(?:\.|$)/.test(normalized)) {
+    return false;
+  }
+  if (normalized.startsWith("server/data/") || normalized.startsWith("server/logs/")) {
+    return false;
+  }
+  return !/\.(?:sqlite3?(?:-.+)?|db(?:-.+)?|docx|pdf|log)$/i.test(normalized);
+}
+
+function arraysEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function normalizePath(value) {
+  return String(value || "").replaceAll("\\", "/");
+}

@@ -1,4 +1,5 @@
 const AGENT_NAME = "ResumeAgent";
+const { DEFAULT_RESUME_TEMPLATE } = require("./resume-template-registry");
 
 function runResumeAgent(input = {}, options = {}) {
   const context = normalizeResumeInput(input);
@@ -51,7 +52,7 @@ function runResumeAgent(input = {}, options = {}) {
       unsupportedClaims,
       renderHints: {
         maxPages: 2,
-        template: "boss-find-fixed-docx-v1"
+        template: DEFAULT_RESUME_TEMPLATE
       },
       metadata: {
         method: "rules",

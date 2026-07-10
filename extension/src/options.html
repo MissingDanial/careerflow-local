@@ -13,7 +13,10 @@
           <h1>Boss Find 设置与诊断</h1>
           <p>主弹窗只保留采集操作；后端配置、任务队列、采集质量、异常事件和待补 JD 放在这里集中查看。</p>
         </div>
-        <button id="refreshDiagnostics" type="button">刷新诊断</button>
+        <div class="hero-actions">
+          <a class="button-link secondary" href="#profileAgentPortal">画像入口</a>
+          <button id="refreshDiagnostics" type="button">刷新诊断</button>
+        </div>
       </header>
 
       <section class="layout">
@@ -145,12 +148,12 @@
           </div>
         </section>
 
-        <section class="card wide">
+        <section id="profileAgentPortal" class="card wide profile-agent-portal">
           <div class="card-title">
-            <h2>ProfileAgent 职业经历上下文</h2>
+            <h2>ProfileAgent 画像入口</h2>
             <span id="careerContextStatus" class="status">尚未读取职业经历上下文</span>
           </div>
-          <p class="note">用于把已上传简历、已确认经历和待追问信息整理为本地 `career_agent_context.md`；不会确认待定事实，也不会触发 BOSS 页面动作。</p>
+          <p class="note">专门用于首次画像沉淀、补充经历、修改目标方向和风险约束；生成待确认草稿后由用户确认入库，单岗位简历闭环不会重跑 ProfileAgent。</p>
           <div class="metric-grid three">
             <div><strong id="careerContextExists">--</strong><span>文件状态</span></div>
             <div><strong id="careerContextBytes">--</strong><span>字节</span></div>
@@ -177,6 +180,21 @@
               <span id="careerContextAnswerStatus" class="status">回答只用于重新生成上下文，不会确认事实库</span>
             </div>
             <div id="careerContextAnswerForm" class="answer-form">暂无可回答问题</div>
+          </div>
+          <div class="detail-panel profile-agent-update-panel">
+            <div class="card-title">
+              <h3>主动补充或修改画像</h3>
+              <span id="profileAgentUpdateStatus" class="status">输入后先生成待确认草稿</span>
+            </div>
+            <label>
+              <span>本次要告诉 ProfileAgent 的内容</span>
+              <textarea id="profileAgentUserUpdate" rows="5" spellcheck="true" placeholder="例如：新增一个项目经历、修正项目指标、调整目标岗位、加入不想去的方向。"></textarea>
+            </label>
+            <div class="button-row">
+              <button id="stageProfileAgentUpdate" class="primary" type="button">生成待确认草稿</button>
+              <button id="clearProfileAgentUpdate" class="secondary" type="button">清空输入</button>
+            </div>
+            <p class="note">这里是用户和 ProfileAgent 对话/改画像的专属入口。草稿确认前不会进入正式事实库，也不会影响岗位投递流程。</p>
           </div>
           <div class="detail-panel">
             <div class="card-title">
@@ -215,6 +233,16 @@
             <button id="verifyResumeClaims" class="secondary" type="button">Verify claims</button>
             <button id="reviseResumeFromChecks" class="secondary" type="button">Revise from checks</button>
             <button id="auditRulesResume" class="secondary" type="button">规则审核草稿</button>
+          </div>
+          <div class="inline-setting-row">
+            <label>
+              <span>DOCX template</span>
+              <select id="resumeTemplateName">
+                <option value="resume-to-word-campus-product-v1">默认：教育优先模板</option>
+                <option value="boss-find-fixed-docx-v1">旧版：摘要/技能模板</option>
+              </select>
+            </label>
+            <p class="note">一键简历闭环会使用此模板；生成结果会在详情里记录模板元数据。</p>
           </div>
           <div class="diagnostic-grid">
             <div>
@@ -311,6 +339,7 @@
           <div class="button-row">
             <button id="refreshGreeting" class="secondary" type="button">刷新草稿</button>
             <button id="prepareGreetingDryRun" class="primary" type="button">生成打招呼 dry-run</button>
+            <button id="prepareExecutionPackage" class="secondary" type="button">Prepare execution package</button>
           </div>
           <div class="diagnostic-grid two">
             <div>
@@ -321,6 +350,19 @@
               <div class="list-heading">dry-run 任务</div>
               <div id="greetingTasks" class="list compact-list">暂无 SEND_GREETING 任务</div>
             </div>
+          </div>
+          <div class="execution-package-panel">
+            <div class="list-heading">Local execution package</div>
+            <div id="executionPackageDetail" class="detail-section execution-package-detail">No execution package prepared</div>
+            <div id="executionPackageReviewActions" class="button-row compact hidden" hidden></div>
+            <div class="list-heading">Manual execution checklist</div>
+            <div id="executionChecklistDetail" class="detail-section execution-checklist-detail">No execution checklist loaded</div>
+            <div class="list-heading">Submission evidence</div>
+            <div class="button-row compact">
+              <button id="readSubmissionPageResult" class="secondary" type="button">Read current BOSS result</button>
+              <button id="recordSubmissionPageResult" class="secondary" type="button">Record result evidence</button>
+            </div>
+            <div id="submissionEvidenceDetail" class="detail-section submission-evidence-detail">No submission evidence recorded</div>
           </div>
         </section>
 

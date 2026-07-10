@@ -17,7 +17,7 @@
 | Agent 编排 | LangGraph 或轻量状态机 | MVP 可先自研状态机，复杂分支稳定后迁移 LangGraph |
 | LLM 调用 | OpenAI-compatible client | 用户配置 `base_url`、`api_key`、`model` |
 | 数据库 | SQLite | 单用户本地部署足够稳定 |
-| ORM/迁移 | SQLModel/SQLAlchemy + Alembic | 后续 schema 演进更稳 |
+| ORM/迁移 | `node:sqlite` + ordered SQL migrations | 当前使用 `DatabaseSync`，按版本迁移并在升级前备份 |
 | 简历 DOCX | python-docx/docxtpl | 固定模板填充 |
 | PDF 导出 | LibreOffice headless | 本地 DOCX 转 PDF |
 | 浏览器接入 | Tampermonkey MVP | 快速验证 BOSS 网页流程 |
@@ -92,6 +92,55 @@ SQLite + Local Files
 - 生成 DOCX/PDF。
 - 输出审批结果。
 - 提供日志和导出能力。
+
+SQLite schema 管理：
+
+- `server/migrations/001_*.sql` 至当前 `SCHEMA_VERSION` 必须连续存在。
+- `schema_migrations` 保存 migration 名称、checksum、状态、执行耗时和时间。
+- `PRAGMA user_version` 是运行时兼容版本，不能由单个 SQL 文件直接修改。
+- 现有数据库发生 migration 或历史基线化前，先通过 `VACUUM INTO` 写入同目录 `backups/`。
+- migration 失败恢复升级前数据库；禁止继续使用集中式 `applySchema()`。
+- schema v11 的 `011_workflow_input_snapshots.sql` 新增业务级不可变运行输入，不依赖 LangGraph checkpoint 表。
+- schema v12 的 `012_application_transition_invariants.sql` 新增 application transition 幂等键和 browser task 过期、尝试次数、claim token 字段。
+
+不可变工作流输入：
+
+- `profile_snapshots` 保存一次运行使用的完整用户画像 bundle 和 SHA-256 content hash。
+- `job_snapshots` 继续承载岗位采集历史，并为每次工作流额外写入精确的 JD/job payload。
+- `workflow_runs` 保存一次图运行的生命周期、最终输出、错误和 replay 来源。
+- `workflow_input_snapshots` 一对一绑定 workflow run，保存 profile/job snapshot IDs、application、user rules、execution/render options、脱敏后的 model config、graph/prompt/agent version 和 input hash。
+- `agent_runs.workflow_run_id` 将 Screening、Resume、Fit、Claim、Revision、Audit 节点绑定到同一组输入；对应 snapshot/version 字段冗余保存，便于审计查询。
+- API Key、token、secret、authorization 和 password 类字段在入库前剔除。
+- `POST /api/workflow-runs/:id/replay` 是内存 dry replay，不调用持久化写方法，不改变 application，不创建 browser task。
+
+业务快照与 LangGraph checkpoint 的职责不同：前者保证“这次 Agent 看到了什么”可追溯，后者用于图执行暂停/恢复。当前只实现业务快照；节点级断点恢复留给后续独立阶段。
+
+Application 状态迁移：
+
+- `ApplicationTransitionService` 是唯一允许执行 `UPDATE applications` 的模块。
+- 状态边由显式 transition map 校验，禁止服务自行拼接或跳过中间状态。
+- Screening、Resume、Audit、job sync、local approval 和 read-only browser result 先写事实，再把事实 ID 作为 typed evidence 请求迁移。
+- typed evidence 不只检查记录存在：job sync 必须引用包含当前岗位快照的 capture batch，screening recommendation 必须与目标状态一致，failure source 必须属于当前 application 且确实处于失败状态。
+- `application_events.idempotency_key` 对同一 application 唯一；同一 key 的相同回调直接返回历史结果，不重复写 application/workflow event。
+- operator override 只用于明确的本地人工/调试迁移，必须记录 actor、rationale 和显式 idempotency key，且不能推进 `GREETING_SENT`、`SUBMISSION_READY`、`SUBMITTED`。
+
+Browser task 执行租约：
+
+- 新任务默认带过期时间和最大尝试次数。
+- claim 时增加 `attempt_count`、写入 `last_attempt_at`，并生成随机 `claim_token`。
+- 扩展回写终态时携带 claim token；第二次及后续尝试没有 token 或 token 已过期时拒绝回调。
+- 相同终态和相同 result 的重复回调幂等返回；冲突结果返回 409。
+- 过期任务先转为 `FAILED/TASK_EXPIRED`，不再应用 application 状态副作用。
+- 失败任务只有在 `attempt_count < max_attempts` 时可重排；过期任务必须显式 `refreshExpiry`。
+
+Agent 固定评测：
+
+- `evaluation/fixtures/m13-agent-evaluation.v1.json` 是匿名人工标签基线，包含画像、JD、风险预期、岗位顺序、必要项状态、claim probe 和 Audit probe。
+- `server/src/agent-evaluation-runner.js` 直接调用生产 Agent 函数的 rules mode；它不启动 HTTP 服务、不读写 SQLite、不生成 DOCX、不读取真实用户文件，也不调用外部模型。
+- 每次评测计算数据集 SHA-256，并记录 `GRAPH_VERSION`、`PROMPT_VERSION`、`AGENT_VERSION`、provider 和无外部调用的模型模式。
+- 指标包括风险 recall/precision、pairwise 岗位排序、Screening 决策、JD 必要项识别/状态、生成 claim 支持率、人工 claim verdict 和 Audit 一致性。
+- JSON/Markdown 报告默认写入被忽略的 `server/data/agent-evaluation/`；任一指标低于数据集阈值时 CLI 返回非零退出码。
+- `m13:agent-evaluation:smoke` 使用临时目录，并通过故意漂移的内存标签验证回归门禁会失败且能返回样本 ID。
 
 ### 4.3 Agent Orchestrator
 

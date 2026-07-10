@@ -194,6 +194,7 @@ async function runApiChecks(dataDir) {
 function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
+  const migrationSql = read("server/migrations/006_agent_screening.sql");
   const packageJson = read("package.json");
   return {
     checks: {
@@ -201,12 +202,12 @@ function runWiringChecks() {
         && serverJs.includes("runScreeningAgent"),
       serverExposesAgentRunAndScreeningLists: serverJs.includes("/api/agent-runs")
         && serverJs.includes("/api/screenings"),
-      storeDefinesM6Tables: storeJs.includes("CREATE TABLE IF NOT EXISTS agent_runs")
-        && storeJs.includes("CREATE TABLE IF NOT EXISTS screenings"),
+      storeDefinesM6Tables: migrationSql.includes("CREATE TABLE IF NOT EXISTS agent_runs")
+        && migrationSql.includes("CREATE TABLE IF NOT EXISTS screenings"),
       storeDefinesScreeningPersistence: storeJs.includes("createScreening(input")
         && storeJs.includes("getApplicationScreeningInput"),
       packageRunsM6Smoke: packageJson.includes("m6:screening:smoke")
-        && packageJson.includes("server/src/screening-agent.js")
+        && packageJson.includes("check:syntax")
     }
   };
 }

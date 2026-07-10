@@ -36,11 +36,7 @@ function runStoreChecks(dataDir) {
   try {
     store.syncJobs(createPayload());
     const application = store.getApplications().applications[0];
-    store.transitionApplication(application.id, { toStatus: "SCORED", eventType: "SCREENING_COMPLETED", reason: "m9_seed" });
-    store.transitionApplication(application.id, { toStatus: "SHORTLISTED", eventType: "SCREENING_SHORTLISTED", reason: "m9_seed" });
-    store.transitionApplication(application.id, { toStatus: "GREETING_READY", eventType: "GREETING_READY", reason: "m9_seed" });
-    store.transitionApplication(application.id, { toStatus: "CHAT_OPENED", eventType: "REFRESH_CONVERSATION", reason: "m9_seed" });
-    store.transitionApplication(application.id, { toStatus: "RESUME_UNLOCKED", eventType: "CHECK_RESUME_UNLOCK", reason: "m9_seed" });
+    seedResumeUnlocked(store, application.id);
 
     const task = store.createBrowserTask({
       applicationId: application.id,
@@ -207,6 +203,29 @@ function createPayload() {
       }
     ]
   };
+}
+
+function seedResumeUnlocked(store, applicationId) {
+  const transitions = [
+    ["SCORED", "SCREENING_COMPLETED"],
+    ["SHORTLISTED", "SCREENING_SHORTLISTED"],
+    ["GREETING_READY", "GREETING_READY"],
+    ["CHAT_OPENED", "REFRESH_CONVERSATION"],
+    ["RESUME_UNLOCKED", "CHECK_RESUME_UNLOCK"]
+  ];
+  for (const [toStatus, eventType] of transitions) {
+    store.transitionApplication(applicationId, {
+      toStatus,
+      eventType,
+      reason: "m9_seed",
+      idempotencyKey: `m9-submit:${applicationId}:${toStatus}`,
+      evidence: {
+        type: "operator_override",
+        actor: "m9-submit-application-dry-run-smoke",
+        rationale: `Seed ${toStatus} for submit dry-run smoke`
+      }
+    });
+  }
 }
 
 function read(relativePath) {
