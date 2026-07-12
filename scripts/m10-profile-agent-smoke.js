@@ -152,7 +152,10 @@ async function runApiChecks(port, dataDir) {
         && pendingAfter.drafts.every((draft) => draft.status === "PENDING"),
       apiMarksCareerContextStaleAfterFactChange: staleContext.freshness?.status === "STALE"
         && staleContext.freshness?.latestProfileChangedAt
-        && staleContext.freshness?.staleReasons?.includes("profile_changed_after_career_context"),
+        && staleContext.freshness?.staleReasons?.some((reason) => [
+          "profile_changed_after_career_context",
+          "profile_hash_changed_after_context_version"
+        ].includes(reason)),
       apiRegeneratesFreshCareerContextAfterFactChange: regenerated.freshness?.status === "FRESH",
       resumeWorkflowDoesNotImportProfileAgent: !/require\(["']\.\/profile-agent["']\)/.test(graphSource)
         && !graphSource.includes("ProfileAgent"),

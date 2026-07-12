@@ -99,7 +99,7 @@ async function main() {
     const agentRuns = original.agentRuns;
     const checks = {
       schemaMigratedToCurrentVersion: stats.schemaVersion === SCHEMA_VERSION
-        && SCHEMA_VERSION === 12,
+        && SCHEMA_VERSION === 14,
       graphCompletesWithWorkflowRun: graphResult.ok
         && graphResult.workflowRunId > 0
         && graphResult.inputSnapshot.profileSnapshotId > 0

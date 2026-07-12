@@ -22,7 +22,7 @@ function main() {
     const checks = {
       upgradesVersionSevenToCurrent: upgrade.finalVersion === SCHEMA_VERSION
         && upgrade.currentVersion === 7
-        && upgrade.appliedVersions.join(",") === "8,9,10,11,12",
+        && upgrade.appliedVersions.join(",") === "8,9,10,11,12,13,14",
       createsPreMigrationBackup: upgrade.backupCreated
         && upgrade.backupExists
         && upgrade.backupVersion === 7,
@@ -38,7 +38,13 @@ function main() {
         && upgrade.hasWorkflowInputSnapshots
         && upgrade.hasApplicationEventIdempotency
         && upgrade.hasBrowserTaskExpiry
-        && upgrade.hasBrowserTaskClaimToken,
+        && upgrade.hasBrowserTaskClaimToken
+        && upgrade.hasRealActionPolicies
+        && upgrade.hasRealActionAuthorizations
+        && upgrade.hasProfileDialogSessions
+        && upgrade.hasProfileDialogMessages
+        && upgrade.hasProfileContextVersions
+        && upgrade.hasProfileEntityRevisions,
       bootstrapsHistoryForCurrentLegacyDatabase: bootstrap.currentVersion === SCHEMA_VERSION
         && bootstrap.finalVersion === SCHEMA_VERSION
         && bootstrap.appliedCount === 0
@@ -103,7 +109,13 @@ function runUpgradeScenario(dataDir) {
       hasWorkflowInputSnapshots: tableExists(store.database, "workflow_input_snapshots"),
       hasApplicationEventIdempotency: columnExists(store.database, "application_events", "idempotency_key"),
       hasBrowserTaskExpiry: columnExists(store.database, "browser_tasks", "expires_at"),
-      hasBrowserTaskClaimToken: columnExists(store.database, "browser_tasks", "claim_token")
+      hasBrowserTaskClaimToken: columnExists(store.database, "browser_tasks", "claim_token"),
+      hasRealActionPolicies: tableExists(store.database, "real_action_policies"),
+      hasRealActionAuthorizations: tableExists(store.database, "real_action_authorizations"),
+      hasProfileDialogSessions: tableExists(store.database, "profile_dialog_sessions"),
+      hasProfileDialogMessages: tableExists(store.database, "profile_dialog_messages"),
+      hasProfileContextVersions: tableExists(store.database, "profile_context_versions"),
+      hasProfileEntityRevisions: tableExists(store.database, "profile_entity_revisions")
     };
   } finally {
     store.close();

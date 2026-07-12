@@ -28,6 +28,9 @@ function main() {
     "server/src/sqlite-store.js",
     "server/src/sqlite-migrations.js",
     "server/src/services/application-transition-service.js",
+    "server/src/services/real-action-authorization-service.js",
+    "server/src/services/profile-conversation-service.js",
+    "server/src/profile-conversation-agent.js",
     "server/src/agent-evaluation-runner.js",
     "server/src/resume-workflow-graph.js",
     "evaluation/fixtures/m13-agent-evaluation.v1.json",
@@ -40,8 +43,12 @@ function main() {
     "scripts/m13-workflow-input-snapshots-smoke.js",
     "scripts/m13-application-transition-invariants-smoke.js",
     "scripts/m13-agent-evaluation-smoke.js",
+    "scripts/m14-real-action-authorization-smoke.js",
+    "scripts/m14-extension-real-greeting-smoke.js",
+    "scripts/m15-profile-conversation-memory-smoke.js",
+    "scripts/m15-options-profile-conversation-smoke.js",
     ".github/workflows/ci.yml",
-    ...Array.from({ length: 12 }, (_, index) => {
+    ...Array.from({ length: 14 }, (_, index) => {
       const version = String(index + 1).padStart(3, "0");
       const migrationNames = [
         "core_job_capture",
@@ -55,7 +62,9 @@ function main() {
         "resume_fit_evaluations",
         "resume_claim_verifications",
         "workflow_input_snapshots",
-        "application_transition_invariants"
+        "application_transition_invariants",
+        "real_action_authorization",
+        "profile_conversation_memory"
       ];
       return `server/migrations/${version}_${migrationNames[index]}.sql`;
     }),
@@ -86,7 +95,11 @@ function main() {
     "m13:sqlite-migrations:smoke",
     "m13:workflow-inputs:smoke",
     "m13:application-transitions:smoke",
-    "m13:agent-evaluation:smoke"
+    "m13:agent-evaluation:smoke",
+    "m14:real-action:smoke",
+    "m14:extension-real-greeting:smoke",
+    "m15:profile-conversation:smoke",
+    "m15:options-profile-conversation:smoke"
   ];
   const ignoredSentinels = [
     ".env",
@@ -107,7 +120,7 @@ function main() {
     requiredPathsPresent: requiredPaths.every((relativePath) => fs.existsSync(path.join(ROOT, relativePath))),
     requiredPackageScriptsPresent: requiredScripts.every((name) => typeof packageJson.scripts?.[name] === "string"),
     nodeRuntimePinned: packageJson.engines?.node === ">=24",
-    schemaVersionPinned: /const SCHEMA_VERSION = 12;/.test(sqliteStoreSource)
+    schemaVersionPinned: /const SCHEMA_VERSION = 14;/.test(sqliteStoreSource)
       && /runSqliteMigrations\(\{/.test(sqliteStoreSource)
       && !/applySchema\(\)/.test(sqliteStoreSource),
     privateArtifactsIgnored: ignoredSentinels.every(isIgnoredByGit),
@@ -128,6 +141,7 @@ function main() {
       && developmentPlan.includes("### M13.5 Agent 评测集")
       && developmentPlan.includes("m13:agent-evaluation:smoke"),
     readmeUsesCurrentMilestone: readme.includes("M13.1")
+      && readme.includes("M14.1")
       && readme.includes("npm run test:ci")
   };
 

@@ -15,6 +15,7 @@ const { renderResumeDocx } = require("./document-renderer");
 const { DEFAULT_RESUME_TEMPLATE, listResumeTemplates } = require("./resume-template-registry");
 const { planApplicationWorkflow } = require("./workflow-orchestrator");
 const { createProfileService } = require("./services/profile-service");
+const { createProfileConversationService } = require("./services/profile-conversation-service");
 const { createResumeWorkflowService } = require("./services/resume-workflow-service");
 const { createExecutionPackageService } = require("./services/execution-package-service");
 const { createSubmissionResultService } = require("./services/submission-result-service");
@@ -30,6 +31,7 @@ const REQUIRED_TOKEN = process.env.BOSS_SYNC_TOKEN || "";
 const DATA_DIR = process.env.BOSS_DATA_DIR || path.join(__dirname, "..", "data");
 const store = createJobStore({ dataDir: DATA_DIR });
 const profileService = createProfileService({ store, dataDir: DATA_DIR });
+const profileConversationService = createProfileConversationService({ store, dataDir: DATA_DIR });
 const resumeWorkflowService = createResumeWorkflowService({ store, dataDir: DATA_DIR });
 const executionPackageService = createExecutionPackageService({ store, dataDir: DATA_DIR });
 const submissionResultService = createSubmissionResultService({ store, dataDir: DATA_DIR });
@@ -126,6 +128,7 @@ const server = http.createServer(async (request, response) => {
         status: url.searchParams.get("status") || "",
         draftType: url.searchParams.get("draftType") || url.searchParams.get("type") || "",
         resumeSourceId: url.searchParams.get("resumeSourceId") || url.searchParams.get("sourceId") || "",
+        sourceSessionId: url.searchParams.get("sourceSessionId") || url.searchParams.get("sessionId") || "",
         limit: Number(url.searchParams.get("limit") || 100)
       }));
       return;
@@ -198,6 +201,63 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/profile/career-context/fact-drafts") {
       const payload = await readJson(request);
       sendJson(response, 201, profileService.generateFactDraftsFromCareerContext(payload));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/profile/dialog-sessions") {
+      sendJson(response, 200, profileConversationService.listSessions({
+        status: url.searchParams.get("status") || "",
+        limit: Number(url.searchParams.get("limit") || 20)
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/profile/dialog-sessions") {
+      const payload = await readJson(request);
+      sendJson(response, 201, profileConversationService.createSession(payload));
+      return;
+    }
+
+    const profileDialogRetryMatch = url.pathname.match(/^\/api\/profile\/dialog-sessions\/([0-9]+)\/messages\/([0-9]+)\/retry$/);
+    if (request.method === "POST" && profileDialogRetryMatch) {
+      const payload = await readJson(request);
+      sendJson(response, 200, await profileConversationService.retryMessage(
+        Number(profileDialogRetryMatch[1]),
+        Number(profileDialogRetryMatch[2]),
+        payload
+      ));
+      return;
+    }
+
+    const profileDialogMessagesMatch = url.pathname.match(/^\/api\/profile\/dialog-sessions\/([0-9]+)\/messages$/);
+    if (request.method === "GET" && profileDialogMessagesMatch) {
+      sendJson(response, 200, profileConversationService.getSession(Number(profileDialogMessagesMatch[1]), {
+        messageLimit: Number(url.searchParams.get("limit") || 80),
+        draftLimit: Number(url.searchParams.get("draftLimit") || 100)
+      }));
+      return;
+    }
+    if (request.method === "POST" && profileDialogMessagesMatch) {
+      const payload = await readJson(request);
+      sendJson(response, 200, await profileConversationService.sendMessage(Number(profileDialogMessagesMatch[1]), payload));
+      return;
+    }
+
+    const profileDialogSessionMatch = url.pathname.match(/^\/api\/profile\/dialog-sessions\/([0-9]+)$/);
+    if (request.method === "GET" && profileDialogSessionMatch) {
+      sendJson(response, 200, profileConversationService.getSession(Number(profileDialogSessionMatch[1]), {
+        messageLimit: Number(url.searchParams.get("messageLimit") || 80),
+        draftLimit: Number(url.searchParams.get("draftLimit") || 100)
+      }));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/profile/entity-revisions") {
+      sendJson(response, 200, store.getProfileEntityRevisions({
+        entityType: url.searchParams.get("entityType") || "",
+        entityId: url.searchParams.get("entityId") || "",
+        limit: Number(url.searchParams.get("limit") || 50)
+      }));
       return;
     }
 
@@ -581,6 +641,65 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/real-actions/policy") {
+      assertAuthorized(request);
+      sendJson(response, 200, store.getRealActionPolicy({
+        actionType: url.searchParams.get("actionType") || "SEND_GREETING_REAL"
+      }));
+      return;
+    }
+
+    if (request.method === "PUT" && url.pathname === "/api/real-actions/policy") {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, store.updateRealActionPolicy(payload));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/real-actions/authorizations") {
+      assertAuthorized(request);
+      sendJson(response, 200, store.getRealActionAuthorizations({
+        applicationId: url.searchParams.get("applicationId") || "",
+        actionType: url.searchParams.get("actionType") || "",
+        limit: Number(url.searchParams.get("limit") || 20)
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/real-actions/authorizations") {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 201, store.armRealActionAuthorization(payload));
+      return;
+    }
+
+    const realActionQueueMatch = url.pathname.match(/^\/api\/real-actions\/authorizations\/([0-9]+)\/queue$/);
+    if (request.method === "POST" && realActionQueueMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 201, store.queueRealActionAuthorization(Number(realActionQueueMatch[1]), payload));
+      return;
+    }
+
+    const realActionRevokeMatch = url.pathname.match(/^\/api\/real-actions\/authorizations\/([0-9]+)\/revoke$/);
+    if (request.method === "POST" && realActionRevokeMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, store.revokeRealActionAuthorization(Number(realActionRevokeMatch[1]), payload));
+      return;
+    }
+
+    const realActionAuthorizationMatch = url.pathname.match(/^\/api\/real-actions\/authorizations\/([0-9]+)$/);
+    if (request.method === "GET" && realActionAuthorizationMatch) {
+      assertAuthorized(request);
+      sendJson(response, 200, {
+        storage: "sqlite",
+        ok: true,
+        authorization: store.getRealActionAuthorization(Number(realActionAuthorizationMatch[1]))
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/browser-tasks") {
       sendJson(response, 200, store.getBrowserTasks({
         status: url.searchParams.get("status") || "",
@@ -661,7 +780,12 @@ const server = http.createServer(async (request, response) => {
     sendJson(response, 404, { ok: false, error: "Not found" });
   } catch (error) {
     const status = error.statusCode || 500;
-    sendJson(response, status, { ok: false, error: error.message || String(error) });
+    sendJson(response, status, {
+      ok: false,
+      error: error.message || String(error),
+      code: error.code || "INTERNAL_ERROR",
+      context: error.context || {}
+    });
   }
 });
 

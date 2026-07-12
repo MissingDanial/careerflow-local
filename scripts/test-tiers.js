@@ -10,7 +10,8 @@ const TEST_TIERS = Object.freeze({
     "m5:drafts:smoke",
     "m10:career-skill:smoke",
     "m10:profile-agent:smoke",
-    "m10:profile-facts:smoke"
+    "m10:profile-facts:smoke",
+    "m15:profile-conversation:smoke"
   ]),
   agents: Object.freeze([
     "m6:screening:smoke",
@@ -30,6 +31,9 @@ const TEST_TIERS = Object.freeze({
     "m7:options-resume:smoke",
     "m7:options-detail:smoke",
     "m8:extension-send-greeting:smoke",
+    "m14:extension-real-greeting:smoke",
+    "m14:options-workspace-ui:smoke",
+    "m15:options-profile-conversation:smoke",
     "m10:options-profile-agent:smoke",
     "m10:options-profile-facts:smoke",
     "m10:options-profile-facts-ui:smoke",
@@ -66,7 +70,8 @@ const TEST_TIERS = Object.freeze({
     "m12:submission-evidence:smoke",
     "m13:sqlite-migrations:smoke",
     "m13:workflow-inputs:smoke",
-    "m13:application-transitions:smoke"
+    "m13:application-transitions:smoke",
+    "m14:real-action:smoke"
   ])
 });
 

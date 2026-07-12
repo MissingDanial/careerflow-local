@@ -70,11 +70,12 @@ function main() {
       && optionsJs.includes("answers,")
       && optionsJs.includes("已回答问题会从待追问中移除"),
     optionsHasDedicatedProfilePortal: optionsHtml.includes('id="profileAgentPortal"')
-      && optionsHtml.includes("主动补充或修改画像")
+      && (optionsHtml.includes("主动补充或修改画像") || optionsHtml.includes('id="profileDialogComposer"'))
       && optionsHtml.includes("生成待确认草稿")
       && optionsJs.includes("stageProfileAgentUserUpdate")
       && optionsJs.includes("readProfileAgentUserUpdateAnswer")
-      && optionsJs.includes('id: "profile_user_update"'),
+      && optionsJs.includes('id: "profile_user_update"')
+      && optionsJs.includes("sendProfileDialogTurn"),
     optionsRefreshesWorkflowAfterGenerate: optionsGenerateFunction.includes("refreshWorkflowDiagnostics")
       && optionsGenerateFunction.includes("catch(() => {})"),
     backgroundHandlesCareerContextMessages: backgroundJs.includes('case "GET_CAREER_CONTEXT"')

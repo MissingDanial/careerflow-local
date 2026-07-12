@@ -58,6 +58,8 @@ If files or paths are provided, inspect them before asking broad questions:
 6. Convert candidate facts into resume-ready evidence with a risk level: `strong`, `expression-risk`, or `major-risk`.
 7. Use `strong` and `expression-risk` evidence in JD-tailored resumes; only `major-risk` evidence requires exclusion or explicit user confirmation before use.
 
+For a persistent model conversation, follow [references/profile_dialog_contract.md](references/profile_dialog_contract.md). Persist each user message before invoking the model, keep a compact session summary, and express every proposed fact change as a confirmable `CREATE` or `UPDATE` draft.
+
 ## Output Contract
 
 The main output should include:
@@ -83,4 +85,5 @@ Use [references/context_template.md](references/context_template.md) for the ful
 - [references/project_links.md](references/project_links.md)
 - [references/role_clusters.md](references/role_clusters.md)
 - [references/resume_boundaries.md](references/resume_boundaries.md)
+- [references/profile_dialog_contract.md](references/profile_dialog_contract.md)
 - [examples/career_agent_context.example.md](examples/career_agent_context.example.md)

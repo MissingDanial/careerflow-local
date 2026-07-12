@@ -164,6 +164,50 @@ Boundary remains unchanged:
 
 The settings UI may confirm/reject `profile_fact_drafts` through the explicit fact-draft endpoints. That is a profile-maintenance action, not a per-job application action. After confirm/reject, backend freshness becomes `STALE`; the user can regenerate the context once, then reuse it across many JD/resume tasks.
 
+### 3.8 M15.1 Profile Conversation & Memory v2
+
+M15.1 把原来的规则问卷升级为独立、持久化的模型对话，同时保留既有事实确认边界。
+
+每轮消息流：
+
+```text
+user message
+-> profile_dialog_messages 先落库
+-> 加载 career-retrospective-to-job Skill
+-> 读取 confirmed profile + pending drafts + session summary + recent messages
+-> OpenAI-compatible model strict JSON
+-> assistant message + follow-up questions + conflicts + session summary
+-> profile_fact_drafts(CREATE/UPDATE, PENDING)
+-> user confirm/reject
+-> confirmed profile entity + profile_entity_revisions(before/after)
+-> versioned career_agent_context.md
+```
+
+模型输出契约：
+
+- `assistantReply`：面向用户的本轮回复。
+- `factDrafts`：新增或修改画像的待确认草稿；修改必须引用已有 entity type/id。
+- `followupQuestions`：下一轮最多 3 个聚焦问题。
+- `conflicts`：与正式画像冲突、经历边界模糊或缺少证据的项目。
+- `sessionSummaryPatch`：目标、动机、偏好、项目主线和未决问题的增量摘要。
+
+持久化边界：
+
+- `profile_dialog_sessions/messages` 保存对话过程，不是简历事实源。
+- `profile_fact_drafts` 是模型与正式画像之间的唯一写入缓冲区。
+- `candidate_profiles/profile_experiences/profile_skills/profile_constraints` 仍是正式长期事实库。
+- `profile_entity_revisions` 保存确认更新前后的实体，支持审计和后续纠错。
+- `profile_context_versions` 保存 structured JSON、Markdown、profile hash、content hash 和来源 session/message。
+- `profile_snapshots/workflow_input_snapshots` 继续冻结单岗位工作流输入，ProfileAgent 不进入每个岗位的 LangGraph。
+
+失败与降级：
+
+- 用户消息必须在模型调用前落库。
+- 模型超时、配置错误或输出 Schema 错误会写入失败 assistant message、`agent_runs` 和 `workflow_events`。
+- 失败轮次允许针对同一 user message 重试，不重复写入用户消息。
+- ProfileAgent 不自动伪装为规则降级；规则草稿入口仅作为页面中明确折叠的备用工具。
+- 当前不引入向量数据库或 LangGraph SQLite checkpointer；单用户画像先使用结构化 SQLite 和记忆摘要。
+
 ## 4. DiscoveryAgent
 
 ### 4.1 目标
