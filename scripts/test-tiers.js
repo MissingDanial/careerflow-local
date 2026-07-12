@@ -21,7 +21,9 @@ const TEST_TIERS = Object.freeze({
     "m10:resume-fit:smoke",
     "m10:claim-verifier:smoke",
     "m10:resume-revision:smoke",
-    "m13:agent-evaluation:smoke"
+    "m13:agent-evaluation:smoke",
+    "m16:real-model-agents:smoke",
+    "m16:agent-quality-evaluation:smoke"
   ]),
   extension: Object.freeze([
     "m3:popup:smoke",
@@ -34,6 +36,7 @@ const TEST_TIERS = Object.freeze({
     "m14:extension-real-greeting:smoke",
     "m14:options-workspace-ui:smoke",
     "m15:options-profile-conversation:smoke",
+    "m16:options-agent-quality:smoke",
     "m10:options-profile-agent:smoke",
     "m10:options-profile-facts:smoke",
     "m10:options-profile-facts-ui:smoke",

@@ -2,7 +2,7 @@
 
 本文是当前项目的主开发路线图。M1 已经完成 BOSS 浏览器执行层的技术选型，M2-M12 已建立从岗位采集、用户画像、Agent 简历闭环到本地执行包和投递结果证据的主流程。
 
-截至 2026-07-11，M13“质量基线与可回放工作流”已完成仓库基线、测试分层、CI、有序数据库迁移、不可变输入快照、集中状态迁移和 Agent 固定评测。M14 已完成单岗位真实打招呼授权协议和 options 工作台收敛；真实页面 canary、上传简历和投递仍保持关闭。
+截至 2026-07-12，M13“质量基线与可回放工作流”已完成，M14 已完成单岗位真实打招呼授权协议和 options 工作台收敛，M15 已完成 ProfileAgent 持久化对话基础，M16 已完成真实模型 Agent 质量闭环并通过 9 岗位 x 3 次正式评测。真实 BOSS 页面 canary、上传简历和投递仍保持关闭。
 
 ## 0. 开发原则
 
@@ -28,7 +28,7 @@
 
 当前不足：
 
-- M13.5 第一版是小规模匿名 rules-mode 基线，尚未覆盖真实模型的稳定性、成本、延迟和同一输入多次采样方差。
+- M16 已覆盖真实模型稳定性、token、延迟和同一输入多次采样方差；模型单价尚未配置，因此还不能给出可信的实际费用。
 - 固定样本仍需持续吸收真实但匿名化的误筛、漏筛、JD 必要项识别和 claim/Audit 失败案例。
 - 真实 BOSS 页面仍是最大平台风险，选择器和风控行为必须继续通过人工登录环境验证。
 
@@ -49,6 +49,8 @@
 | M10 | Agent 编排与可观测闭环 | 用持久化节点契约和 LangGraph 跑通岗位版简历工作流 |
 | M11 | DOCX 与本地执行包 | 固化模板、渲染 QA、执行包和人工检查清单 |
 | M14 | 真实动作金丝雀 | 用短时授权、单岗位、一次尝试和 DOM 回读验证真实打招呼 |
+| M15 | ProfileAgent 长期画像 | 用持久化多轮对话、草稿确认和版本修订维护上游画像 |
+| M16 | 真实模型 Agent 质量闭环 | 接入严格模型节点、遥测、评测持久化和多次采样质量门禁 |
 | M12 | 投递结果证据 | 只读识别并记录当前 BOSS 页面结果，不推进真实动作 |
 | M13 | 质量基线与可回放工作流 | 建立 CI、迁移、不可变输入、状态不变量和 Agent 评测集 |
 
@@ -1953,7 +1955,7 @@ M13.1 仓库基线与 CI
 M14.1 单岗位真实打招呼授权协议
 -> M14.1c 用户工作台与诊断收敛
 -> M15.1 Profile Conversation & Memory v2
--> M14.2 真实模型 Agent 评测
+-> M16 真实模型 Agent 质量闭环（已完成）
 -> M14.3 简历选择/上传 POC
 -> M14.4 单岗位真实投递金丝雀
 ```
@@ -1993,3 +1995,80 @@ M14.1 单岗位真实打招呼授权协议
 - 把 ProfileAgent 放入每个岗位的 ResumeWorkflowGraph。
 - 模型自动确认事实或静默删除正式画像。
 - LangGraph checkpoint；只有画像访谈出现复杂分支中断和跨设备恢复需求后再评估。
+
+## 16. M16 真实模型 Agent 质量闭环
+
+状态：已完成实现、fixture smoke、桌面/移动 UI 验证和真实模型正式评测。
+
+### 目标
+
+把 M13 的 rules-mode 回归集升级为可重复的真实模型质量门禁，同时保持事实证据、风险门禁、ProfileAgent 持久化边界和 BOSS 真实动作边界不变。
+
+### 开源复用与技术选型
+
+- 选用官方 `openai@6.46.0` 负责 OpenAI-compatible transport、错误和 usage 对象。
+- 选用 `zod@4.4.3` 负责 Screening、Resume、Fit、Audit 和 Profile conversation 严格输出 Schema。
+- 不引入 `@langchain/openai`；现有 LangGraph 继续只负责图编排，模型 transport 保持独立，避免再增加一层消息/回调抽象。
+- 不引入 promptfoo/DeepEval/LangSmith 作为核心 runner；复用 M13 匿名数据契约和业务指标，后续可把报告适配到通用框架。
+- 评估过官方 Responses WebSocket + `ws`，但当前供应商经 Cloudflare 返回 426，且不应为不可用路径保留依赖，因此最终未引入 `ws`。
+
+### 实现
+
+- `server/src/model-client.js`：Responses/Chat transport、兼容双层 JSON Chat 响应、Zod 校验、请求 hash、usage、reasoning token、延迟、attempt 和可选成本；Schema 与网络错误分类重试，429/5xx 使用指数退避。
+- `server/src/agent-output-schemas.js`：五类模型输出契约。
+- Screening、Resume、Fit、Revision、Audit 支持 `hybrid/auto/llm/rules`；ClaimVerifier 和 JobRiskGate 保持规则硬门禁。
+- ResumeAgent 只接收确认后的 experience/skill ID；每条 bullet 必须绑定确认过的 sourceFact。
+- Fit 的 covered/weak 必须引用简历原文；Audit 只能比规则更严格，不能解除 claim、must-have 或 Render QA 阻断。
+- Hybrid Screening 使用 70% 确定性证据分 + 30% 模型语义分，风险取高值，推荐由统一阈值生成；原模型分和推荐保留在 metadata。
+- schema v15：`agent_runs.model_telemetry_json` 与 `agent_evaluation_runs`。
+- API：`GET /api/agent-quality`、`GET /api/agent-evaluations`。
+- 设置页：一键闭环模式选择和质量摘要；手动规则工具继续固定为 rules。
+- `boss-model.local.json` 作为被忽略的无密钥覆盖层；`boss-model.example.json` 可提交。凭据仍来自环境变量或被忽略的 credential file。
+
+### 真实模型评测
+
+正式命令：
+
+```powershell
+npm run agent:evaluate:real -- --samples 3 --delay-ms 2500
+```
+
+正式报告：`382ad0764126c5ff`，匿名 fixture 9 岗位 x 3 次，共 27 样本、75 模型节点、574,003 token。
+
+| 指标 | 结果 | 门槛 |
+|---|---:|---:|
+| structured output success | 1.0000 | >= 0.95 |
+| successful samples | 1.0000 | >= 0.90 |
+| risk recall / precision | 1.0000 / 1.0000 | >= 1.00 / >= 1.00 |
+| ranking pair accuracy | 1.0000 | >= 0.90 |
+| Screening recommendation accuracy | 1.0000 | >= 0.75 |
+| JD must-have status accuracy | 1.0000 | >= 0.80 |
+| generated claim support | 0.966814 | >= 0.95 |
+| Audit consistency | 1.0000 | >= 0.80 |
+| maximum Screening score stddev | 2.357 | <= 8.0 |
+| unsupported claims | 0 | <= 0 |
+
+运行遥测：75/75 模型阶段成功，无 Schema/transport 失败和规则降级；P50/P95 为 6727/12210 ms。模型单价为 0/未配置，不能据此声称费用为零。
+
+一次未退避的正式尝试因供应商连续 502 被正确记录为 `FAILED/AGENT_QUALITY_GATES_FAILED`；增加 2/4/8 秒 5xx 退避、3 次重试和 2500 ms 评测间隔后，第二次正式运行通过。失败记录、metrics、telemetry 和报告均保留，没有被成功记录覆盖。
+
+### 验收
+
+- `npm run m16:real-model-agents:smoke`：模型 Schema 重试、token 持久化、无证据输出阻断、Audit 不可放宽、Chat 双层 JSON 兼容、hybrid score/recommendation policy、browser task 为 0。
+- `npm run m16:agent-quality-evaluation:smoke`：11 项指标、重复采样、报告和 SQLite 评测记录。
+- `npm run m16:options-agent-quality:smoke`：桌面与 390px 移动设置页、模式保存、质量 API、无 BOSS 动作。
+- v14 -> v15 正式 SQLite 自动备份后迁移，备份保存在 `server/data/backups/`。
+
+### 明确不包含
+
+- 不把 ProfileAgent 放入每个岗位图。
+- 不让模型绕过风险、claim、must-have、Render QA 或用户事实确认。
+- 不创建 BOSS browser task，不打招呼，不上传简历，不投递。
+- 不把匿名 fixture 通过等同于真实投递成功率或招聘结果。
+
+### 下一阶段
+
+1. 持续把真实但匿名化的误筛、漏筛、Schema 和 Audit 失败案例加入评测集。
+2. 配置供应商实际 input/output 单价后再启用费用门禁。
+3. 在用户再次明确授权时，单独执行 M14.1 真实打招呼 canary；Agent 评测通过不构成 BOSS 动作授权。
+4. 两项门禁都通过后，再进入简历选择/上传 POC；真实投递仍最后进行。

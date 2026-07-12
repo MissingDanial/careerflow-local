@@ -19,7 +19,7 @@ try {
   throw new Error("SQLite storage requires Node.js with node:sqlite support. Use Node.js 24 or newer for this project.");
 }
 
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 15;
 const DEFAULT_DB_NAME = "boss_find.sqlite3";
 
 function createJobStore(options = {}) {
@@ -193,6 +193,7 @@ class SqliteJobStore {
     const profileSnapshotCount = this.database.prepare("SELECT COUNT(*) AS count FROM profile_snapshots").get().count;
     const workflowRunCount = this.database.prepare("SELECT COUNT(*) AS count FROM workflow_runs").get().count;
     const workflowInputSnapshotCount = this.database.prepare("SELECT COUNT(*) AS count FROM workflow_input_snapshots").get().count;
+    const agentEvaluationRunCount = this.database.prepare("SELECT COUNT(*) AS count FROM agent_evaluation_runs").get().count;
     const openWorkflowErrorCount = this.database.prepare(`
       SELECT COUNT(*) AS count
       FROM workflow_events
@@ -241,6 +242,7 @@ class SqliteJobStore {
       profileSnapshotCount: Number(profileSnapshotCount || 0),
       workflowRunCount: Number(workflowRunCount || 0),
       workflowInputSnapshotCount: Number(workflowInputSnapshotCount || 0),
+      agentEvaluationRunCount: Number(agentEvaluationRunCount || 0),
       openWorkflowErrorCount: Number(openWorkflowErrorCount || 0),
       latestQuality: this.getLatestQuality(),
       lastBatch: this.getLastBatch()
@@ -2115,8 +2117,8 @@ class SqliteJobStore {
         agent_name, application_id, step, status, provider, input_json, output_json,
         error_code, error_message, fallback_used, started_at, finished_at, created_at, updated_at,
         workflow_run_id, profile_snapshot_id, job_snapshot_id, prompt_version, agent_version,
-        model_config_json, graph_version
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        model_config_json, graph_version, model_telemetry_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       agentName,
       applicationId || null,
@@ -2138,7 +2140,8 @@ class SqliteJobStore {
       workflowInput?.prompt_version || cleanText(input.promptVersion || ""),
       workflowInput?.agent_version || cleanText(input.agentVersion || ""),
       workflowInput?.model_config_json || stringifyJson(sanitizeModelConfig(input.modelConfig || {})),
-      workflowInput?.graph_version || cleanText(input.graphVersion || "")
+      workflowInput?.graph_version || cleanText(input.graphVersion || ""),
+      stringifyJson(input.telemetry && typeof input.telemetry === "object" ? input.telemetry : {})
     );
     const agentRunId = Number(result.lastInsertRowid);
     this.insertWorkflowEvent({
@@ -2184,7 +2187,7 @@ class SqliteJobStore {
       UPDATE agent_runs
       SET status = ?, provider = ?, output_json = ?, error_code = ?, error_message = ?,
         fallback_used = ?, prompt_version = ?, agent_version = ?, model_config_json = ?,
-        graph_version = ?, finished_at = ?, updated_at = ?
+        graph_version = ?, model_telemetry_json = ?, finished_at = ?, updated_at = ?
       WHERE id = ?
     `).run(
       status,
@@ -2199,6 +2202,9 @@ class SqliteJobStore {
         ? existing.model_config_json
         : stringifyJson(sanitizeModelConfig(input.modelConfig || {})),
       cleanText(input.graphVersion ?? existing.graph_version ?? ""),
+      input.telemetry === undefined
+        ? existing.model_telemetry_json
+        : stringifyJson(input.telemetry && typeof input.telemetry === "object" ? input.telemetry : {}),
       now,
       now,
       id
@@ -2222,6 +2228,7 @@ class SqliteJobStore {
         step: existing.step,
         provider: cleanText(input.provider || existing.provider || ""),
         fallbackUsed: Boolean(input.fallbackUsed),
+        modelTelemetry: summarizeModelTelemetry(input.telemetry),
         outputSummary: summarizeWorkflowEventPayload(input.output)
       }
     }, now);
@@ -2248,6 +2255,155 @@ class SqliteJobStore {
       throw validationError(`Agent run not found: ${id}`);
     }
     return rowToAgentRun(row);
+  }
+
+  startAgentEvaluationRun(input = {}) {
+    const evaluationType = cleanText(input.evaluationType || "real_model_quality");
+    const mode = normalizeAgentQualityMode(input.mode || "hybrid");
+    const datasetId = cleanText(input.datasetId || "");
+    const datasetHash = cleanText(input.datasetHash || "");
+    if (!evaluationType || !mode || !datasetId || !datasetHash) {
+      throw validationError("Agent evaluation type, mode, dataset id, and dataset hash are required");
+    }
+    const now = new Date().toISOString();
+    const result = this.database.prepare(`
+      INSERT INTO agent_evaluation_runs (
+        evaluation_type, mode, status, dataset_id, dataset_hash, model_config_json,
+        sample_count, metrics_json, telemetry_json, report_json_path,
+        report_markdown_path, error_code, error_message, started_at, finished_at,
+        created_at, updated_at
+      ) VALUES (?, ?, 'RUNNING', ?, ?, ?, 0, '{}', '{}', NULL, NULL, '', '', ?, NULL, ?, ?)
+    `).run(
+      evaluationType,
+      mode,
+      datasetId,
+      datasetHash,
+      stringifyJson(sanitizeModelConfig(input.modelConfig || {})),
+      now,
+      now,
+      now
+    );
+    return this.getAgentEvaluationRun(Number(result.lastInsertRowid));
+  }
+
+  finishAgentEvaluationRun(evaluationRunId, input = {}) {
+    const id = normalizePositiveInteger(evaluationRunId);
+    const status = cleanText(input.status || "").toUpperCase();
+    if (!id || !new Set(["SUCCEEDED", "FAILED"]).has(status)) {
+      throw validationError("Valid agent evaluation id and final status are required");
+    }
+    const existing = this.database.prepare("SELECT * FROM agent_evaluation_runs WHERE id = ?").get(id);
+    if (!existing) {
+      throw validationError(`Agent evaluation run not found: ${id}`);
+    }
+    const now = new Date().toISOString();
+    this.database.prepare(`
+      UPDATE agent_evaluation_runs
+      SET status = ?, sample_count = ?, metrics_json = ?, telemetry_json = ?,
+          report_json_path = ?, report_markdown_path = ?, error_code = ?,
+          error_message = ?, finished_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      status,
+      Math.max(0, Number(input.sampleCount || 0)),
+      stringifyJson(input.metrics && typeof input.metrics === "object" ? input.metrics : {}),
+      stringifyJson(input.telemetry && typeof input.telemetry === "object" ? input.telemetry : {}),
+      cleanText(input.reportJsonPath || ""),
+      cleanText(input.reportMarkdownPath || ""),
+      cleanText(input.errorCode || ""),
+      cleanMultiline(input.errorMessage || "").slice(0, 4000),
+      now,
+      now,
+      id
+    );
+    return this.getAgentEvaluationRun(id);
+  }
+
+  getAgentEvaluationRun(evaluationRunId) {
+    const id = normalizePositiveInteger(evaluationRunId);
+    if (!id) {
+      throw validationError("Valid agent evaluation id is required");
+    }
+    const row = this.database.prepare("SELECT * FROM agent_evaluation_runs WHERE id = ?").get(id);
+    if (!row) {
+      throw validationError(`Agent evaluation run not found: ${id}`);
+    }
+    return rowToAgentEvaluationRun(row);
+  }
+
+  getAgentEvaluationRuns(options = {}) {
+    const limit = Math.max(1, Math.min(100, Number(options.limit) || 20));
+    const rows = this.database.prepare(`
+      SELECT * FROM agent_evaluation_runs
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(limit);
+    return {
+      storage: "sqlite",
+      totalRuns: Number(this.database.prepare("SELECT COUNT(*) AS count FROM agent_evaluation_runs").get().count || 0),
+      runs: rows.map(rowToAgentEvaluationRun)
+    };
+  }
+
+  getAgentModelQualitySummary(options = {}) {
+    const limit = Math.max(1, Math.min(1000, Number(options.limit) || 500));
+    const rows = this.database.prepare(`
+      SELECT id, agent_name, provider, status, fallback_used, model_telemetry_json, started_at
+      FROM agent_runs
+      WHERE model_telemetry_json IS NOT NULL AND model_telemetry_json != '{}'
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(limit);
+    const invocations = rows.map((row) => ({
+      id: Number(row.id || 0),
+      agentName: row.agent_name || "",
+      provider: row.provider || "",
+      status: row.status || "",
+      fallbackUsed: Boolean(row.fallback_used),
+      startedAt: row.started_at || "",
+      telemetry: parseJsonValue(row.model_telemetry_json, {})
+    }));
+    const durations = invocations.map((item) => Number(item.telemetry.durationMs || 0)).filter((value) => value > 0);
+    const totals = invocations.reduce((summary, item) => {
+      const usage = item.telemetry.usage || {};
+      summary.inputTokens += Number(usage.inputTokens || 0);
+      summary.outputTokens += Number(usage.outputTokens || 0);
+      summary.reasoningTokens += Number(usage.reasoningTokens || 0);
+      summary.totalTokens += Number(usage.totalTokens || 0);
+      summary.estimatedCostUsd += Number(item.telemetry.estimatedCostUsd || 0);
+      summary.attempts += Number(item.telemetry.attemptCount || 0);
+      if (item.fallbackUsed) {
+        summary.fallbackCount += 1;
+      }
+      if (item.status === "FAILED") {
+        summary.failedCount += 1;
+      }
+      return summary;
+    }, {
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 0,
+      estimatedCostUsd: 0,
+      attempts: 0,
+      fallbackCount: 0,
+      failedCount: 0
+    });
+    totals.estimatedCostUsd = Number(totals.estimatedCostUsd.toFixed(8));
+    return {
+      storage: "sqlite",
+      invocationCount: invocations.length,
+      totals,
+      latencyMs: {
+        p50: percentile(durations, 0.5),
+        p95: percentile(durations, 0.95),
+        max: durations.length ? Math.max(...durations) : 0
+      },
+      providerCounts: countValues(invocations.map((item) => item.provider)),
+      modelCounts: countValues(invocations.map((item) => item.telemetry.model || "unknown")),
+      recentInvocations: invocations.slice(0, 20),
+      evaluations: this.getAgentEvaluationRuns({ limit: 10 }).runs
+    };
   }
 
   recordWorkflowEvent(input = {}) {
@@ -6067,6 +6223,7 @@ function rowToAgentRun(row) {
     promptVersion: row.prompt_version || "",
     agentVersion: row.agent_version || "",
     modelConfig: parseJsonValue(row.model_config_json, {}),
+    modelTelemetry: parseJsonValue(row.model_telemetry_json, {}),
     graphVersion: row.graph_version || "",
     startedAt: row.started_at || "",
     finishedAt: row.finished_at || "",
@@ -6735,9 +6892,14 @@ function normalizeAgentRunStatus(value) {
   return new Set(["RUNNING", "SUCCEEDED", "FAILED"]).has(status) ? status : "";
 }
 
+function normalizeAgentQualityMode(value) {
+  const mode = cleanText(value).toLowerCase();
+  return new Set(["rules", "auto", "llm", "hybrid"]).has(mode) ? mode : "";
+}
+
 function normalizeWorkflowRunMode(value) {
   const mode = cleanText(value).toLowerCase();
-  return new Set(["rules", "auto", "llm"]).has(mode) ? mode : "rules";
+  return new Set(["rules", "auto", "llm", "hybrid"]).has(mode) ? mode : "rules";
 }
 
 function normalizeWorkflowRunFinalStatus(value) {
@@ -6797,6 +6959,68 @@ function normalizeOptionalNonNegativeInteger(value) {
   }
   const number = Number(value);
   return Number.isInteger(number) && number >= 0 ? number : null;
+}
+
+function summarizeModelTelemetry(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const usage = value.usage && typeof value.usage === "object" ? value.usage : {};
+  return {
+    schemaVersion: cleanText(value.schemaVersion || ""),
+    model: cleanText(value.model || ""),
+    wireApi: cleanText(value.wireApi || ""),
+    durationMs: Number(value.durationMs || 0),
+    attemptCount: Number(value.attemptCount || 0),
+    inputTokens: Number(usage.inputTokens || 0),
+    outputTokens: Number(usage.outputTokens || 0),
+    reasoningTokens: Number(usage.reasoningTokens || 0),
+    totalTokens: Number(usage.totalTokens || 0),
+    estimatedCostUsd: value.estimatedCostUsd === null || value.estimatedCostUsd === undefined
+      ? null
+      : Number(value.estimatedCostUsd || 0)
+  };
+}
+
+function rowToAgentEvaluationRun(row) {
+  return {
+    id: Number(row.id || 0),
+    evaluationType: row.evaluation_type || "",
+    mode: row.mode || "",
+    status: row.status || "",
+    datasetId: row.dataset_id || "",
+    datasetHash: row.dataset_hash || "",
+    modelConfig: parseJsonValue(row.model_config_json, {}),
+    sampleCount: Number(row.sample_count || 0),
+    metrics: parseJsonValue(row.metrics_json, {}),
+    telemetry: parseJsonValue(row.telemetry_json, {}),
+    reportJsonPath: row.report_json_path || "",
+    reportMarkdownPath: row.report_markdown_path || "",
+    errorCode: row.error_code || "",
+    errorMessage: row.error_message || "",
+    startedAt: row.started_at || "",
+    finishedAt: row.finished_at || "",
+    createdAt: row.created_at || "",
+    updatedAt: row.updated_at || ""
+  };
+}
+
+function percentile(values, quantile) {
+  const sorted = (values || []).map(Number).filter(Number.isFinite).sort((left, right) => left - right);
+  if (!sorted.length) {
+    return 0;
+  }
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * quantile) - 1));
+  return sorted[index];
+}
+
+function countValues(values) {
+  const counts = {};
+  for (const value of values || []) {
+    const key = cleanText(value || "unknown") || "unknown";
+    counts[key] = Number(counts[key] || 0) + 1;
+  }
+  return counts;
 }
 
 function summarizeWorkflowEventPayload(value) {

@@ -1,11 +1,25 @@
 const AGENT_NAME = "AuditAgent";
+const { AuditReviewOutputSchema } = require("./agent-output-schemas");
+const { loadModelConfig, requestStructuredCompletion } = require("./model-client");
+
+const PROMPT_VERSION = "m16.audit.prompt.v1";
+const AGENT_VERSION = "m16.audit.agent.v1";
 
 function runAuditAgent(input = {}, options = {}) {
   const context = normalizeAuditInput(input);
   const mode = normalizeMode(options.mode || input.mode || "rules");
-  if (mode !== "rules") {
-    return runAuditAgent(input, { ...options, mode: "rules" });
+  const baseline = runRuleBasedAuditAgent(context);
+  const modelConfig = loadModelConfig(options.modelConfig || {});
+  if (mode === "rules" || (mode === "auto" && !modelConfig.configured)) {
+    return baseline;
   }
+  if (!modelConfig.configured) {
+    throw auditAgentError("LLM_CONFIG_INVALID", "OpenAI-compatible model config is not available for AuditAgent");
+  }
+  return runModelAuditAgent(context, baseline, mode, modelConfig, options);
+}
+
+function runRuleBasedAuditAgent(context) {
   const unsupportedClaims = collectUnsupportedClaims(context);
   const sourceIssues = auditSourceMapping(context);
   const pageEstimate = estimatePages(context.resumeFields);
@@ -58,8 +72,164 @@ function runAuditAgent(input = {}, options = {}) {
         screeningId: context.screening.id || null,
         resumeVersionId: context.resumeVersionId || null
       }
+    },
+    promptVersion: "m7.audit.rules.v1",
+    agentVersion: "m7.audit.rules.v1",
+    telemetry: {}
+  };
+}
+
+async function runModelAuditAgent(context, baseline, mode, modelConfig, options = {}) {
+  const invoke = options.requestStructuredCompletion || requestStructuredCompletion;
+  try {
+    const completion = await invoke({
+      system: auditSystemPrompt(),
+      user: JSON.stringify(buildAuditModelInput(context, baseline), null, 2),
+      config: modelConfig,
+      schema: AuditReviewOutputSchema,
+      schemaName: "resume_audit_review_output"
+    });
+    const result = mergeAuditReview(baseline.result, completion.data);
+    return {
+      ok: true,
+      agent: AGENT_NAME,
+      provider: mode === "hybrid" ? "hybrid" : "llm",
+      fallbackUsed: false,
+      result,
+      modelConfig: publicModelConfig(modelConfig),
+      promptVersion: PROMPT_VERSION,
+      agentVersion: AGENT_VERSION,
+      telemetry: completion.telemetry || {}
+    };
+  } catch (error) {
+    if (mode === "llm" || mode === "hybrid") {
+      const structured = auditAgentError(error.code || "AUDIT_AGENT_FAILED", error.message || String(error));
+      structured.telemetry = error.telemetry || {};
+      throw structured;
+    }
+    return {
+      ...baseline,
+      fallbackUsed: true,
+      fallbackReason: error.code || "LLM_REQUEST_FAILED",
+      fallbackMessage: error.message || String(error),
+      modelConfig: publicModelConfig(modelConfig),
+      promptVersion: PROMPT_VERSION,
+      agentVersion: AGENT_VERSION,
+      telemetry: error.telemetry || {},
+      result: {
+        ...baseline.result,
+        requiresUserConfirmation: true,
+        metadata: {
+          ...baseline.result.metadata,
+          method: "rules_fallback",
+          fallbackReason: error.code || "LLM_REQUEST_FAILED"
+        }
+      }
+    };
+  }
+}
+
+function buildAuditModelInput(context, baseline) {
+  return {
+    task: "Review the resume's JD fit, clarity, and application readiness after deterministic hard gates. Return JSON only.",
+    outputSchema: {
+      jobFitReview: "good | mixed | weak",
+      recommendation: "approve | revise | block",
+      requiresUserConfirmation: "boolean",
+      confidence: "low | medium | high",
+      qualityIssues: ["specific issue grounded in supplied resume/JD"],
+      recommendations: ["specific evidence-preserving revision"]
+    },
+    rules: [
+      "You may make the deterministic recommendation stricter, never weaker.",
+      "Do not approve if deterministicAudit reports truth, render, format, or page failure.",
+      "Do not request invented facts or metrics.",
+      "Do not decide or perform BOSS submission.",
+      "Return exactly one JSON object."
+    ],
+    job: context.job,
+    screening: context.screening,
+    resumeFields: context.resumeFields,
+    sourceMapping: context.sourceMapping,
+    deterministicAudit: baseline.result
+  };
+}
+
+function auditSystemPrompt() {
+  return [
+    "You are AuditAgent in a local-first resume workflow.",
+    "Deterministic truthfulness, source mapping, render, and page checks are binding hard gates.",
+    "Review semantic JD fit and writing quality conservatively.",
+    "Never relax a deterministic blocker or invent evidence.",
+    "Return exactly one JSON object."
+  ].join("\n");
+}
+
+function mergeAuditReview(baseline, review) {
+  const recommendation = stricterRecommendation(baseline.recommendation, review.recommendation);
+  const qualityIssues = normalizeStringArray(review.qualityIssues).slice(0, 20);
+  const recommendations = normalizeStringArray(review.recommendations).slice(0, 15);
+  const riskFlags = Array.from(new Set([
+    ...baseline.riskFlags,
+    ...qualityIssues.map((issue) => `Model quality review: ${issue}`)
+  ])).slice(0, 40);
+  return {
+    ...baseline,
+    jobFitReview: stricterJobFitReview(baseline.jobFitReview, review.jobFitReview),
+    recommendation,
+    requiresUserConfirmation: Boolean(
+      baseline.requiresUserConfirmation
+        || review.requiresUserConfirmation
+        || recommendation !== "approve"
+    ),
+    riskScoreAdjustment: Math.min(50, baseline.riskScoreAdjustment + Math.min(15, qualityIssues.length * 3)),
+    riskFlags,
+    metadata: {
+      ...baseline.metadata,
+      method: "deterministic_gates_plus_llm_review",
+      modelConfidence: text(review.confidence).toLowerCase(),
+      qualityIssues,
+      recommendations,
+      deterministicRecommendation: baseline.recommendation,
+      modelRecommendation: review.recommendation,
+      noRealBossAction: true
     }
   };
+}
+
+function stricterRecommendation(left, right) {
+  const order = { approve: 0, revise: 1, block: 2 };
+  const normalizedLeft = Object.hasOwn(order, left) ? left : "block";
+  const normalizedRight = Object.hasOwn(order, right) ? right : "block";
+  return order[normalizedRight] > order[normalizedLeft] ? normalizedRight : normalizedLeft;
+}
+
+function stricterJobFitReview(left, right) {
+  const order = { good: 0, mixed: 1, weak: 2 };
+  const normalizedLeft = Object.hasOwn(order, left) ? left : "weak";
+  const normalizedRight = Object.hasOwn(order, right) ? right : "weak";
+  return order[normalizedRight] > order[normalizedLeft] ? normalizedRight : normalizedLeft;
+}
+
+function publicModelConfig(config = {}) {
+  return {
+    configured: Boolean(config.configured),
+    baseUrl: config.baseUrl || "",
+    model: config.model || "",
+    wireApi: config.wireApi || "",
+    reasoningEffort: config.reasoningEffort || "",
+    maxRetries: Number(config.maxRetries || 0),
+    source: config.source || ""
+  };
+}
+
+function auditAgentError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  error.agent = AGENT_NAME;
+  error.step = "audit_resume";
+  error.retryable = code === "LLM_REQUEST_FAILED" || code === "AGENT_OUTPUT_SCHEMA_INVALID";
+  return error;
 }
 
 function normalizeAuditInput(input = {}) {
@@ -145,10 +315,11 @@ function auditSourceMapping(context) {
 }
 
 function hasMinimumResumeShape(fields = {}) {
-  return Boolean(fields.summary)
+  const education = Array.isArray(fields.education) ? fields.education : [];
+  return Boolean(fields.name || fields.headline || fields.summary)
     && Array.isArray(fields.skills)
     && Array.isArray(fields.projects)
-    && (fields.skills.length > 0 || fields.projects.length > 0);
+    && (fields.skills.length > 0 || fields.projects.length > 0 || education.length > 0);
 }
 
 function estimatePages(fields = {}) {
@@ -170,7 +341,7 @@ function estimatePages(fields = {}) {
 
 function normalizeMode(value) {
   const mode = text(value).toLowerCase();
-  return new Set(["rules", "auto", "llm"]).has(mode) ? mode : "rules";
+  return new Set(["rules", "auto", "llm", "hybrid"]).has(mode) ? mode : "rules";
 }
 
 function normalizeObject(value) {

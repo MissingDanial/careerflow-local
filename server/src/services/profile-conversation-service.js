@@ -214,7 +214,8 @@ async function executeTurn({ store, runAgent, session, userMessage, payload }) {
       fallbackUsed: false,
       promptVersion: agentResult.promptVersion,
       agentVersion: agentResult.agentVersion,
-      modelConfig: agentResult.modelConfig
+      modelConfig: agentResult.modelConfig,
+      telemetry: agentResult.telemetry
     });
     store.recordWorkflowEvent({
       sourceType: "profile_dialog_session",
@@ -268,7 +269,8 @@ async function executeTurn({ store, runAgent, session, userMessage, payload }) {
       fallbackUsed: false,
       promptVersion: PROMPT_VERSION,
       agentVersion: AGENT_VERSION,
-      modelConfig: requestedModelConfig
+      modelConfig: requestedModelConfig,
+      telemetry: error.telemetry || {}
     });
     const failedAssistantMessage = store.createProfileDialogMessage(session.id, {
       role: "assistant",

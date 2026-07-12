@@ -2,7 +2,8 @@
 
 const fs = require("fs");
 const path = require("path");
-const { loadModelConfig, requestJsonCompletion } = require("./model-client");
+const { ProfileConversationOutputSchema } = require("./agent-output-schemas");
+const { loadModelConfig, requestStructuredCompletion } = require("./model-client");
 
 const AGENT_NAME = "ProfileConversationAgent";
 const PROMPT_VERSION = "m15.profile-conversation.prompt.v1";
@@ -31,13 +32,15 @@ async function runProfileConversationAgent(input = {}, options = {}) {
       "OpenAI-compatible model config is not available for ProfileAgent conversation"
     );
   }
-  const invoke = options.requestJsonCompletion || requestJsonCompletion;
+  const invoke = resolveCompletionInvoker(options);
   const skill = loadProfileConversationSkill(options);
   try {
-    const output = await invoke({
+    const completion = await invoke({
       system: buildSystemPrompt(skill),
       user: JSON.stringify(buildModelInput(input), null, 2),
-      config: modelConfig
+      config: modelConfig,
+      schema: ProfileConversationOutputSchema,
+      schemaName: "profile_conversation_output"
     });
     return {
       ok: true,
@@ -47,7 +50,8 @@ async function runProfileConversationAgent(input = {}, options = {}) {
       promptVersion: PROMPT_VERSION,
       agentVersion: AGENT_VERSION,
       modelConfig: publicModelConfig(modelConfig),
-      result: normalizeProfileConversationOutput(output, input)
+      telemetry: completion.telemetry || {},
+      result: normalizeProfileConversationOutput(completion.data, input)
     };
   } catch (error) {
     throw profileConversationError(
@@ -59,6 +63,24 @@ async function runProfileConversationAgent(input = {}, options = {}) {
       }
     );
   }
+}
+
+function resolveCompletionInvoker(options = {}) {
+  if (typeof options.requestStructuredCompletion === "function") {
+    return options.requestStructuredCompletion;
+  }
+  if (typeof options.requestJsonCompletion === "function") {
+    return async (input) => ({
+      data: await options.requestJsonCompletion(input),
+      telemetry: {
+        schemaVersion: "m16.model-telemetry.fixture.v1",
+        provider: "fixture",
+        model: "fixture",
+        usage: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 }
+      }
+    });
+  }
+  return requestStructuredCompletion;
 }
 
 function loadProfileConversationSkill(options = {}) {

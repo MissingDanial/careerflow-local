@@ -13,9 +13,9 @@
 
 | 层级 | 推荐技术 | 说明 |
 |---|---|---|
-| 后端 | Python + FastAPI | 本地 API、任务编排、文件管理 |
-| Agent 编排 | LangGraph 或轻量状态机 | MVP 可先自研状态机，复杂分支稳定后迁移 LangGraph |
-| LLM 调用 | OpenAI-compatible client | 用户配置 `base_url`、`api_key`、`model` |
+| 后端 | Node.js 24 + `node:http` | 当前本地 API、任务编排、文件和 SQLite 运行时 |
+| Agent 编排 | `@langchain/langgraph@1.4.7` | 单岗位简历闭环使用 LangGraph，ProfileAgent 保持独立持久化入口 |
+| LLM 调用 | `openai@6.46.0` + `zod@4.4.3` | 官方 SDK transport、严格输出 Schema、token/延迟/重试遥测 |
 | 数据库 | SQLite | 单用户本地部署足够稳定 |
 | ORM/迁移 | `node:sqlite` + ordered SQL migrations | 当前使用 `DatabaseSync`，按版本迁移并在升级前备份 |
 | 简历 DOCX | python-docx/docxtpl | 固定模板填充 |
@@ -102,6 +102,7 @@ SQLite schema 管理：
 - migration 失败恢复升级前数据库；禁止继续使用集中式 `applySchema()`。
 - schema v11 的 `011_workflow_input_snapshots.sql` 新增业务级不可变运行输入，不依赖 LangGraph checkpoint 表。
 - schema v12 的 `012_application_transition_invariants.sql` 新增 application transition 幂等键和 browser task 过期、尝试次数、claim token 字段。
+- schema v15 的 `015_agent_model_quality.sql` 为 `agent_runs` 增加模型遥测，并新增 `agent_evaluation_runs` 保存真实模型评测状态、指标、报告和错误。
 
 不可变工作流输入：
 
@@ -150,6 +151,15 @@ Agent 固定评测：
 - 指标包括风险 recall/precision、pairwise 岗位排序、Screening 决策、JD 必要项识别/状态、生成 claim 支持率、人工 claim verdict 和 Audit 一致性。
 - JSON/Markdown 报告默认写入被忽略的 `server/data/agent-evaluation/`；任一指标低于数据集阈值时 CLI 返回非零退出码。
 - `m13:agent-evaluation:smoke` 使用临时目录，并通过故意漂移的内存标签验证回归门禁会失败且能返回样本 ID。
+
+M16 真实模型质量层：
+
+- `server/src/model-client.js` 使用官方 OpenAI SDK，支持 Responses/Chat transport、严格 JSON 解析、Zod 校验、Schema/网络重试和脱敏遥测。部分兼容供应商返回 JSON 字符串包裹的 Chat Completion 时只解包对象，不保存失败响应正文。
+- `ScreeningAgent`、`ResumeAgent`、`ResumeFitEvaluator`、`ResumeRevisionAgent`、`AuditAgent` 可异步调用模型；`ClaimVerifier` 与 `JobRiskGate` 保持确定性硬门禁。
+- `hybrid` 的最终匹配分为 70% 确定性证据基线与 30% 模型语义分，风险取两者较高值，推荐档位由统一阈值映射；原始模型分、推荐和权重写入 metadata。
+- `server/src/real-model-evaluation-runner.js` 对匿名 9 岗位数据集重复采样，计算 11 项结构、风险、排序、证据、审核和方差指标；CLI 失败时仍保存完整报告，但 `agent_evaluation_runs.status=FAILED`。
+- `GET /api/agent-quality` 返回近期模型调用聚合和评测；`GET /api/agent-evaluations` 返回评测历史。设置页只显示摘要，详细数据仍在本地 API/SQLite。
+- 正式 9 x 3 评测使用 75 次模型调用，全部节点成功，最大 Screening 标准差 2.357，unsupported claim 为 0；这不代表真实 BOSS 投递成功率。
 
 ### 4.3 Agent Orchestrator
 
@@ -277,6 +287,16 @@ browser:
   stop_on_captcha: true
   stop_on_login_required: true
 ```
+
+当前 Node 实现使用两层本地配置：
+
+```text
+environment / gpt5.5.txt       # credential + provider base URL; ignored by Git
+boss-model.local.json          # project model/wire API/timeout/retry overlay; ignored by Git
+boss-model.example.json        # safe tracked template
+```
+
+显式函数参数 > 环境变量 > local overlay > credential file。任何写入 SQLite、workflow snapshot 或 API 的 model config 都必须移除 API Key。当前供应商实测 `gpt-5.4-mini/chat` 可完成长结构输出；`gpt-5.5/responses` 在该供应商 Node 路径下不可用，不能硬编码为所有 provider 的默认能力。
 
 ## 7. 数据模型草案
 
@@ -442,12 +462,18 @@ browser:
 - `GET /api/exports/applications.csv`
 - `GET /api/exports/applications.xlsx`
 
+### 8.7 Agent 质量
+
+- `GET /api/agent-quality`
+- `GET /api/agent-evaluations`
+- CLI：`npm run agent:evaluate:real -- --samples 3 --delay-ms 2500`
+
 ## 9. Agent 输出校验
 
 所有 Agent 输出必须：
 
 - 使用 JSON。
-- 通过 Pydantic Schema 校验。
+- 当前 Node Agent 通过 Zod Schema 校验；未来 Python 服务若引入，使用等价 Pydantic 契约。
 - 包含 `confidence`。
 - 包含 `reasons`。
 - 包含 `risk_flags`。

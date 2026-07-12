@@ -641,6 +641,26 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/agent-quality") {
+      sendJson(response, 200, {
+        ok: true,
+        ...store.getAgentModelQualitySummary({
+          limit: Number(url.searchParams.get("limit") || 500)
+        })
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/agent-evaluations") {
+      sendJson(response, 200, {
+        ok: true,
+        ...store.getAgentEvaluationRuns({
+          limit: Number(url.searchParams.get("limit") || 20)
+        })
+      });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/real-actions/policy") {
       assertAuthorized(request);
       sendJson(response, 200, store.getRealActionPolicy({
@@ -824,7 +844,11 @@ async function screenApplication(applicationId, payload = {}) {
         fallbackReason: agentResult.fallbackReason || "",
         modelConfig: agentResult.modelConfig
       },
-      fallbackUsed: agentResult.fallbackUsed
+      fallbackUsed: agentResult.fallbackUsed,
+      promptVersion: agentResult.promptVersion,
+      agentVersion: agentResult.agentVersion,
+      modelConfig: agentResult.modelConfig,
+      telemetry: agentResult.telemetry
     });
     const saved = store.createScreening({
       applicationId,
@@ -853,7 +877,8 @@ async function screenApplication(applicationId, payload = {}) {
         error: structuredError(error)
       },
       errorCode: error.code || "SCREENING_AGENT_FAILED",
-      errorMessage: error.message || String(error)
+      errorMessage: error.message || String(error),
+      telemetry: error.telemetry || {}
     });
     try {
       store.transitionApplication(applicationId, {
@@ -1074,8 +1099,9 @@ async function prepareResume(applicationId, payload = {}) {
   });
 
   try {
-    const agentResult = runResumeAgent(resumeInput, {
-      mode: payload.mode || "rules"
+    const agentResult = await runResumeAgent(resumeInput, {
+      mode: payload.mode || "rules",
+      modelConfig: payload.modelConfig || {}
     });
     const finishedRun = store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -1084,7 +1110,11 @@ async function prepareResume(applicationId, payload = {}) {
         result: agentResult.result,
         fallbackUsed: agentResult.fallbackUsed
       },
-      fallbackUsed: agentResult.fallbackUsed
+      fallbackUsed: agentResult.fallbackUsed,
+      promptVersion: agentResult.promptVersion,
+      agentVersion: agentResult.agentVersion,
+      modelConfig: agentResult.modelConfig,
+      telemetry: agentResult.telemetry
     });
     const saved = store.createResumeVersion({
       applicationId,
@@ -1119,7 +1149,8 @@ async function prepareResume(applicationId, payload = {}) {
         error: structuredError(error)
       },
       errorCode: error.code || "RESUME_AGENT_FAILED",
-      errorMessage: error.message || String(error)
+      errorMessage: error.message || String(error),
+      telemetry: error.telemetry || {}
     });
     try {
       store.transitionApplication(applicationId, {
@@ -1166,12 +1197,13 @@ async function evaluateResumeFit(resumeVersionId, payload = {}) {
   });
 
   try {
-    const agentResult = runResumeFitEvaluator({
+    const agentResult = await runResumeFitEvaluator({
       application: resumeInput.application,
       job: resumeInput.job,
       resumeVersion
     }, {
-      mode: payload.mode || "rules"
+      mode: payload.mode || "rules",
+      modelConfig: payload.modelConfig || {}
     });
     const finishedRun = store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -1180,7 +1212,11 @@ async function evaluateResumeFit(resumeVersionId, payload = {}) {
         result: agentResult.result,
         fallbackUsed: agentResult.fallbackUsed
       },
-      fallbackUsed: agentResult.fallbackUsed
+      fallbackUsed: agentResult.fallbackUsed,
+      promptVersion: agentResult.promptVersion,
+      agentVersion: agentResult.agentVersion,
+      modelConfig: agentResult.modelConfig,
+      telemetry: agentResult.telemetry
     });
     const saved = store.createResumeFitEvaluation({
       resumeVersionId,
@@ -1229,7 +1265,8 @@ async function evaluateResumeFit(resumeVersionId, payload = {}) {
         error: structuredError(error)
       },
       errorCode: error.code || "RESUME_FIT_EVALUATOR_FAILED",
-      errorMessage: error.message || String(error)
+      errorMessage: error.message || String(error),
+      telemetry: error.telemetry || {}
     });
     const httpErrorObject = httpError(502, error.message || "ResumeFitEvaluator failed");
     httpErrorObject.code = error.code || "RESUME_FIT_EVALUATOR_FAILED";
@@ -1364,15 +1401,17 @@ async function reviseResumeFromChecks(resumeVersionId, payload = {}) {
   });
 
   try {
-    const agentResult = runResumeRevisionAgent({
+    const agentResult = await runResumeRevisionAgent({
       application: resumeInput.application,
       job: resumeInput.job,
+      screening: resumeInput.screening,
       profile: resumeInput.profile,
       resumeVersion,
       resumeFitEvaluation,
       resumeClaimVerification
     }, {
-      mode: payload.mode || "rules"
+      mode: payload.mode || "rules",
+      modelConfig: payload.modelConfig || {}
     });
     const finishedRun = store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -1381,7 +1420,11 @@ async function reviseResumeFromChecks(resumeVersionId, payload = {}) {
         result: agentResult.result,
         fallbackUsed: agentResult.fallbackUsed
       },
-      fallbackUsed: agentResult.fallbackUsed
+      fallbackUsed: agentResult.fallbackUsed,
+      promptVersion: agentResult.promptVersion,
+      agentVersion: agentResult.agentVersion,
+      modelConfig: agentResult.modelConfig,
+      telemetry: agentResult.telemetry
     });
     const saved = store.createResumeVersion({
       applicationId: resumeVersion.applicationId,
@@ -1451,7 +1494,8 @@ async function reviseResumeFromChecks(resumeVersionId, payload = {}) {
         error: structuredError(error)
       },
       errorCode: error.code || "RESUME_REVISION_AGENT_FAILED",
-      errorMessage: error.message || String(error)
+      errorMessage: error.message || String(error),
+      telemetry: error.telemetry || {}
     });
     store.recordWorkflowEvent({
       applicationId: resumeVersion.applicationId,
@@ -1504,7 +1548,7 @@ async function auditResume(resumeVersionId, payload = {}) {
   });
 
   try {
-    const agentResult = runAuditAgent({
+    const agentResult = await runAuditAgent({
       resumeVersionId,
       job: resumeInput.job,
       screening: resumeInput.screening,
@@ -1514,7 +1558,8 @@ async function auditResume(resumeVersionId, payload = {}) {
       unsupportedClaims: resumeVersion.unsupportedClaims,
       renderMetadata: resumeVersion.renderMetadata
     }, {
-      mode: payload.mode || "rules"
+      mode: payload.mode || "rules",
+      modelConfig: payload.modelConfig || {}
     });
     const finishedRun = store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -1523,7 +1568,11 @@ async function auditResume(resumeVersionId, payload = {}) {
         result: agentResult.result,
         fallbackUsed: agentResult.fallbackUsed
       },
-      fallbackUsed: agentResult.fallbackUsed
+      fallbackUsed: agentResult.fallbackUsed,
+      promptVersion: agentResult.promptVersion,
+      agentVersion: agentResult.agentVersion,
+      modelConfig: agentResult.modelConfig,
+      telemetry: agentResult.telemetry
     });
     const saved = store.createResumeAudit({
       resumeVersionId,
@@ -1550,7 +1599,8 @@ async function auditResume(resumeVersionId, payload = {}) {
         error: structuredError(error)
       },
       errorCode: error.code || "AUDIT_AGENT_FAILED",
-      errorMessage: error.message || String(error)
+      errorMessage: error.message || String(error),
+      telemetry: error.telemetry || {}
     });
     try {
       store.transitionApplication(resumeVersion.applicationId, {

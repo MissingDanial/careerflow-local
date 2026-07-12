@@ -93,6 +93,33 @@
           </div>
           <div id="settingsRiskMount"></div>
         </section>
+        <section class="settings-section agent-quality-settings">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">AGENT QUALITY</p>
+              <h2>模型与质量</h2>
+            </div>
+            <button id="refreshAgentQuality" class="secondary" type="button">刷新</button>
+          </div>
+          <div class="inline-setting-row">
+            <label>
+              <span>一键简历闭环模式</span>
+              <select id="agentExecutionMode">
+                <option value="hybrid">混合：模型 + 硬门禁</option>
+                <option value="auto">自动：模型失败后规则降级</option>
+                <option value="llm">严格模型</option>
+                <option value="rules">仅规则</option>
+              </select>
+            </label>
+          </div>
+          <div class="metric-grid four agent-quality-metrics">
+            <div><strong id="agentQualityInvocations">0</strong><span>模型调用</span></div>
+            <div><strong id="agentQualityTokens">0</strong><span>Token</span></div>
+            <div><strong id="agentQualityLatency">--</strong><span>P95 延迟</span></div>
+            <div><strong id="agentQualityGate">未评测</strong><span>最近门禁</span></div>
+          </div>
+          <p id="agentQualityStatus" class="status">尚未读取质量数据</p>
+        </section>
         <section class="settings-section">
           <div class="section-heading">
             <div>

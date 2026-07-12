@@ -22,7 +22,7 @@ function main() {
     const checks = {
       upgradesVersionSevenToCurrent: upgrade.finalVersion === SCHEMA_VERSION
         && upgrade.currentVersion === 7
-        && upgrade.appliedVersions.join(",") === "8,9,10,11,12,13,14",
+        && upgrade.appliedVersions.join(",") === "8,9,10,11,12,13,14,15",
       createsPreMigrationBackup: upgrade.backupCreated
         && upgrade.backupExists
         && upgrade.backupVersion === 7,
@@ -44,7 +44,9 @@ function main() {
         && upgrade.hasProfileDialogSessions
         && upgrade.hasProfileDialogMessages
         && upgrade.hasProfileContextVersions
-        && upgrade.hasProfileEntityRevisions,
+        && upgrade.hasProfileEntityRevisions
+        && upgrade.hasAgentRunModelTelemetry
+        && upgrade.hasAgentEvaluationRuns,
       bootstrapsHistoryForCurrentLegacyDatabase: bootstrap.currentVersion === SCHEMA_VERSION
         && bootstrap.finalVersion === SCHEMA_VERSION
         && bootstrap.appliedCount === 0
@@ -115,7 +117,9 @@ function runUpgradeScenario(dataDir) {
       hasProfileDialogSessions: tableExists(store.database, "profile_dialog_sessions"),
       hasProfileDialogMessages: tableExists(store.database, "profile_dialog_messages"),
       hasProfileContextVersions: tableExists(store.database, "profile_context_versions"),
-      hasProfileEntityRevisions: tableExists(store.database, "profile_entity_revisions")
+      hasProfileEntityRevisions: tableExists(store.database, "profile_entity_revisions"),
+      hasAgentRunModelTelemetry: columnExists(store.database, "agent_runs", "model_telemetry_json"),
+      hasAgentEvaluationRuns: tableExists(store.database, "agent_evaluation_runs")
     };
   } finally {
     store.close();
