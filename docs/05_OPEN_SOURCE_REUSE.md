@@ -890,3 +890,38 @@ Sources checked:
 - [DeepEval](https://github.com/confident-ai/deepeval)
 - [LangSmith SDK](https://github.com/langchain-ai/langsmith-sdk)
 - [Evalite](https://github.com/mattpocock/evalite)
+
+## M15.1 Profile conversation memory reuse check
+
+M15.1 coding started with GitHub/npm searches for `LangGraph`, `agent memory`, and `langgraph sqlite checkpoint`. Metadata was checked on 2026-07-11:
+
+- `langchain-ai/langgraphjs` (3.1k+ GitHub stars) and `@langchain/langgraph@1.4.7`: actively maintained official graph runtime and already used by this repository. Reused for the existing resume graph, but not added to each ProfileAgent turn because a request/response interview turn does not need a graph checkpoint.
+- `@langchain/langgraph-checkpoint-sqlite@1.0.3`: official, actively maintained SQLite checkpointer. Deferred because graph state/checkpoints do not model user confirmation, canonical profile entities, conflict resolution, or before/after fact revisions.
+- `mem0ai/mem0` (60k+ GitHub stars, `mem0ai@3.0.13`): mature general memory layer. Rejected for this phase because embeddings, semantic retrieval, and an additional memory abstraction add migration cost without replacing the domain profile schema.
+- `TencentCloud/TencentDB-Agent-Memory` (8.4k+ GitHub stars): validated local multi-tier memory reference. Rejected because adopting another complete memory subsystem would duplicate the current local SQLite source of truth and Node runtime.
+- Existing `model-client`, `node:sqlite`, ordered migrations, `agent_runs`, `workflow_events`, `profile_fact_drafts`, and project-local career Skill: selected for direct reuse.
+
+Selected approach:
+
+- Add domain-owned session/message tables instead of a generic vector memory service.
+- Load `.agents/skills/career-retrospective-to-job/` at model runtime.
+- Persist user messages before model requests and expose explicit retry.
+- Require strict JSON for reply, drafts, questions, conflicts, and summary patch.
+- Keep model writes behind the existing pending draft confirmation gate.
+- Version generated career context by profile and content hash.
+- Re-evaluate LangGraph SQLite checkpoints only if the interview becomes a branching, interruptible graph.
+
+Validation:
+
+```powershell
+npm run m15:profile-conversation:smoke
+npm run m15:options-profile-conversation:smoke
+npm run test:ci
+```
+
+Sources checked:
+
+- [LangGraph.js](https://github.com/langchain-ai/langgraphjs)
+- [LangGraph SQLite checkpointer](https://www.npmjs.com/package/@langchain/langgraph-checkpoint-sqlite)
+- [Mem0](https://github.com/mem0ai/mem0)
+- [TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory)

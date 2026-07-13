@@ -3,27 +3,118 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Boss Find 设置与诊断</title>
+    <title>Boss Find 工作台</title>
     <link rel="stylesheet" href="options.css">
   </head>
   <body>
     <main class="page">
-      <header class="hero">
-        <div>
-          <h1>Boss Find 设置与诊断</h1>
-          <p>主弹窗只保留采集操作；后端配置、任务队列、采集质量、异常事件和待补 JD 放在这里集中查看。</p>
+      <header class="app-header">
+        <div class="brand-block">
+          <span class="brand-mark" aria-hidden="true">BF</span>
+          <div>
+            <h1>Boss Find 工作台</h1>
+            <p id="status" class="status" aria-live="polite">正在连接本地服务</p>
+          </div>
         </div>
-        <div class="hero-actions">
-          <a class="button-link secondary" href="#profileAgentPortal">画像入口</a>
-          <button id="refreshDiagnostics" type="button">刷新诊断</button>
-        </div>
+        <button id="refreshDiagnostics" class="refresh-button" type="button" title="刷新全部数据">刷新</button>
       </header>
 
-      <section class="layout">
+      <nav class="view-tabs" role="tablist" aria-label="Boss Find 页面">
+        <button id="workspaceTab" class="view-tab" type="button" role="tab" aria-selected="true" aria-controls="workspacePanel" data-view-target="workspace">工作台</button>
+        <button id="profileTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="profilePanel" data-view-target="profile" tabindex="-1">个人经历</button>
+        <button id="settingsTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsPanel" data-view-target="settings" tabindex="-1">设置</button>
+      </nav>
+
+      <section id="workspacePanel" class="tab-panel workspace-panel" role="tabpanel" aria-labelledby="workspaceTab" data-view-panel="workspace">
+        <div class="workspace-summary" aria-label="岗位流程概览">
+          <div><strong id="workspaceApplicationCount">--</strong><span>全部岗位</span></div>
+          <div><strong id="workspaceActionCount">--</strong><span>待处理</span></div>
+          <div><strong id="workspaceReadyCount">--</strong><span>可推进</span></div>
+          <div><strong id="workspaceErrorCount">--</strong><span>需关注</span></div>
+        </div>
+
+        <div class="workspace-grid">
+          <section class="queue-section" aria-labelledby="queueTitle">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">APPLICATIONS</p>
+                <h2 id="queueTitle">岗位队列</h2>
+              </div>
+              <label class="queue-filter">
+                <span class="visually-hidden">筛选岗位</span>
+                <select id="workspaceFilter" aria-label="筛选岗位">
+                  <option value="active">当前流程</option>
+                  <option value="attention">需要处理</option>
+                  <option value="all">全部岗位</option>
+                </select>
+              </label>
+            </div>
+            <div class="table-scroll">
+              <table class="application-table">
+                <thead>
+                  <tr>
+                    <th scope="col">岗位</th>
+                    <th scope="col">状态</th>
+                    <th scope="col">匹配</th>
+                    <th scope="col">更新</th>
+                  </tr>
+                </thead>
+                <tbody id="workspaceApplications"></tbody>
+              </table>
+              <p id="workspaceEmpty" class="empty-state" hidden>暂无岗位数据</p>
+            </div>
+          </section>
+
+          <aside class="next-action-panel" aria-labelledby="nextActionTitle">
+            <p class="eyebrow">NEXT ACTION</p>
+            <h2 id="nextActionTitle">选择一个岗位</h2>
+            <p id="workspaceSelectedCompany" class="selected-company">岗位状态会决定下一步操作</p>
+            <div id="workspaceStageTrack" class="stage-track" aria-label="岗位进度"></div>
+            <div class="selected-meta">
+              <span id="workspaceSelectedStatus" class="status-chip">未选择</span>
+              <span id="workspaceSelectedMeta">--</span>
+            </div>
+            <p id="workspaceActionHint" class="action-hint">从左侧岗位队列选择一项。</p>
+            <button id="workspaceNextAction" class="primary next-action-button" type="button" disabled>选择一个岗位</button>
+          </aside>
+        </div>
+      </section>
+
+      <section id="profilePanel" class="tab-panel" role="tabpanel" aria-labelledby="profileTab" data-view-panel="profile" hidden></section>
+
+      <section id="settingsPanel" class="tab-panel settings-panel" role="tabpanel" aria-labelledby="settingsTab" data-view-panel="settings" hidden>
+        <div id="settingsCoreMount" class="settings-grid"></div>
+        <section class="settings-section">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">PREFERENCES</p>
+              <h2>岗位偏好</h2>
+            </div>
+          </div>
+          <div id="settingsRiskMount"></div>
+        </section>
+        <section class="settings-section">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">DOCUMENT</p>
+              <h2>简历模板</h2>
+            </div>
+          </div>
+          <div id="settingsTemplateMount"></div>
+        </section>
+        <details id="advancedDiagnostics" class="advanced-diagnostics">
+          <summary>
+            <span>高级诊断</span>
+            <small>任务、采集质量、Agent 节点与错误日志</small>
+          </summary>
+          <div id="advancedDiagnosticsMount" class="layout diagnostics-layout"></div>
+        </details>
+      </section>
+
+      <section id="legacyPanels" class="layout" hidden>
         <section class="card">
           <div class="card-title">
             <h2>同步配置</h2>
-            <span id="status" class="status"></span>
           </div>
           <label class="checkbox-row">
             <input id="autoSync" type="checkbox">
@@ -154,6 +245,45 @@
             <span id="careerContextStatus" class="status">尚未读取职业经历上下文</span>
           </div>
           <p class="note">专门用于首次画像沉淀、补充经历、修改目标方向和风险约束；生成待确认草稿后由用户确认入库，单岗位简历闭环不会重跑 ProfileAgent。</p>
+          <div class="profile-dialog-panel">
+            <div class="profile-dialog-toolbar">
+              <label class="profile-dialog-session-field">
+                <span>对话记录</span>
+                <select id="profileDialogSessionSelect" aria-label="选择 ProfileAgent 对话"></select>
+              </label>
+              <div class="button-row compact">
+                <button id="newProfileDialogSession" class="secondary" type="button">新对话</button>
+                <button id="refreshProfileDialog" class="secondary" type="button">刷新</button>
+              </div>
+              <span id="profileDialogStatus" class="status">尚未读取对话</span>
+            </div>
+            <div id="profileDialogMessages" class="profile-dialog-messages" aria-live="polite">
+              <div class="profile-dialog-empty">开始对话后，ProfileAgent 会逐轮整理经历并提出下一组问题。</div>
+            </div>
+            <label class="profile-dialog-composer">
+              <span>告诉 ProfileAgent 你的经历、修正或求职目标</span>
+              <textarea id="profileDialogComposer" rows="4" spellcheck="true" placeholder="例如：先从我的目标岗位开始复盘；或者：刚才项目的用户数应该改成 120，不是 200。"></textarea>
+            </label>
+            <div class="button-row profile-dialog-actions">
+              <button id="sendProfileDialogMessage" class="primary" type="button">发送并整理画像</button>
+              <button id="retryProfileDialogMessage" class="secondary hidden" type="button" hidden>重试上一轮</button>
+            </div>
+            <div class="profile-dialog-memory-grid">
+              <section>
+                <div class="list-heading">会话摘要</div>
+                <div id="profileDialogSummary" class="detail-section">暂无会话摘要</div>
+              </section>
+              <section>
+                <div class="list-heading">下一步追问</div>
+                <div id="profileDialogOpenQuestions" class="detail-section">暂无待追问问题</div>
+              </section>
+              <section>
+                <div class="list-heading">冲突与待核实</div>
+                <div id="profileDialogConflicts" class="detail-section">暂无冲突</div>
+              </section>
+            </div>
+            <p class="note">模型回复、摘要和失败记录会写入本地数据库。模型提出的新增或修改必须在下方事实草稿中确认后才会更新正式画像。</p>
+          </div>
           <div class="metric-grid three">
             <div><strong id="careerContextExists">--</strong><span>文件状态</span></div>
             <div><strong id="careerContextBytes">--</strong><span>字节</span></div>
@@ -181,21 +311,23 @@
             </div>
             <div id="careerContextAnswerForm" class="answer-form">暂无可回答问题</div>
           </div>
-          <div class="detail-panel profile-agent-update-panel">
-            <div class="card-title">
-              <h3>主动补充或修改画像</h3>
-              <span id="profileAgentUpdateStatus" class="status">输入后先生成待确认草稿</span>
+          <details class="profile-rule-fallback">
+            <summary>规则备用入口</summary>
+            <div class="detail-panel profile-agent-update-panel">
+              <div class="card-title">
+                <h3>不调用模型，直接生成规则草稿</h3>
+                <span id="profileAgentUpdateStatus" class="status">输入后先生成待确认草稿</span>
+              </div>
+              <label>
+                <span>本次要补充或修改的画像内容</span>
+                <textarea id="profileAgentUserUpdate" rows="5" spellcheck="true" placeholder="例如：新增一个项目经历、修正项目指标、调整目标岗位、加入不想去的方向。"></textarea>
+              </label>
+              <div class="button-row">
+                <button id="stageProfileAgentUpdate" class="primary" type="button">生成待确认草稿</button>
+                <button id="clearProfileAgentUpdate" class="secondary" type="button">清空输入</button>
+              </div>
             </div>
-            <label>
-              <span>本次要告诉 ProfileAgent 的内容</span>
-              <textarea id="profileAgentUserUpdate" rows="5" spellcheck="true" placeholder="例如：新增一个项目经历、修正项目指标、调整目标岗位、加入不想去的方向。"></textarea>
-            </label>
-            <div class="button-row">
-              <button id="stageProfileAgentUpdate" class="primary" type="button">生成待确认草稿</button>
-              <button id="clearProfileAgentUpdate" class="secondary" type="button">清空输入</button>
-            </div>
-            <p class="note">这里是用户和 ProfileAgent 对话/改画像的专属入口。草稿确认前不会进入正式事实库，也不会影响岗位投递流程。</p>
-          </div>
+          </details>
           <div class="detail-panel">
             <div class="card-title">
               <h3>待确认事实草稿</h3>
@@ -351,6 +483,28 @@
               <div id="greetingTasks" class="list compact-list">暂无 SEND_GREETING 任务</div>
             </div>
           </div>
+          <div class="real-action-panel">
+            <div class="card-title">
+              <div class="list-heading">单岗位真实打招呼金丝雀</div>
+              <span id="realGreetingStatus" class="status">策略默认关闭</span>
+            </div>
+            <div class="real-action-controls">
+              <label class="checkbox-row">
+                <input id="realGreetingEnabled" type="checkbox">
+                <span>短时启用（15 分钟，每日最多 1 次）</span>
+              </label>
+              <label>
+                <span>本次操作原因</span>
+                <input id="realGreetingRationale" type="text" autocomplete="off" placeholder="例如：验证单个已选岗位的真实打招呼闭环">
+              </label>
+              <div class="button-row compact">
+                <button id="armRealGreeting" class="secondary" type="button">授权选中岗位</button>
+                <button id="runRealGreetingOnce" class="primary" type="button" disabled>发送一次</button>
+                <button id="revokeRealGreeting" class="secondary" type="button" disabled>撤销授权</button>
+              </div>
+            </div>
+            <div id="realGreetingDetail" class="detail-section real-action-detail">尚无真实动作授权</div>
+          </div>
           <div class="execution-package-panel">
             <div class="list-heading">Local execution package</div>
             <div id="executionPackageDetail" class="detail-section execution-package-detail">No execution package prepared</div>
@@ -423,6 +577,51 @@
           <pre id="preview" class="preview">暂无数据</pre>
         </section>
       </section>
+
+      <dialog id="resumeReviewDialog" class="workflow-dialog" aria-labelledby="resumeReviewDialogTitle">
+        <div class="dialog-header">
+          <div>
+            <p class="eyebrow">RESUME REVIEW</p>
+            <h2 id="resumeReviewDialogTitle">定制简历审核</h2>
+          </div>
+          <button id="closeResumeReviewDialog" class="icon-close" type="button" aria-label="关闭简历审核">×</button>
+        </div>
+        <div id="resumeReviewDialogBody" class="dialog-body"></div>
+      </dialog>
+
+      <dialog id="realGreetingDialog" class="workflow-dialog compact-dialog" aria-labelledby="realGreetingDialogTitle">
+        <div class="dialog-header">
+          <div>
+            <p class="eyebrow">REAL BOSS ACTION</p>
+            <h2 id="realGreetingDialogTitle">发送一次打招呼</h2>
+          </div>
+          <button id="closeRealGreetingDialog" class="icon-close" type="button" aria-label="关闭真实动作确认">×</button>
+        </div>
+        <div class="dialog-body">
+          <section id="realGreetingStepOne" class="confirmation-step">
+            <div id="realGreetingTarget" class="confirmation-target">尚未选择岗位</div>
+            <label>
+              <span>本次操作原因</span>
+              <input id="realGreetingConfirmRationale" type="text" autocomplete="off" placeholder="例如：验证该岗位的单次打招呼流程">
+            </label>
+            <label class="checkbox-row confirmation-check">
+              <input id="realGreetingConfirmAcknowledgement" type="checkbox">
+              <span>我已核对岗位和消息，确认只发送一次</span>
+            </label>
+            <div class="dialog-actions">
+              <button id="realGreetingContinue" class="primary" type="button" disabled>继续确认</button>
+            </div>
+          </section>
+          <section id="realGreetingStepTwo" class="confirmation-step" hidden>
+            <p class="confirmation-warning">下一步将短时开启真实动作策略，创建一次性授权，并在当前 BOSS 页面执行一次发送。失败或结果不确定时不会自动重试。</p>
+            <div id="realGreetingFinalSummary" class="confirmation-target"></div>
+            <div class="dialog-actions split">
+              <button id="realGreetingBack" class="secondary" type="button">返回核对</button>
+              <button id="realGreetingConfirmSend" class="danger-solid" type="button">授权并发送一次</button>
+            </div>
+          </section>
+        </div>
+      </dialog>
     </main>
     <script src="options.js"></script>
   </body>

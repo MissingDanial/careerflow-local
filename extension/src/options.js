@@ -11,6 +11,42 @@ const fields = {
 };
 
 const ui = {
+  workspaceTab: document.getElementById("workspaceTab"),
+  profileTab: document.getElementById("profileTab"),
+  settingsTab: document.getElementById("settingsTab"),
+  workspacePanel: document.getElementById("workspacePanel"),
+  profilePanel: document.getElementById("profilePanel"),
+  settingsPanel: document.getElementById("settingsPanel"),
+  workspaceApplicationCount: document.getElementById("workspaceApplicationCount"),
+  workspaceActionCount: document.getElementById("workspaceActionCount"),
+  workspaceReadyCount: document.getElementById("workspaceReadyCount"),
+  workspaceErrorCount: document.getElementById("workspaceErrorCount"),
+  workspaceFilter: document.getElementById("workspaceFilter"),
+  workspaceApplications: document.getElementById("workspaceApplications"),
+  workspaceEmpty: document.getElementById("workspaceEmpty"),
+  nextActionTitle: document.getElementById("nextActionTitle"),
+  workspaceSelectedCompany: document.getElementById("workspaceSelectedCompany"),
+  workspaceStageTrack: document.getElementById("workspaceStageTrack"),
+  workspaceSelectedStatus: document.getElementById("workspaceSelectedStatus"),
+  workspaceSelectedMeta: document.getElementById("workspaceSelectedMeta"),
+  workspaceActionHint: document.getElementById("workspaceActionHint"),
+  workspaceNextAction: document.getElementById("workspaceNextAction"),
+  advancedDiagnostics: document.getElementById("advancedDiagnostics"),
+  advancedDiagnosticsMount: document.getElementById("advancedDiagnosticsMount"),
+  resumeReviewDialog: document.getElementById("resumeReviewDialog"),
+  resumeReviewDialogBody: document.getElementById("resumeReviewDialogBody"),
+  closeResumeReviewDialog: document.getElementById("closeResumeReviewDialog"),
+  realGreetingDialog: document.getElementById("realGreetingDialog"),
+  closeRealGreetingDialog: document.getElementById("closeRealGreetingDialog"),
+  realGreetingStepOne: document.getElementById("realGreetingStepOne"),
+  realGreetingStepTwo: document.getElementById("realGreetingStepTwo"),
+  realGreetingTarget: document.getElementById("realGreetingTarget"),
+  realGreetingFinalSummary: document.getElementById("realGreetingFinalSummary"),
+  realGreetingConfirmRationale: document.getElementById("realGreetingConfirmRationale"),
+  realGreetingConfirmAcknowledgement: document.getElementById("realGreetingConfirmAcknowledgement"),
+  realGreetingContinue: document.getElementById("realGreetingContinue"),
+  realGreetingBack: document.getElementById("realGreetingBack"),
+  realGreetingConfirmSend: document.getElementById("realGreetingConfirmSend"),
   save: document.getElementById("save"),
   refreshDiagnostics: document.getElementById("refreshDiagnostics"),
   refreshWorkflow: document.getElementById("refreshWorkflow"),
@@ -73,6 +109,17 @@ const ui = {
   agentRuns: document.getElementById("agentRuns"),
   refreshCareerContext: document.getElementById("refreshCareerContext"),
   profileAgentPortal: document.getElementById("profileAgentPortal"),
+  profileDialogSessionSelect: document.getElementById("profileDialogSessionSelect"),
+  newProfileDialogSession: document.getElementById("newProfileDialogSession"),
+  refreshProfileDialog: document.getElementById("refreshProfileDialog"),
+  profileDialogStatus: document.getElementById("profileDialogStatus"),
+  profileDialogMessages: document.getElementById("profileDialogMessages"),
+  profileDialogComposer: document.getElementById("profileDialogComposer"),
+  sendProfileDialogMessage: document.getElementById("sendProfileDialogMessage"),
+  retryProfileDialogMessage: document.getElementById("retryProfileDialogMessage"),
+  profileDialogSummary: document.getElementById("profileDialogSummary"),
+  profileDialogOpenQuestions: document.getElementById("profileDialogOpenQuestions"),
+  profileDialogConflicts: document.getElementById("profileDialogConflicts"),
   generateCareerContext: document.getElementById("generateCareerContext"),
   generateCareerContextWithAnswers: document.getElementById("generateCareerContextWithAnswers"),
   generateProfileFactDrafts: document.getElementById("generateProfileFactDrafts"),
@@ -125,6 +172,13 @@ const ui = {
   greetingStatus: document.getElementById("greetingStatus"),
   greetingMessages: document.getElementById("greetingMessages"),
   greetingTasks: document.getElementById("greetingTasks"),
+  realGreetingEnabled: document.getElementById("realGreetingEnabled"),
+  realGreetingRationale: document.getElementById("realGreetingRationale"),
+  armRealGreeting: document.getElementById("armRealGreeting"),
+  runRealGreetingOnce: document.getElementById("runRealGreetingOnce"),
+  revokeRealGreeting: document.getElementById("revokeRealGreeting"),
+  realGreetingStatus: document.getElementById("realGreetingStatus"),
+  realGreetingDetail: document.getElementById("realGreetingDetail"),
   recentEventCount: document.getElementById("recentEventCount"),
   recentEvents: document.getElementById("recentEvents"),
   missingDescriptionCount: document.getElementById("missingDescriptionCount"),
@@ -141,6 +195,17 @@ const ui = {
 };
 
 const state = {
+  applications: [],
+  totalApplications: 0,
+  selectedApplicationId: null,
+  activeView: "workspace",
+  screeningCandidates: [],
+  screenings: [],
+  greetingMessages: [],
+  conversations: [],
+  browserTaskCounts: {},
+  missingDescriptionTotal: 0,
+  workbenchBusy: false,
   resumeVersions: [],
   resumeAudits: [],
   resumeFitEvaluations: [],
@@ -159,15 +224,25 @@ const state = {
   careerContextQuestions: [],
   careerContextAnswers: [],
   profileFactDrafts: [],
+  profileDialogSessions: [],
+  activeProfileDialogSessionId: null,
+  profileDialogMessages: [],
+  profileDialogFailedUserMessageId: null,
+  profileDialogBusy: false,
   careerContextNeedsRegeneration: false,
   workflowErrors: [],
   workflowEvents: [],
   selectedTimelineApplicationId: null,
   selectedExecutionPackageApplicationId: null,
-  latestSubmissionPageResult: null
+  latestSubmissionPageResult: null,
+  realActionPolicy: null,
+  realActionAuthorization: null,
+  realActionAuthorizationToken: ""
 };
 
+organizeOptionPanels();
 ensureGreetingDryRunControls();
+setupOptionWorkspace();
 
 function ensureGreetingDryRunControls() {
   const prepareButton = ui.prepareGreetingDryRun;
@@ -292,6 +367,140 @@ function ensureGreetingDryRunControls() {
   }
 }
 
+function organizeOptionPanels() {
+  const legacyPanels = document.getElementById("legacyPanels");
+  if (!legacyPanels) {
+    return;
+  }
+  const legacyCards = Array.from(legacyPanels.children).filter((node) => node.matches?.(".card"));
+  const settingsCard = legacyCards[0] || null;
+  const profilePortal = document.getElementById("profileAgentPortal");
+  const riskGatePanel = legacyPanels.querySelector(".risk-gate-panel");
+  const templatePanel = legacyPanels.querySelector(".inline-setting-row");
+  const resumeDetailPanel = document.getElementById("resumeDetailPanel");
+  const settingsCoreMount = document.getElementById("settingsCoreMount");
+  const settingsRiskMount = document.getElementById("settingsRiskMount");
+  const settingsTemplateMount = document.getElementById("settingsTemplateMount");
+
+  if (settingsCard && settingsCoreMount) {
+    settingsCoreMount.appendChild(settingsCard);
+  }
+  if (profilePortal && ui.profilePanel) {
+    ui.profilePanel.appendChild(profilePortal);
+  }
+  if (riskGatePanel && settingsRiskMount) {
+    settingsRiskMount.appendChild(riskGatePanel);
+  }
+  if (templatePanel && settingsTemplateMount) {
+    settingsTemplateMount.appendChild(templatePanel);
+  }
+  if (resumeDetailPanel && ui.resumeReviewDialogBody) {
+    ui.resumeReviewDialogBody.appendChild(resumeDetailPanel);
+  }
+  for (const card of legacyCards) {
+    if (card !== settingsCard && card !== profilePortal) {
+      ui.advancedDiagnosticsMount.appendChild(card);
+    }
+  }
+  legacyPanels.remove();
+}
+
+function setupOptionWorkspace() {
+  const tabs = [ui.workspaceTab, ui.profileTab, ui.settingsTab].filter(Boolean);
+  for (const tab of tabs) {
+    tab.addEventListener("click", () => activateView(tab.dataset.viewTarget, { focus: false }));
+    tab.addEventListener("keydown", (event) => {
+      if (!new Set(["ArrowLeft", "ArrowRight", "Home", "End"]).has(event.key)) {
+        return;
+      }
+      event.preventDefault();
+      const currentIndex = tabs.indexOf(tab);
+      const nextIndex = event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? tabs.length - 1
+          : event.key === "ArrowRight"
+            ? (currentIndex + 1) % tabs.length
+            : (currentIndex - 1 + tabs.length) % tabs.length;
+      activateView(tabs[nextIndex].dataset.viewTarget, { focus: true });
+    });
+  }
+  ui.workspaceFilter.addEventListener("change", renderWorkbench);
+  ui.workspaceNextAction.addEventListener("click", runWorkbenchNextAction);
+  ui.closeResumeReviewDialog.addEventListener("click", () => ui.resumeReviewDialog.close());
+  ui.closeRealGreetingDialog.addEventListener("click", () => ui.realGreetingDialog.close());
+  ui.realGreetingConfirmRationale.addEventListener("input", updateRealGreetingContinueState);
+  ui.realGreetingConfirmAcknowledgement.addEventListener("change", updateRealGreetingContinueState);
+  ui.realGreetingContinue.addEventListener("click", showRealGreetingFinalStep);
+  ui.realGreetingBack.addEventListener("click", showRealGreetingFirstStep);
+  ui.realGreetingConfirmSend.addEventListener("click", confirmAndRunRealGreeting);
+  ui.resumeReviewDialog.addEventListener("click", closeDialogFromBackdrop);
+  ui.realGreetingDialog.addEventListener("click", closeDialogFromBackdrop);
+  ui.realGreetingDialog.addEventListener("close", resetRealGreetingDialog);
+
+  const initialView = location.hash === "#profile" || location.hash === "#profileAgentPortal"
+    ? "profile"
+    : location.hash === "#settings"
+      ? "settings"
+      : "workspace";
+  activateView(initialView, { focus: false, updateHash: false });
+}
+
+function activateView(viewName, options = {}) {
+  const normalized = ["workspace", "profile", "settings"].includes(viewName) ? viewName : "workspace";
+  state.activeView = normalized;
+  for (const tab of [ui.workspaceTab, ui.profileTab, ui.settingsTab]) {
+    const active = tab.dataset.viewTarget === normalized;
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    if (active && options.focus) {
+      tab.focus();
+    }
+  }
+  for (const panel of [ui.workspacePanel, ui.profilePanel, ui.settingsPanel]) {
+    panel.hidden = panel.dataset.viewPanel !== normalized;
+  }
+  if (options.updateHash !== false) {
+    const hash = normalized === "workspace" ? "" : `#${normalized}`;
+    history.replaceState(null, "", `${location.pathname}${location.search}${hash}`);
+  }
+}
+
+function closeDialogFromBackdrop(event) {
+  if (event.target === event.currentTarget) {
+    event.currentTarget.close();
+  }
+}
+
+function updateRealGreetingContinueState() {
+  const rationale = cleanUiText(ui.realGreetingConfirmRationale.value);
+  ui.realGreetingContinue.disabled = !rationale || !ui.realGreetingConfirmAcknowledgement.checked;
+}
+
+function showRealGreetingFirstStep() {
+  ui.realGreetingStepOne.hidden = false;
+  ui.realGreetingStepTwo.hidden = true;
+}
+
+function showRealGreetingFinalStep() {
+  if (ui.realGreetingContinue.disabled) {
+    return;
+  }
+  const application = getSelectedWorkbenchApplication();
+  const message = getGreetingMessageForApplication(application?.id);
+  ui.realGreetingFinalSummary.textContent = formatRealGreetingConfirmation(application, message);
+  ui.realGreetingStepOne.hidden = true;
+  ui.realGreetingStepTwo.hidden = false;
+}
+
+function resetRealGreetingDialog() {
+  ui.realGreetingConfirmRationale.value = "";
+  ui.realGreetingConfirmAcknowledgement.checked = false;
+  ui.realGreetingContinue.disabled = true;
+  ui.realGreetingConfirmSend.disabled = false;
+  showRealGreetingFirstStep();
+}
+
 document.addEventListener("DOMContentLoaded", init);
 ui.save.addEventListener("click", save);
 ui.refreshDiagnostics.addEventListener("click", () => refreshDiagnostics());
@@ -300,6 +509,17 @@ ui.refreshScreening.addEventListener("click", () => refreshScreeningDiagnostics(
 ui.runRulesBatchScreening.addEventListener("click", runRulesBatchScreening);
 ui.runRiskGateRescreen.addEventListener("click", runRiskGateRescreen);
 ui.refreshCareerContext.addEventListener("click", () => refreshCareerContextDiagnostics());
+ui.newProfileDialogSession.addEventListener("click", () => createProfileDialogSession());
+ui.refreshProfileDialog.addEventListener("click", () => refreshProfileDialogDiagnostics());
+ui.profileDialogSessionSelect.addEventListener("change", selectProfileDialogSession);
+ui.sendProfileDialogMessage.addEventListener("click", sendProfileDialogTurn);
+ui.retryProfileDialogMessage.addEventListener("click", retryProfileDialogTurn);
+ui.profileDialogComposer.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    sendProfileDialogTurn();
+  }
+});
 ui.generateCareerContext.addEventListener("click", () => generateCareerContext({ includeAnswers: false }));
 ui.generateCareerContextWithAnswers.addEventListener("click", () => generateCareerContext({ includeAnswers: true }));
 ui.generateProfileFactDrafts.addEventListener("click", generateProfileFactDraftsFromAnswers);
@@ -315,8 +535,15 @@ ui.evaluateResumeFit.addEventListener("click", evaluateSelectedResumeFit);
 ui.verifyResumeClaims.addEventListener("click", verifySelectedResumeClaims);
 ui.reviseResumeFromChecks.addEventListener("click", reviseSelectedResumeFromChecks);
 ui.auditRulesResume.addEventListener("click", auditRulesResume);
-ui.refreshGreeting.addEventListener("click", () => refreshGreetingDiagnostics());
-ui.prepareGreetingDryRun.addEventListener("click", prepareGreetingDryRun);
+ui.refreshGreeting.addEventListener("click", async () => {
+  await refreshGreetingDiagnostics();
+  await refreshRealActionDiagnostics({ silent: true });
+});
+ui.prepareGreetingDryRun.addEventListener("click", () => prepareGreetingDryRun());
+ui.realGreetingEnabled.addEventListener("change", updateRealGreetingPolicyFromToggle);
+ui.armRealGreeting.addEventListener("click", armRealGreetingForSelectedApplication);
+ui.runRealGreetingOnce.addEventListener("click", runAuthorizedRealGreetingOnce);
+ui.revokeRealGreeting.addEventListener("click", revokeActiveRealGreetingAuthorization);
 ui.prepareExecutionPackage.addEventListener("click", () => prepareExecutionPackageForSelectedApplication());
 ui.runGreetingDryRunTask.addEventListener("click", runGreetingDryRunTask);
 ui.queueConversationRefreshTask.addEventListener("click", () => queueReadOnlyBossTask("REFRESH_CONVERSATION"));
@@ -340,6 +567,7 @@ async function init() {
     renderSettings(settings);
     await refreshResumeTemplates({ silent: true });
     await refreshDiagnostics({ silent: true });
+    await refreshRealActionDiagnostics({ silent: true });
   } catch (error) {
     setStatus(error.message || String(error), true);
   }
@@ -403,7 +631,8 @@ function formatDelimitedList(value) {
 
 async function refreshDiagnostics(options = {}) {
   setStatus(options.silent ? "" : "正在刷新诊断");
-  const [cacheResult, qualityResult, eventsResult, taskResult, missingResult, pageResult, workflowResult, screeningResult, careerContextResult, resumeResult, greetingResult] = await Promise.allSettled([
+  const [applicationResult, cacheResult, qualityResult, eventsResult, taskResult, missingResult, pageResult, workflowResult, screeningResult, careerContextResult, profileDialogResult, resumeResult, greetingResult] = await Promise.allSettled([
+    loadApplicationDiagnostics(),
     runtimeMessage({ type: "GET_CACHE" }),
     runtimeMessage({ type: "GET_QUALITY" }),
     runtimeMessage({ type: "GET_EVENTS", limit: 8 }),
@@ -413,10 +642,16 @@ async function refreshDiagnostics(options = {}) {
     loadWorkflowDiagnostics(),
     loadScreeningDiagnostics(),
     loadCareerContextDiagnostics(),
+    loadProfileDialogDiagnostics(),
     loadResumeDiagnostics(),
     loadGreetingDiagnostics()
   ]);
 
+  if (applicationResult.status === "fulfilled") {
+    renderApplicationDiagnostics(applicationResult.value);
+  } else {
+    renderApplicationDiagnostics(null, applicationResult.reason);
+  }
   if (cacheResult.status === "fulfilled") {
     renderCache(cacheResult.value);
   }
@@ -470,13 +705,44 @@ async function refreshDiagnostics(options = {}) {
   } else {
     renderGreetingDiagnostics(null, greetingResult.reason);
   }
+  if (profileDialogResult.status === "fulfilled") {
+    renderProfileDialogDiagnostics(profileDialogResult.value);
+  } else {
+    renderProfileDialogDiagnostics(null, profileDialogResult.reason);
+  }
 
-  const failed = [cacheResult, qualityResult, eventsResult, taskResult, missingResult, pageResult, workflowResult, screeningResult, careerContextResult, resumeResult, greetingResult].find((item) => item.status === "rejected");
+  renderWorkbench();
+  const failed = [applicationResult, cacheResult, qualityResult, eventsResult, taskResult, missingResult, pageResult, workflowResult, screeningResult, careerContextResult, profileDialogResult, resumeResult, greetingResult].find((item) => item.status === "rejected");
   if (failed) {
     setStatus(failed.reason?.message || String(failed.reason), true);
     return;
   }
   setStatus("诊断已刷新");
+}
+
+async function loadApplicationDiagnostics() {
+  const result = await runtimeMessage({
+    type: "GET_APPLICATIONS",
+    options: { limit: 50 }
+  });
+  return result.response || {};
+}
+
+async function refreshApplicationDiagnostics(options = {}) {
+  try {
+    const diagnostics = await loadApplicationDiagnostics();
+    renderApplicationDiagnostics(diagnostics);
+    if (!options.silent) {
+      setStatus("岗位队列已刷新");
+    }
+    return diagnostics;
+  } catch (error) {
+    renderApplicationDiagnostics(null, error);
+    if (!options.silent) {
+      setStatus(error.message || String(error), true);
+    }
+    return null;
+  }
 }
 
 async function refreshScreeningDiagnostics(options = {}) {
@@ -519,8 +785,8 @@ async function loadWorkflowDiagnostics() {
 
 async function loadScreeningDiagnostics() {
   const [candidateResult, screeningResult, runResult] = await Promise.all([
-    runtimeMessage({ type: "GET_SCREENING_CANDIDATES", options: { limit: 8, minDescriptionLength: 80 } }),
-    runtimeMessage({ type: "GET_SCREENINGS", options: { limit: 8 } }),
+    runtimeMessage({ type: "GET_SCREENING_CANDIDATES", options: { limit: 50, minDescriptionLength: 80 } }),
+    runtimeMessage({ type: "GET_SCREENINGS", options: { limit: 50 } }),
     runtimeMessage({ type: "GET_AGENT_RUNS", options: { limit: 8 } })
   ]);
   return {
@@ -630,6 +896,323 @@ async function loadCareerContextDiagnostics() {
   };
 }
 
+async function loadProfileDialogDiagnostics() {
+  const sessionResult = await runtimeMessage({
+    type: "GET_PROFILE_DIALOG_SESSIONS",
+    options: { limit: 30 }
+  });
+  const sessions = Array.isArray(sessionResult.response?.sessions) ? sessionResult.response.sessions : [];
+  const preferredId = Number(state.activeProfileDialogSessionId || 0);
+  const active = sessions.find((session) => Number(session.id) === preferredId) || sessions[0] || null;
+  if (!active?.id) {
+    return {
+      sessions,
+      totalSessions: Number(sessionResult.response?.totalSessions || 0),
+      detail: null
+    };
+  }
+  const detailResult = await runtimeMessage({
+    type: "GET_PROFILE_DIALOG_SESSION",
+    sessionId: active.id,
+    options: {
+      messageLimit: 100,
+      draftLimit: 100
+    }
+  });
+  return {
+    sessions,
+    totalSessions: Number(sessionResult.response?.totalSessions || sessions.length),
+    detail: detailResult.response || null
+  };
+}
+
+async function refreshProfileDialogDiagnostics(options = {}) {
+  try {
+    if (!options.silent) {
+      ui.profileDialogStatus.textContent = "正在读取画像对话";
+    }
+    const diagnostics = await loadProfileDialogDiagnostics();
+    renderProfileDialogDiagnostics(diagnostics);
+    if (!options.silent) {
+      setStatus("ProfileAgent 对话已刷新");
+    }
+    return diagnostics;
+  } catch (error) {
+    renderProfileDialogDiagnostics(null, error);
+    if (!options.silent) {
+      setStatus(error.message || String(error), true);
+    }
+    return null;
+  }
+}
+
+async function createProfileDialogSession(options = {}) {
+  try {
+    setProfileDialogBusy(true, "正在创建画像对话");
+    const result = await runtimeMessage({
+      type: "CREATE_PROFILE_DIALOG_SESSION",
+      options: {
+        title: options.title || "职业经历复盘"
+      }
+    });
+    state.activeProfileDialogSessionId = Number(result.response?.session?.id || 0) || null;
+    state.profileDialogFailedUserMessageId = null;
+    await refreshProfileDialogDiagnostics({ silent: true });
+    if (!options.silent) {
+      setStatus("已创建新的 ProfileAgent 对话");
+    }
+    return result.response?.session || null;
+  } catch (error) {
+    renderProfileDialogDiagnostics(null, error);
+    setStatus(error.message || String(error), true);
+    return null;
+  } finally {
+    setProfileDialogBusy(false);
+  }
+}
+
+async function selectProfileDialogSession() {
+  const sessionId = Number(ui.profileDialogSessionSelect.value || 0);
+  state.activeProfileDialogSessionId = Number.isInteger(sessionId) && sessionId > 0 ? sessionId : null;
+  state.profileDialogFailedUserMessageId = null;
+  await refreshProfileDialogDiagnostics({ silent: true });
+}
+
+async function sendProfileDialogTurn() {
+  const content = String(ui.profileDialogComposer.value || "").trim();
+  if (!content) {
+    setStatus("请先填写要和 ProfileAgent 讨论的内容。", true);
+    ui.profileDialogComposer.focus();
+    return;
+  }
+  try {
+    let sessionId = Number(state.activeProfileDialogSessionId || 0);
+    if (!sessionId) {
+      const session = await createProfileDialogSession({ silent: true });
+      sessionId = Number(session?.id || 0);
+    }
+    if (!sessionId) {
+      throw new Error("无法创建 ProfileAgent 对话");
+    }
+    setProfileDialogBusy(true, "ProfileAgent 正在整理本轮信息");
+    const result = await runtimeMessage({
+      type: "SEND_PROFILE_DIALOG_MESSAGE",
+      sessionId,
+      options: { content }
+    });
+    ui.profileDialogComposer.value = "";
+    state.profileDialogFailedUserMessageId = null;
+    state.activeProfileDialogSessionId = sessionId;
+    await Promise.all([
+      refreshProfileDialogDiagnostics({ silent: true }),
+      refreshProfileFactDrafts({ silent: true }),
+      refreshWorkflowDiagnostics({ silent: true }).catch(() => {})
+    ]);
+    const payload = result.response || {};
+    setStatus(`ProfileAgent 已回复；新增待确认草稿 ${payload.createdDraftCount || 0} 条`);
+  } catch (error) {
+    const persistedMessageId = Number(error.context?.userMessageId || 0);
+    if (persistedMessageId) {
+      state.profileDialogFailedUserMessageId = persistedMessageId;
+      ui.profileDialogComposer.value = "";
+    }
+    await refreshProfileDialogDiagnostics({ silent: true }).catch(() => {});
+    setStatus(`${error.code || "PROFILE_DIALOG_FAILED"}: ${error.message || String(error)}`, true);
+  } finally {
+    setProfileDialogBusy(false);
+  }
+}
+
+async function retryProfileDialogTurn() {
+  const sessionId = Number(state.activeProfileDialogSessionId || 0);
+  const messageId = Number(state.profileDialogFailedUserMessageId || 0);
+  if (!sessionId || !messageId) {
+    setStatus("当前没有可重试的 ProfileAgent 消息。", true);
+    return;
+  }
+  try {
+    setProfileDialogBusy(true, "ProfileAgent 正在重试上一轮");
+    const result = await runtimeMessage({
+      type: "RETRY_PROFILE_DIALOG_MESSAGE",
+      sessionId,
+      messageId,
+      options: {}
+    });
+    state.profileDialogFailedUserMessageId = null;
+    await Promise.all([
+      refreshProfileDialogDiagnostics({ silent: true }),
+      refreshProfileFactDrafts({ silent: true }),
+      refreshWorkflowDiagnostics({ silent: true }).catch(() => {})
+    ]);
+    setStatus(`ProfileAgent 重试成功；新增待确认草稿 ${result.response?.createdDraftCount || 0} 条`);
+  } catch (error) {
+    state.profileDialogFailedUserMessageId = Number(error.context?.userMessageId || messageId);
+    await refreshProfileDialogDiagnostics({ silent: true }).catch(() => {});
+    setStatus(`${error.code || "PROFILE_DIALOG_RETRY_FAILED"}: ${error.message || String(error)}`, true);
+  } finally {
+    setProfileDialogBusy(false);
+  }
+}
+
+function setProfileDialogBusy(busy, statusText = "") {
+  state.profileDialogBusy = Boolean(busy);
+  ui.newProfileDialogSession.disabled = Boolean(busy);
+  ui.refreshProfileDialog.disabled = Boolean(busy);
+  ui.profileDialogSessionSelect.disabled = Boolean(busy);
+  ui.sendProfileDialogMessage.disabled = Boolean(busy);
+  ui.retryProfileDialogMessage.disabled = Boolean(busy);
+  ui.profileDialogComposer.disabled = Boolean(busy);
+  if (statusText) {
+    ui.profileDialogStatus.textContent = statusText;
+  }
+}
+
+function renderProfileDialogDiagnostics(diagnostics, error = null) {
+  if (error) {
+    ui.profileDialogStatus.textContent = error.message || "画像对话不可用";
+    ui.profileDialogStatus.classList.add("warn");
+    return;
+  }
+  const sessions = Array.isArray(diagnostics?.sessions) ? diagnostics.sessions : [];
+  const detail = diagnostics?.detail || null;
+  const session = detail?.session || null;
+  const messages = Array.isArray(detail?.messages) ? detail.messages : [];
+  state.profileDialogSessions = sessions;
+  state.activeProfileDialogSessionId = Number(session?.id || state.activeProfileDialogSessionId || 0) || null;
+  state.profileDialogMessages = messages;
+  renderProfileDialogSessionOptions(sessions, state.activeProfileDialogSessionId);
+  renderProfileDialogMessages(messages);
+
+  const lastFailed = messages.slice().reverse().find((message) => message.role === "assistant" && message.status === "FAILED");
+  const lastCompletedAssistant = messages.slice().reverse().find((message) => message.role === "assistant" && message.status === "COMPLETED");
+  state.profileDialogFailedUserMessageId = lastFailed
+    && (!lastCompletedAssistant || Number(lastFailed.id) > Number(lastCompletedAssistant.id))
+    ? Number(lastFailed.retryOfMessageId || 0) || null
+    : null;
+  ui.retryProfileDialogMessage.hidden = !state.profileDialogFailedUserMessageId;
+  ui.retryProfileDialogMessage.classList.toggle("hidden", !state.profileDialogFailedUserMessageId);
+
+  ui.profileDialogStatus.classList.toggle("warn", Boolean(lastFailed));
+  ui.profileDialogStatus.textContent = session
+    ? [
+      `${detail.totalMessages ?? messages.length} 条消息`,
+      `${detail.pendingDraftCount || 0} 条待确认`,
+      session.modelConfig?.model || "模型待首次调用"
+    ].join(" · ")
+    : "尚无对话，发送消息时会自动创建";
+  renderProfileDialogSummary(ui.profileDialogSummary, session?.summary || {});
+  renderTextList(
+    ui.profileDialogOpenQuestions,
+    (Array.isArray(session?.openQuestions) ? session.openQuestions : []).map((question) => (
+      `${question.priority ? `[${question.priority}] ` : ""}${question.prompt || question.question || ""}${question.reason ? `：${question.reason}` : ""}`
+    )),
+    "暂无待追问问题"
+  );
+  renderTextList(
+    ui.profileDialogConflicts,
+    (Array.isArray(session?.conflicts) ? session.conflicts : []).map((conflict) => (
+      `${conflict.summary || conflict.type || "待核实"}${conflict.resolutionQuestion ? `：${conflict.resolutionQuestion}` : ""}`
+    )),
+    "暂无冲突"
+  );
+}
+
+function renderProfileDialogSessionOptions(sessions, selectedId) {
+  ui.profileDialogSessionSelect.replaceChildren();
+  if (!sessions.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "暂无对话";
+    ui.profileDialogSessionSelect.appendChild(option);
+    return;
+  }
+  for (const session of sessions) {
+    const option = document.createElement("option");
+    option.value = String(session.id || "");
+    option.textContent = `${session.title || `对话 #${session.id}`} · ${session.messageCount || 0} 条`;
+    option.selected = Number(session.id) === Number(selectedId);
+    ui.profileDialogSessionSelect.appendChild(option);
+  }
+}
+
+function renderProfileDialogMessages(messages) {
+  ui.profileDialogMessages.replaceChildren();
+  if (!messages.length) {
+    const empty = document.createElement("div");
+    empty.className = "profile-dialog-empty";
+    empty.textContent = "开始对话后，ProfileAgent 会逐轮整理经历并提出下一组问题。";
+    ui.profileDialogMessages.appendChild(empty);
+    return;
+  }
+  for (const message of messages) {
+    const item = document.createElement("article");
+    item.className = `profile-dialog-message ${message.role === "user" ? "user" : "assistant"}${message.status === "FAILED" ? " failed" : ""}`;
+    const meta = document.createElement("div");
+    meta.className = "profile-dialog-message-meta";
+    const role = document.createElement("strong");
+    role.textContent = message.role === "user" ? "你" : "ProfileAgent";
+    const time = document.createElement("span");
+    time.textContent = message.createdAt ? formatTime(message.createdAt) : "";
+    meta.append(role, time);
+    const body = document.createElement("div");
+    body.className = "profile-dialog-message-body";
+    body.textContent = message.status === "FAILED"
+      ? `${message.errorCode || "PROFILE_DIALOG_FAILED"}: ${message.errorMessage || "模型调用失败，用户消息已保留。"}`
+      : message.content || "";
+    item.append(meta, body);
+    ui.profileDialogMessages.appendChild(item);
+  }
+  ui.profileDialogMessages.scrollTop = ui.profileDialogMessages.scrollHeight;
+}
+
+function renderProfileDialogSummary(container, summary) {
+  container.replaceChildren();
+  const entries = flattenProfileDialogSummary(summary);
+  if (!entries.length) {
+    container.textContent = "暂无会话摘要";
+    return;
+  }
+  for (const [key, value] of entries) {
+    appendKeyValue(container, key, value);
+  }
+}
+
+function flattenProfileDialogSummary(value, prefix = "", depth = 0) {
+  if (!value || typeof value !== "object" || depth > 2) {
+    return [];
+  }
+  const result = [];
+  for (const [key, item] of Object.entries(value).slice(0, 20)) {
+    const rawLabel = prefix ? `${prefix}.${key}` : key;
+    const label = formatProfileDialogSummaryKey(rawLabel);
+    if (Array.isArray(item)) {
+      if (item.length) {
+        result.push([label, item.map((entry) => typeof entry === "object" ? JSON.stringify(entry) : String(entry)).join("、")]);
+      }
+    } else if (item && typeof item === "object") {
+      result.push(...flattenProfileDialogSummary(item, label, depth + 1));
+    } else if (item !== "" && item !== null && item !== undefined) {
+      result.push([label, String(item)]);
+    }
+  }
+  return result.slice(0, 30);
+}
+
+function formatProfileDialogSummaryKey(value) {
+  const labels = {
+    goals: "求职目标",
+    durableGoals: "求职目标",
+    motivations: "核心动机",
+    preferences: "工作偏好",
+    projectThemes: "项目主线",
+    projectFocus: "重点项目",
+    strengths: "优势证据",
+    constraints: "求职约束",
+    unresolvedTopics: "未决问题"
+  };
+  return labels[value] || String(value || "").replaceAll(".", " / ");
+}
+
 async function generateCareerContext(options = {}) {
   const includeAnswers = Boolean(options.includeAnswers);
   const answers = includeAnswers ? readCareerContextAnswers() : [];
@@ -642,6 +1225,7 @@ async function generateCareerContext(options = {}) {
       type: "GENERATE_CAREER_CONTEXT",
       options: {
         answers,
+        sourceSessionId: state.activeProfileDialogSessionId || null,
         writeFile: true
       }
     });
@@ -788,6 +1372,7 @@ async function mutateProfileFactDraft({ draftId, type, statusMessage, doneMessag
       options
     });
     await refreshProfileFactDrafts({ silent: true });
+    await refreshProfileDialogDiagnostics({ silent: true }).catch(() => {});
     await refreshCareerContextDiagnostics({ silent: true }).catch(() => {
       state.careerContextNeedsRegeneration = true;
       updateCareerContextFreshnessStatus();
@@ -816,17 +1401,17 @@ async function loadResumeDiagnostics() {
     runtimeMessage({
       type: "GET_RESUME_CANDIDATES",
       options: {
-        limit: 8,
+        limit: 50,
         minDescriptionLength: 80,
         recommendations: ["auto_prepare"],
         statuses: ["SHORTLISTED"],
         excludeExistingResume: true
       }
     }),
-    runtimeMessage({ type: "GET_RESUME_VERSIONS", options: { limit: 8 } }),
-    runtimeMessage({ type: "GET_RESUME_AUDITS", options: { limit: 8 } }),
-    runtimeMessage({ type: "GET_RESUME_FIT_EVALUATIONS", options: { limit: 8 } }),
-    runtimeMessage({ type: "GET_RESUME_CLAIM_VERIFICATIONS", options: { limit: 8 } })
+    runtimeMessage({ type: "GET_RESUME_VERSIONS", options: { limit: 50 } }),
+    runtimeMessage({ type: "GET_RESUME_AUDITS", options: { limit: 50 } }),
+    runtimeMessage({ type: "GET_RESUME_FIT_EVALUATIONS", options: { limit: 50 } }),
+    runtimeMessage({ type: "GET_RESUME_CLAIM_VERIFICATIONS", options: { limit: 50 } })
   ]);
   return {
     candidates: candidateResult.response || {},
@@ -923,6 +1508,7 @@ async function prepareRulesResume() {
       }
     });
     await refreshResumeDiagnostics({ silent: true });
+    await refreshApplicationDiagnostics({ silent: true });
     await refreshScreeningDiagnostics({ silent: true });
     const resumeVersion = result.response?.resumeVersion || {};
     if (resumeVersion.id) {
@@ -1015,6 +1601,7 @@ async function evaluateSelectedResumeFit() {
       }
     });
     await refreshResumeDiagnostics({ silent: true });
+    await refreshApplicationDiagnostics({ silent: true });
     await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
     const evaluation = result.response?.resumeFitEvaluation || {};
     if (target.id) {
@@ -1154,8 +1741,8 @@ async function refreshGreetingDiagnostics(options = {}) {
 async function loadGreetingDiagnostics() {
   const selectedApplicationId = getSelectedExecutionPackageApplicationId();
   const [messageResult, conversationResult, taskResult, readinessResult] = await Promise.all([
-    runtimeMessage({ type: "GET_MESSAGES", options: { limit: 8 } }),
-    runtimeMessage({ type: "GET_CONVERSATIONS", options: { limit: 8 } }),
+    runtimeMessage({ type: "GET_MESSAGES", options: { limit: 50 } }),
+    runtimeMessage({ type: "GET_CONVERSATIONS", options: { limit: 50 } }),
     runtimeMessage({ type: "GET_BROWSER_TASK_DIAGNOSTICS", options: { limit: 8 } }),
     runtimeMessage({ type: "GET_SUBMISSION_READINESS_QUEUE", options: { limit: 8, status: ["READY_FOR_MANUAL_REVIEW", "BLOCKED"] } })
   ]);
@@ -1199,14 +1786,30 @@ async function loadGreetingDiagnostics() {
   };
 }
 
-async function prepareGreetingDryRun() {
+async function prepareGreetingDryRun(applicationId = null) {
   try {
     ui.prepareGreetingDryRun.disabled = true;
     ui.greetingStatus.textContent = "正在生成打招呼 dry-run";
+    const targetApplicationId = Number(applicationId || 0);
+    if (targetApplicationId) {
+      const existingDraft = getGreetingMessageForApplication(targetApplicationId)
+        || await refreshGreetingDraftForApplication(targetApplicationId);
+      if (existingDraft) {
+        const application = state.applications.find((item) => Number(item.id) === targetApplicationId);
+        if (application) {
+          openRealGreetingDialog(application);
+          setStatus(`已找到当前岗位的打招呼草稿 #${existingDraft.id}`);
+          return;
+        }
+      }
+    }
     const resumeDiagnostics = await loadResumeDiagnostics();
     const versions = Array.isArray(resumeDiagnostics.versions?.resumeVersions) ? resumeDiagnostics.versions.resumeVersions : [];
-    const version = versions.find((item) => item.status === "APPROVED" && item.metadata?.localApproval?.approved)
-      || versions.find((item) => item.status === "APPROVED");
+    const scopedVersions = targetApplicationId
+      ? versions.filter((item) => Number(item.applicationId) === targetApplicationId)
+      : versions;
+    const version = scopedVersions.find((item) => item.status === "APPROVED" && item.metadata?.localApproval?.approved)
+      || scopedVersions.find((item) => item.status === "APPROVED");
     if (!version?.applicationId) {
       throw new Error("暂无已审核通过并本地审批的简历版本，请先完成 M7.4。");
     }
@@ -1235,6 +1838,267 @@ async function prepareGreetingDryRun() {
   }
 }
 
+async function refreshRealActionDiagnostics(options = {}) {
+  try {
+    if (!options.silent) {
+      ui.realGreetingStatus.textContent = "正在读取真实动作策略";
+    }
+    const applicationId = getSelectedRealActionApplicationId();
+    const [policyResult, authorizationsResult] = await Promise.all([
+      runtimeMessage({
+        type: "GET_REAL_ACTION_POLICY",
+        options: { actionType: "SEND_GREETING_REAL" }
+      }),
+      runtimeMessage({
+        type: "GET_REAL_ACTION_AUTHORIZATIONS",
+        options: {
+          actionType: "SEND_GREETING_REAL",
+          applicationId: applicationId || null,
+          limit: 10
+        }
+      })
+    ]);
+    const policyResponse = policyResult.response || {};
+    const policy = policyResponse.policy || {};
+    const authorizations = Array.isArray(authorizationsResult.response?.authorizations)
+      ? authorizationsResult.response.authorizations
+      : [];
+    const active = policyResponse.activeAuthorization
+      || authorizations.find((item) => ["ARMED", "QUEUED"].includes(item.status))
+      || authorizations[0]
+      || null;
+    const previousId = Number(state.realActionAuthorization?.id || 0);
+    if (previousId && active?.id && previousId !== Number(active.id)) {
+      state.realActionAuthorizationToken = "";
+    }
+    state.realActionPolicy = policy;
+    state.realActionAuthorization = active;
+    renderRealActionDiagnostics(policy, active, applicationId);
+    return { policy, authorization: active, authorizations };
+  } catch (error) {
+    renderRealActionDiagnostics(null, null, getSelectedRealActionApplicationId(), error);
+    if (!options.silent) {
+      setStatus(error.message || String(error), true);
+    }
+    return null;
+  }
+}
+
+function renderRealActionDiagnostics(policy, authorization, applicationId, error = null) {
+  ui.realGreetingDetail.replaceChildren();
+  if (error) {
+    ui.realGreetingStatus.textContent = error.message || "真实动作策略不可用";
+    ui.realGreetingStatus.classList.add("warn");
+    ui.realGreetingDetail.textContent = error.message || String(error);
+    ui.realGreetingDetail.classList.add("warn");
+    ui.realGreetingEnabled.checked = false;
+    ui.armRealGreeting.disabled = true;
+    ui.runRealGreetingOnce.disabled = true;
+    ui.revokeRealGreeting.disabled = true;
+    return;
+  }
+  const enabled = policy?.enabled === true;
+  ui.realGreetingEnabled.checked = enabled;
+  ui.realGreetingStatus.classList.toggle("warn", !enabled || authorization?.status === "UNCERTAIN");
+  ui.realGreetingDetail.classList.toggle("warn", authorization?.status === "UNCERTAIN");
+  ui.realGreetingStatus.textContent = enabled
+    ? `已启用至 ${formatTime(policy.enabledUntil)}`
+    : "策略默认关闭";
+  appendKeyValue(ui.realGreetingDetail, "选中 application", applicationId ? `#${applicationId}` : "未选择");
+  appendKeyValue(ui.realGreetingDetail, "今日额度", `${Number(policy?.usedToday || 0)}/${Number(policy?.dailyLimit || 1)}`);
+  appendKeyValue(ui.realGreetingDetail, "冷却", `${Number(policy?.cooldownSeconds || 300)} 秒`);
+  if (authorization) {
+    appendKeyValue(ui.realGreetingDetail, "授权", `#${authorization.id} · ${authorization.status}`);
+    appendKeyValue(ui.realGreetingDetail, "岗位", authorization.targetJobId || authorization.targetDetailUrl || "未知");
+    appendKeyValue(ui.realGreetingDetail, "消息", `#${authorization.messageId} · ${shortHash(authorization.messageHash)}`);
+    appendKeyValue(ui.realGreetingDetail, "失效时间", formatTime(authorization.expiresAt));
+    appendKeyValue(ui.realGreetingDetail, "浏览器任务", authorization.browserTaskId ? `#${authorization.browserTaskId}` : "尚未入队");
+    if (authorization.errorCode) {
+      appendKeyValue(ui.realGreetingDetail, "最近错误", authorization.errorCode);
+    }
+  } else {
+    appendKeyValue(ui.realGreetingDetail, "授权", "尚无真实动作授权");
+  }
+  const canArm = enabled
+    && applicationId > 0
+    && Number(policy?.remainingToday || 0) > 0
+    && !["ARMED", "QUEUED"].includes(authorization?.status);
+  const canQueueArmed = authorization?.status === "ARMED" && Boolean(state.realActionAuthorizationToken);
+  const canRunQueued = authorization?.status === "QUEUED" && Number(authorization.browserTaskId || 0) > 0;
+  ui.armRealGreeting.disabled = !canArm;
+  ui.runRealGreetingOnce.disabled = !(canQueueArmed || canRunQueued);
+  ui.revokeRealGreeting.disabled = !["ARMED", "QUEUED"].includes(authorization?.status);
+  ui.runRealGreetingOnce.textContent = canRunQueued ? "执行已入队任务" : "发送一次";
+}
+
+async function updateRealGreetingPolicyFromToggle() {
+  const enabled = ui.realGreetingEnabled.checked;
+  const rationale = cleanUiText(ui.realGreetingRationale.value);
+  if (!rationale) {
+    ui.realGreetingEnabled.checked = !enabled;
+    setStatus("启用或关闭真实动作前必须填写本次操作原因", true);
+    return;
+  }
+  try {
+    ui.realGreetingEnabled.disabled = true;
+    await runtimeMessage({
+      type: "UPDATE_REAL_ACTION_POLICY",
+      options: {
+        enabled,
+        durationMinutes: 15,
+        actor: "user",
+        rationale
+      }
+    });
+    if (!enabled) {
+      state.realActionAuthorizationToken = "";
+    }
+    await refreshRealActionDiagnostics({ silent: true });
+    await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
+    setStatus(enabled ? "真实打招呼策略已短时启用" : "真实打招呼策略已关闭");
+  } catch (error) {
+    ui.realGreetingEnabled.checked = !enabled;
+    setStatus(`${error.code || "REAL_ACTION_POLICY_UPDATE_FAILED"}: ${error.message || String(error)}`, true);
+  } finally {
+    ui.realGreetingEnabled.disabled = false;
+  }
+}
+
+async function armRealGreetingForSelectedApplication() {
+  const applicationId = getSelectedRealActionApplicationId();
+  const rationale = cleanUiText(ui.realGreetingRationale.value);
+  if (!applicationId) {
+    setStatus("请先在简历详情或执行包中选中一个 application", true);
+    return;
+  }
+  if (!rationale) {
+    setStatus("授权真实打招呼前必须填写本次操作原因", true);
+    return;
+  }
+  try {
+    ui.armRealGreeting.disabled = true;
+    ui.realGreetingStatus.textContent = `正在为 application #${applicationId} 创建一次性授权`;
+    const result = await runtimeMessage({
+      type: "ARM_REAL_ACTION_AUTHORIZATION",
+      options: {
+        applicationId,
+        durationMinutes: 5,
+        actor: "user",
+        rationale
+      }
+    });
+    const response = result.response || {};
+    state.realActionAuthorization = response.authorization || null;
+    state.realActionAuthorizationToken = response.authorizationToken || "";
+    await refreshRealActionDiagnostics({ silent: true });
+    setStatus(`真实打招呼授权 #${response.authorization?.id || ""} 已创建，令牌只保留在当前页面内存中`);
+  } catch (error) {
+    state.realActionAuthorizationToken = "";
+    await refreshRealActionDiagnostics({ silent: true });
+    setStatus(`${error.code || "REAL_ACTION_ARM_FAILED"}: ${error.message || String(error)}`, true);
+  } finally {
+    ui.armRealGreeting.disabled = false;
+  }
+}
+
+async function runAuthorizedRealGreetingOnce() {
+  let authorization = state.realActionAuthorization;
+  if (!authorization?.id || !["ARMED", "QUEUED"].includes(authorization.status)) {
+    setStatus("没有可执行的一次性真实打招呼授权", true);
+    return;
+  }
+  try {
+    ui.runRealGreetingOnce.disabled = true;
+    const tab = await getBossExecutionTab();
+    await rememberBossPage(tab);
+    let taskId = Number(authorization.browserTaskId || 0);
+    if (authorization.status === "ARMED") {
+      if (!state.realActionAuthorizationToken) {
+        throw new Error("一次性授权令牌已离开当前页面内存，请撤销后重新授权");
+      }
+      const queued = await runtimeMessage({
+        type: "QUEUE_REAL_ACTION_AUTHORIZATION",
+        authorizationId: authorization.id,
+        options: {
+          authorizationToken: state.realActionAuthorizationToken
+        }
+      });
+      state.realActionAuthorizationToken = "";
+      authorization = queued.response?.authorization || authorization;
+      state.realActionAuthorization = authorization;
+      taskId = Number(queued.response?.browserTask?.id || authorization.browserTaskId || 0);
+    }
+    if (!taskId) {
+      throw new Error("真实打招呼授权没有关联浏览器任务");
+    }
+    await runBossTaskFromQueue({
+      button: ui.runRealGreetingOnce,
+      taskId,
+      taskTypes: ["SEND_GREETING_REAL"],
+      statusText: "正在执行单岗位真实打招呼",
+      emptyMessage: "指定的真实打招呼任务无法领取，可能已失效或被策略关闭。",
+      failureCode: "SEND_GREETING_REAL_FAILED",
+      successMessage: (task) => `真实打招呼已由 DOM 回读确认：任务 #${task.id}`,
+      failureMessage: (_task, result) => result?.realAction?.clickedSend
+        ? `发送结果不确定，已进入人工复核：${result?.errorCode || "REAL_ACTION_OUTCOME_UNCERTAIN"}`
+        : `真实打招呼在点击前停止：${result?.errorCode || result?.message || "unknown"}`
+    });
+  } catch (error) {
+    setStatus(`${error.code || "SEND_GREETING_REAL_FAILED"}: ${error.message || String(error)}`, true);
+  } finally {
+    await refreshRealActionDiagnostics({ silent: true });
+    await refreshGreetingDiagnostics({ silent: true }).catch(() => {});
+    await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
+  }
+}
+
+async function revokeActiveRealGreetingAuthorization() {
+  const authorization = state.realActionAuthorization;
+  const rationale = cleanUiText(ui.realGreetingRationale.value);
+  if (!authorization?.id || !["ARMED", "QUEUED"].includes(authorization.status)) {
+    setStatus("没有可撤销的真实动作授权", true);
+    return;
+  }
+  if (!rationale) {
+    setStatus("撤销授权前必须填写本次操作原因", true);
+    return;
+  }
+  try {
+    ui.revokeRealGreeting.disabled = true;
+    await runtimeMessage({
+      type: "REVOKE_REAL_ACTION_AUTHORIZATION",
+      authorizationId: authorization.id,
+      options: { actor: "user", rationale }
+    });
+    state.realActionAuthorizationToken = "";
+    await refreshRealActionDiagnostics({ silent: true });
+    setStatus(`真实动作授权 #${authorization.id} 已撤销`);
+  } catch (error) {
+    setStatus(`${error.code || "REAL_ACTION_REVOKE_FAILED"}: ${error.message || String(error)}`, true);
+  } finally {
+    ui.revokeRealGreeting.disabled = false;
+  }
+}
+
+function getSelectedRealActionApplicationId() {
+  const selected = Number(
+    state.selectedApplicationId
+    || state.selectedExecutionPackageApplicationId
+    || state.selectedResumeVersion?.applicationId
+    || 0
+  );
+  return Number.isInteger(selected) && selected > 0 ? selected : 0;
+}
+
+function cleanUiText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function shortHash(value) {
+  const text = String(value || "");
+  return text.length > 12 ? `${text.slice(0, 8)}...${text.slice(-4)}` : text || "missing";
+}
+
 async function prepareExecutionPackageForSelectedApplication(applicationId = null) {
   const targetApplicationId = Number(applicationId || getSelectedExecutionPackageApplicationId());
   try {
@@ -1254,6 +2118,7 @@ async function prepareExecutionPackageForSelectedApplication(applicationId = nul
     state.selectedExecutionPackageApplicationId = targetApplicationId;
     state.selectedExecutionPackage = result.response?.executionPackage || null;
     renderExecutionPackageDetail(result.response);
+    await refreshRealActionDiagnostics({ silent: true });
     await refreshGreetingDiagnostics({ silent: true });
     await refreshWorkflowDiagnostics({ silent: true }).catch(() => {});
     const executionPackage = result.response?.executionPackage || {};
@@ -1364,12 +2229,13 @@ async function runBossTaskFromQueue(options = {}) {
       type: "CLAIM_BROWSER_TASK",
       options: {
         taskTypes: options.taskTypes || [],
-        sourceUrl: tab.url || ""
+        taskId: options.taskId || null,
+        sourceUrl: options.taskId ? "" : tab.url || ""
       }
     });
     const task = claim?.response?.task;
     if (!claim?.response?.claimed || !task) {
-      throw new Error(options.emptyMessage || "No queued browser task matches the active BOSS page.");
+      throw new Error(claim?.response?.message || options.emptyMessage || "No queued browser task matches the active BOSS page.");
     }
 
     const result = await runClaimedBrowserTask(tab, task, options.failureCode || "BROWSER_TASK_FAILED");
@@ -1539,6 +2405,7 @@ function renderQuality(report, error = null) {
 
 function renderTaskDiagnostics(diagnostics, error = null) {
   if (error) {
+    state.browserTaskCounts = {};
     ui.browserTaskQueued.textContent = "--";
     ui.browserTaskRunning.textContent = "--";
     ui.browserTaskSucceeded.textContent = "--";
@@ -1550,6 +2417,7 @@ function renderTaskDiagnostics(diagnostics, error = null) {
   }
 
   const counts = diagnostics?.counts || {};
+  state.browserTaskCounts = counts;
   ui.browserTaskQueued.textContent = String(counts.queued ?? 0);
   ui.browserTaskRunning.textContent = String(counts.running ?? 0);
   ui.browserTaskSucceeded.textContent = String(counts.succeeded ?? 0);
@@ -1570,6 +2438,8 @@ function renderTaskDiagnostics(diagnostics, error = null) {
 
 function renderGreetingDiagnostics(diagnostics, error = null) {
   if (error) {
+    state.greetingMessages = [];
+    state.conversations = [];
     ui.greetingStatus.textContent = error.message || "打招呼草稿不可用";
     ui.greetingStatus.classList.add("warn");
     ui.greetingMessages.textContent = "";
@@ -1580,6 +2450,8 @@ function renderGreetingDiagnostics(diagnostics, error = null) {
   ui.greetingStatus.classList.remove("warn");
   const messages = Array.isArray(diagnostics?.messages?.messages) ? diagnostics.messages.messages.slice(0, 8) : [];
   const conversations = Array.isArray(diagnostics?.conversations?.conversations) ? diagnostics.conversations.conversations.slice(0, 8) : [];
+  state.greetingMessages = Array.isArray(diagnostics?.messages?.messages) ? diagnostics.messages.messages : [];
+  state.conversations = Array.isArray(diagnostics?.conversations?.conversations) ? diagnostics.conversations.conversations : [];
   const tasks = Array.isArray(diagnostics?.tasks?.recentTasks)
     ? diagnostics.tasks.recentTasks
       .filter((task) => ["SEND_GREETING", "REFRESH_CONVERSATION", "CHECK_RESUME_UNLOCK", "UPLOAD_RESUME", "SUBMIT_APPLICATION"].includes(task.taskType))
@@ -1675,6 +2547,7 @@ function renderGreetingDiagnostics(diagnostics, error = null) {
   renderExecutionPackageDetail(diagnostics?.executionPackage || null);
   renderExecutionChecklistDetail(diagnostics?.executionChecklist || null);
   renderSubmissionEvidenceDetail(diagnostics?.submissionEvidence || null);
+  renderWorkbench();
 }
 
 function renderExecutionPackageDetail(result = null) {
@@ -2210,6 +3083,7 @@ function renderEvents(events, error = null) {
 
 function renderMissingDescriptions(jobs, total, error = null) {
   if (error) {
+    state.missingDescriptionTotal = 0;
     ui.missingDescriptionCount.textContent = "--";
     ui.missingDescriptions.textContent = error.message || "待补 JD 队列不可用";
     ui.missingDescriptions.classList.add("warn");
@@ -2217,6 +3091,7 @@ function renderMissingDescriptions(jobs, total, error = null) {
   }
 
   ui.missingDescriptions.classList.remove("warn");
+  state.missingDescriptionTotal = Number(total || jobs.length || 0);
   ui.missingDescriptionCount.textContent = String(total || jobs.length);
   renderList(ui.missingDescriptions, jobs, (job) => ({
     title: job.title || "未命名岗位",
@@ -2226,6 +3101,8 @@ function renderMissingDescriptions(jobs, total, error = null) {
 
 function renderWorkflowDiagnostics(diagnostics, error = null) {
   if (error) {
+    state.workflowErrors = [];
+    state.workflowEvents = [];
     ui.workflowOpenErrorCount.textContent = "--";
     ui.workflowEventCount.textContent = "--";
     ui.workflowStatus.textContent = error.message || "Workflow logs unavailable";
@@ -2260,6 +3137,7 @@ function renderWorkflowDiagnostics(diagnostics, error = null) {
     meta: workflowEventMeta(event),
     actions: workflowEventActions(event, false)
   }), "No workflow events");
+  renderWorkbench();
 }
 
 function workflowEventActions(event, allowResolve) {
@@ -2369,8 +3247,477 @@ async function resolveWorkflowErrorFromOptions(eventId, status) {
   }
 }
 
+function renderApplicationDiagnostics(payload, error = null) {
+  if (error) {
+    state.applications = [];
+    state.totalApplications = 0;
+    renderWorkbench();
+    return;
+  }
+  const applications = Array.isArray(payload?.applications) ? payload.applications : [];
+  state.applications = applications;
+  state.totalApplications = Number(payload?.totalApplications ?? applications.length);
+  const selectedExists = applications.some((item) => Number(item.id) === Number(state.selectedApplicationId));
+  if (!selectedExists) {
+    const preferred = applications.find((item) => !new Set(["SUBMITTED", "SKIPPED"]).has(item.status)) || applications[0];
+    state.selectedApplicationId = preferred?.id || null;
+    if (preferred?.id) {
+      state.selectedExecutionPackageApplicationId = preferred.id;
+    }
+  }
+  renderWorkbench();
+}
+
+function renderWorkbench() {
+  if (!ui.workspaceApplications) {
+    return;
+  }
+  const applications = Array.isArray(state.applications) ? state.applications : [];
+  const attentionStatuses = new Set(["NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]);
+  const completeStatuses = new Set(["SUBMITTED", "SKIPPED"]);
+  const filter = ui.workspaceFilter.value || "active";
+  const visible = applications.filter((application) => {
+    if (filter === "attention") {
+      return attentionStatuses.has(application.status);
+    }
+    if (filter === "active") {
+      return !completeStatuses.has(application.status);
+    }
+    return true;
+  });
+  if (visible.length && !visible.some((item) => Number(item.id) === Number(state.selectedApplicationId))) {
+    state.selectedApplicationId = visible[0].id;
+    state.selectedExecutionPackageApplicationId = visible[0].id;
+  }
+
+  const actionableCount = applications.filter((application) => !resolveWorkbenchNextAction(application).disabled).length;
+  const attentionApplicationIds = new Set(
+    applications
+      .filter((application) => attentionStatuses.has(application.status))
+      .map((application) => Number(application.id))
+      .filter(Boolean)
+  );
+  const workflowErrors = Array.isArray(state.workflowErrors) ? state.workflowErrors : [];
+  for (const error of workflowErrors) {
+    if (Number(error.applicationId || 0)) {
+      attentionApplicationIds.add(Number(error.applicationId));
+    }
+  }
+  const unscopedWorkflowErrorCount = workflowErrors.filter((error) => !Number(error.applicationId || 0)).length;
+  const browserFailureCount = Number(state.browserTaskCounts?.failed || 0);
+  ui.workspaceApplicationCount.textContent = String(state.totalApplications || applications.length);
+  ui.workspaceActionCount.textContent = String(applications.filter((item) => !completeStatuses.has(item.status)).length);
+  ui.workspaceReadyCount.textContent = String(actionableCount);
+  ui.workspaceErrorCount.textContent = String(attentionApplicationIds.size + unscopedWorkflowErrorCount + browserFailureCount);
+
+  ui.workspaceApplications.replaceChildren();
+  ui.workspaceEmpty.hidden = visible.length > 0;
+  for (const application of visible) {
+    const row = document.createElement("tr");
+    row.className = "application-row";
+    row.tabIndex = 0;
+    row.dataset.applicationId = String(application.id || "");
+    row.setAttribute("aria-selected", String(Number(application.id) === Number(state.selectedApplicationId)));
+    row.addEventListener("click", () => selectWorkbenchApplication(application.id));
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectWorkbenchApplication(application.id);
+      }
+    });
+
+    const jobCell = document.createElement("td");
+    jobCell.className = "job-cell";
+    const title = document.createElement("strong");
+    title.textContent = application.title || "未命名岗位";
+    const company = document.createElement("span");
+    company.textContent = [application.company || "未知公司", application.location, application.salary].filter(Boolean).join(" · ");
+    jobCell.append(title, company);
+
+    const statusCell = document.createElement("td");
+    const status = document.createElement("span");
+    status.className = "status-chip";
+    status.dataset.tone = getApplicationStatusTone(application.status);
+    status.textContent = formatApplicationStatus(application.status);
+    statusCell.appendChild(status);
+
+    const scoreCell = document.createElement("td");
+    const screening = getScreeningForApplication(application.id);
+    scoreCell.className = screening ? "match-score" : "match-score muted";
+    scoreCell.textContent = screening ? String(Math.round(Number(screening.matchScore || 0))) : "--";
+
+    const updatedCell = document.createElement("td");
+    updatedCell.className = "table-secondary";
+    updatedCell.textContent = application.updatedAt ? formatTime(application.updatedAt) : "--";
+    row.append(jobCell, statusCell, scoreCell, updatedCell);
+    ui.workspaceApplications.appendChild(row);
+  }
+  renderWorkbenchSelection();
+}
+
+function renderWorkbenchSelection() {
+  const application = getSelectedWorkbenchApplication();
+  if (!application) {
+    ui.nextActionTitle.textContent = "选择一个岗位";
+    ui.workspaceSelectedCompany.textContent = "岗位状态会决定下一步操作";
+    ui.workspaceSelectedStatus.textContent = "未选择";
+    ui.workspaceSelectedStatus.dataset.tone = "complete";
+    ui.workspaceSelectedMeta.textContent = "--";
+    ui.workspaceActionHint.textContent = "从左侧岗位队列选择一项。";
+    ui.workspaceNextAction.textContent = "选择一个岗位";
+    ui.workspaceNextAction.disabled = true;
+    renderWorkbenchStageTrack(0);
+    return;
+  }
+  const action = resolveWorkbenchNextAction(application);
+  const screening = getScreeningForApplication(application.id);
+  ui.nextActionTitle.textContent = application.title || "未命名岗位";
+  ui.workspaceSelectedCompany.textContent = [application.company, application.location, application.salary].filter(Boolean).join(" · ") || "公司信息未记录";
+  ui.workspaceSelectedStatus.textContent = formatApplicationStatus(application.status);
+  ui.workspaceSelectedStatus.dataset.tone = getApplicationStatusTone(application.status);
+  ui.workspaceSelectedMeta.textContent = screening
+    ? `匹配 ${formatScore(screening.matchScore)} · 风险 ${formatScore(screening.riskScore)}`
+    : `${application.descriptionLength || 0} 字 JD`;
+  ui.workspaceActionHint.textContent = action.hint;
+  ui.workspaceNextAction.textContent = state.workbenchBusy ? "处理中..." : action.label;
+  ui.workspaceNextAction.dataset.action = action.type;
+  ui.workspaceNextAction.disabled = state.workbenchBusy || action.disabled;
+  renderWorkbenchStageTrack(getApplicationStage(application.status));
+}
+
+function renderWorkbenchStageTrack(currentStage) {
+  const labels = ["JD", "评估", "简历", "审核", "沟通"];
+  ui.workspaceStageTrack.replaceChildren();
+  labels.forEach((label, index) => {
+    const step = document.createElement("span");
+    step.className = "stage-step";
+    if (index < currentStage) {
+      step.classList.add("is-complete");
+    } else if (index === currentStage) {
+      step.classList.add("is-current");
+    }
+    step.textContent = label;
+    ui.workspaceStageTrack.appendChild(step);
+  });
+}
+
+function selectWorkbenchApplication(applicationId) {
+  const id = Number(applicationId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return;
+  }
+  state.selectedApplicationId = id;
+  state.selectedExecutionPackageApplicationId = id;
+  state.latestSubmissionPageResult = null;
+  renderWorkbench();
+  const selected = getSelectedWorkbenchApplication();
+  if (selected?.status === "GREETING_READY" && !getGreetingMessageForApplication(id)) {
+    refreshGreetingDraftForApplication(id).catch(() => {});
+  }
+}
+
+function getSelectedWorkbenchApplication() {
+  return state.applications.find((item) => Number(item.id) === Number(state.selectedApplicationId)) || null;
+}
+
+function getScreeningForApplication(applicationId) {
+  return state.screenings.find((item) => Number(item.applicationId) === Number(applicationId)) || null;
+}
+
+function getResumeVersionForApplication(applicationId) {
+  return state.resumeVersions.find((item) => Number(item.applicationId) === Number(applicationId)) || null;
+}
+
+function getGreetingMessageForApplication(applicationId) {
+  return state.greetingMessages.find((item) => (
+    Number(item.applicationId) === Number(applicationId)
+    && item.channel === "boss_greeting"
+    && item.direction === "OUTBOUND"
+    && item.status === "DRAFT"
+  )) || null;
+}
+
+async function refreshGreetingDraftForApplication(applicationId) {
+  const id = Number(applicationId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return null;
+  }
+  const result = await runtimeMessage({
+    type: "GET_MESSAGES",
+    options: { applicationId: id, limit: 20 }
+  });
+  const messages = Array.isArray(result.response?.messages) ? result.response.messages : [];
+  state.greetingMessages = mergeRecordsById(messages, state.greetingMessages);
+  if (Number(state.selectedApplicationId) === id) {
+    renderWorkbenchSelection();
+  }
+  return getGreetingMessageForApplication(id);
+}
+
+function resolveWorkbenchNextAction(application) {
+  const status = application?.status || "";
+  if (status === "DETAIL_CAPTURED") {
+    return { type: "SCREEN", label: "评估岗位", hint: "运行风险门禁和岗位匹配评分。", disabled: false };
+  }
+  if (status === "SHORTLISTED") {
+    return { type: "GENERATE_RESUME", label: "生成定制简历", hint: "按当前 JD 生成 DOCX，并完成适配度和真实性检查。", disabled: false };
+  }
+  if (["RESUME_DRAFTED", "RESUME_AUDITED"].includes(status)) {
+    return { type: "REVIEW_RESUME", label: "查看并审批", hint: "检查定制简历、证据映射和审核结果。", disabled: false };
+  }
+  if (status === "GREETING_READY") {
+    return getGreetingMessageForApplication(application.id)
+      ? { type: "SEND_GREETING", label: "发送一次", hint: "打开双重确认，仅对当前岗位发送一次。", disabled: false }
+      : { type: "PREPARE_GREETING", label: "准备打招呼", hint: "生成当前岗位的打招呼草稿和 dry-run 任务。", disabled: false };
+  }
+  if (status === "RESUME_UNLOCKED") {
+    return { type: "PREPARE_EXECUTION", label: "准备投递复核", hint: "生成本地执行包和投递前检查清单。", disabled: false };
+  }
+  if (status === "SUBMISSION_READY") {
+    return { type: "REVIEW_EXECUTION", label: "查看投递清单", hint: "进入高级诊断复核执行包与页面证据。", disabled: false };
+  }
+  if (["NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED", "SCORED"].includes(status)) {
+    return { type: "REVIEW_ISSUE", label: status === "SCORED" ? "查看评分" : "查看并处理", hint: application.statusReason || "查看错误日志和岗位时间线后决定如何继续。", disabled: false };
+  }
+  if (status === "LIST_CAPTURED") {
+    return { type: "WAIT_FOR_JD", label: "等待补齐 JD", hint: "该岗位需要先在 BOSS 页面加载出完整职位描述。", disabled: true };
+  }
+  if (["GREETING_SENT", "CHAT_OPENED"].includes(status)) {
+    return { type: "WAIT_FOR_REPLY", label: "等待沟通", hint: "打招呼已发送，等待对方回复或简历入口解锁。", disabled: true };
+  }
+  if (status === "SUBMITTED") {
+    return { type: "COMPLETE", label: "已完成投递", hint: "该岗位已记录为完成投递。", disabled: true };
+  }
+  if (status === "SKIPPED") {
+    return { type: "COMPLETE", label: "已跳过", hint: application.statusReason || "该岗位已被规则或人工决定排除。", disabled: true };
+  }
+  return { type: "NONE", label: "暂无可用操作", hint: application.statusReason || "当前状态没有自动操作。", disabled: true };
+}
+
+async function runWorkbenchNextAction() {
+  const application = getSelectedWorkbenchApplication();
+  const action = resolveWorkbenchNextAction(application);
+  if (!application || action.disabled || state.workbenchBusy) {
+    return;
+  }
+  state.workbenchBusy = true;
+  renderWorkbenchSelection();
+  try {
+    if (action.type === "SCREEN") {
+      const result = await runtimeMessage({
+        type: "SCREEN_APPLICATION_BATCH",
+        options: {
+          applicationIds: [application.id],
+          mode: "rules",
+          limit: 1,
+          continueOnError: false
+        }
+      });
+      await Promise.all([
+        refreshApplicationDiagnostics({ silent: true }),
+        refreshScreeningDiagnostics({ silent: true }),
+        refreshResumeDiagnostics({ silent: true })
+      ]);
+      const first = result.response?.results?.[0] || {};
+      setStatus(first.ok === false
+        ? `岗位评估失败：${first.errorCode || first.errorMessage || "unknown"}`
+        : `岗位评估完成：匹配 ${formatScore(first.matchScore)}，${formatRecommendation(first.recommendation)}`,
+      first.ok === false);
+    } else if (action.type === "GENERATE_RESUME") {
+      await runResumeWorkflowForSelectedApplication(application.id);
+      await refreshApplicationDiagnostics({ silent: true });
+    } else if (action.type === "REVIEW_RESUME") {
+      await openResumeReviewForApplication(application.id);
+    } else if (action.type === "PREPARE_GREETING") {
+      await prepareGreetingDryRun(application.id);
+      await refreshApplicationDiagnostics({ silent: true });
+    } else if (action.type === "SEND_GREETING") {
+      openRealGreetingDialog(application);
+    } else if (action.type === "PREPARE_EXECUTION") {
+      await prepareExecutionPackageForSelectedApplication(application.id);
+      await refreshApplicationDiagnostics({ silent: true });
+    } else if (action.type === "REVIEW_EXECUTION" || action.type === "REVIEW_ISSUE") {
+      await openAdvancedDiagnosticsForApplication(application.id);
+    }
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    state.workbenchBusy = false;
+    renderWorkbench();
+  }
+}
+
+async function openResumeReviewForApplication(applicationId) {
+  const id = Number(applicationId);
+  const result = await runtimeMessage({
+    type: "GET_RESUME_VERSIONS",
+    options: { applicationId: id, limit: 20 }
+  });
+  const versions = Array.isArray(result.response?.resumeVersions) ? result.response.resumeVersions : [];
+  if (!versions.length) {
+    throw new Error("当前岗位还没有可审核的简历版本");
+  }
+  state.resumeVersions = mergeRecordsById(versions, state.resumeVersions);
+  state.selectedExecutionPackageApplicationId = id;
+  await showResumeVersionDetail(versions[0].id);
+  if (!ui.resumeReviewDialog.open) {
+    ui.resumeReviewDialog.showModal();
+  }
+}
+
+async function openAdvancedDiagnosticsForApplication(applicationId) {
+  state.selectedTimelineApplicationId = Number(applicationId);
+  state.selectedExecutionPackageApplicationId = Number(applicationId);
+  activateView("settings", { focus: false });
+  ui.advancedDiagnostics.open = true;
+  await viewWorkflowTimeline(applicationId, { preserveStatus: true }).catch(() => {});
+  ui.advancedDiagnostics.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function openRealGreetingDialog(application) {
+  const message = getGreetingMessageForApplication(application?.id);
+  if (!application?.id || !message?.id) {
+    setStatus("当前岗位还没有可发送的打招呼草稿", true);
+    return;
+  }
+  state.selectedApplicationId = application.id;
+  state.selectedExecutionPackageApplicationId = application.id;
+  resetRealGreetingDialog();
+  ui.realGreetingTarget.textContent = formatRealGreetingConfirmation(application, message);
+  ui.realGreetingDialog.showModal();
+  ui.realGreetingConfirmRationale.focus();
+}
+
+function formatRealGreetingConfirmation(application, message) {
+  return [
+    `${application?.title || "未命名岗位"} @ ${application?.company || "未知公司"}`,
+    application?.detailUrl || "岗位链接未记录",
+    `消息 #${message?.id || ""}：${truncateInlineText(message?.messageText || "", 220)}`
+  ].join("\n");
+}
+
+async function confirmAndRunRealGreeting() {
+  const application = getSelectedWorkbenchApplication();
+  const message = getGreetingMessageForApplication(application?.id);
+  const rationale = cleanUiText(ui.realGreetingConfirmRationale.value);
+  if (!application?.id || !message?.id || !rationale || !ui.realGreetingConfirmAcknowledgement.checked) {
+    setStatus("岗位、消息、操作原因或确认项不完整", true);
+    return;
+  }
+  const policyWasEnabled = state.realActionPolicy?.enabled === true;
+  ui.realGreetingConfirmSend.disabled = true;
+  try {
+    await runtimeMessage({
+      type: "UPDATE_REAL_ACTION_POLICY",
+      options: {
+        enabled: true,
+        durationMinutes: 15,
+        actor: "user",
+        rationale
+      }
+    });
+    const armed = await runtimeMessage({
+      type: "ARM_REAL_ACTION_AUTHORIZATION",
+      options: {
+        applicationId: application.id,
+        durationMinutes: 5,
+        actor: "user",
+        rationale
+      }
+    });
+    state.realActionAuthorization = armed.response?.authorization || null;
+    state.realActionAuthorizationToken = armed.response?.authorizationToken || "";
+    ui.realGreetingRationale.value = rationale;
+    ui.realGreetingDialog.close();
+    setStatus(`一次性授权 #${state.realActionAuthorization?.id || ""} 已创建，正在执行当前岗位`);
+    await runAuthorizedRealGreetingOnce();
+    await refreshApplicationDiagnostics({ silent: true });
+  } catch (error) {
+    state.realActionAuthorizationToken = "";
+    setStatus(`${error.code || "SEND_GREETING_REAL_FAILED"}: ${error.message || String(error)}`, true);
+  } finally {
+    if (!policyWasEnabled) {
+      await runtimeMessage({
+        type: "UPDATE_REAL_ACTION_POLICY",
+        options: {
+          enabled: false,
+          durationMinutes: 1,
+          actor: "user",
+          rationale: `${rationale} / single action window closed`
+        }
+      }).catch(() => {});
+    }
+    ui.realGreetingConfirmSend.disabled = false;
+    await refreshRealActionDiagnostics({ silent: true });
+    renderWorkbench();
+  }
+}
+
+function mergeRecordsById(primary, secondary) {
+  const merged = new Map();
+  for (const item of [...primary, ...secondary]) {
+    if (item?.id && !merged.has(Number(item.id))) {
+      merged.set(Number(item.id), item);
+    }
+  }
+  return Array.from(merged.values());
+}
+
+function formatApplicationStatus(value) {
+  const labels = {
+    LIST_CAPTURED: "待补 JD",
+    DETAIL_CAPTURED: "待评估",
+    SCORED: "已评分",
+    SHORTLISTED: "待生成简历",
+    RESUME_DRAFTED: "待审核",
+    RESUME_AUDITED: "待本地确认",
+    GREETING_READY: "待打招呼",
+    GREETING_SENT: "已打招呼",
+    CHAT_OPENED: "沟通中",
+    RESUME_UNLOCKED: "简历已解锁",
+    SUBMISSION_READY: "待投递复核",
+    SUBMITTED: "已投递",
+    SKIPPED: "已跳过",
+    NEEDS_USER_REVIEW: "需复核",
+    NEEDS_MANUAL_ACTION: "需人工处理",
+    FAILED: "失败"
+  };
+  return labels[value] || value || "未知";
+}
+
+function getApplicationStatusTone(value) {
+  if (["DETAIL_CAPTURED", "SHORTLISTED", "GREETING_READY", "RESUME_UNLOCKED", "SUBMISSION_READY"].includes(value)) {
+    return "ready";
+  }
+  if (["LIST_CAPTURED", "SCORED", "RESUME_DRAFTED", "RESUME_AUDITED"].includes(value)) {
+    return "warning";
+  }
+  if (["NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"].includes(value)) {
+    return "danger";
+  }
+  return "complete";
+}
+
+function getApplicationStage(value) {
+  if (["LIST_CAPTURED"].includes(value)) {
+    return 0;
+  }
+  if (["DETAIL_CAPTURED", "SCORED", "SHORTLISTED", "NEEDS_USER_REVIEW", "FAILED"].includes(value)) {
+    return 1;
+  }
+  if (["RESUME_DRAFTED"].includes(value)) {
+    return 2;
+  }
+  if (["RESUME_AUDITED"].includes(value)) {
+    return 3;
+  }
+  return 4;
+}
+
 function renderScreeningDiagnostics(diagnostics, error = null) {
   if (error) {
+    state.screeningCandidates = [];
+    state.screenings = [];
     ui.screeningCandidateCount.textContent = "--";
     ui.screeningResultCount.textContent = "--";
     ui.agentRunCount.textContent = "--";
@@ -2388,6 +3735,8 @@ function renderScreeningDiagnostics(diagnostics, error = null) {
   const candidates = Array.isArray(candidatePayload.candidates) ? candidatePayload.candidates : [];
   const screenings = Array.isArray(screeningPayload.screenings) ? screeningPayload.screenings : [];
   const runs = Array.isArray(runPayload.runs) ? runPayload.runs : [];
+  state.screeningCandidates = candidates;
+  state.screenings = screenings;
 
   ui.screeningCandidateCount.textContent = String(candidatePayload.totalCandidates ?? candidates.length);
   ui.screeningResultCount.textContent = String(screeningPayload.totalScreenings ?? screenings.length);
@@ -2442,6 +3791,7 @@ function renderScreeningDiagnostics(diagnostics, error = null) {
       run.finishedAt ? formatTime(run.finishedAt) : run.createdAt ? formatTime(run.createdAt) : ""
     ].filter(Boolean).join(" · ")
   }), "暂无运行记录");
+  renderWorkbench();
 }
 
 function renderCareerContextDiagnostics(diagnostics, error = null) {
@@ -2519,6 +3869,7 @@ function renderProfileFactDrafts(payload, error = null) {
   renderList(ui.profileFactDrafts, drafts, (draft) => ({
     title: `#${draft.id} ${formatProfileDraftType(draft.draftType)} · ${draft.title || "未命名事实"}`,
     meta: [
+      draft.operation === "UPDATE" ? `更新 ${draft.targetEntityType || draft.draftType} #${draft.targetEntityId || "?"}` : "新增事实",
       draft.confidence ? `置信度 ${draft.confidence}` : "",
       draft.evidenceText ? truncateInlineText(draft.evidenceText, 110) : "",
       draft.createdAt ? formatTime(draft.createdAt) : ""
@@ -2551,7 +3902,14 @@ function createProfileFactDraftEditor(draft) {
   form.className = "fact-draft-editor";
   form.dataset.draftId = String(draft.id || "");
 
-  if (draft.draftType === "experience") {
+  if (draft.draftType === "profile") {
+    form.appendChild(createDraftInput(draft, "displayName", "姓名", draft.content?.displayName || ""));
+    form.appendChild(createDraftInput(draft, "headline", "职业定位", draft.content?.headline || ""));
+    form.appendChild(createDraftInput(draft, "location", "所在地", draft.content?.location || ""));
+    form.appendChild(createDraftInput(draft, "targetRoles", "目标岗位", Array.isArray(draft.content?.target?.roles) ? draft.content.target.roles.join("、") : ""));
+    form.appendChild(createDraftInput(draft, "targetCities", "目标城市", Array.isArray(draft.content?.target?.cities) ? draft.content.target.cities.join("、") : ""));
+    form.appendChild(createDraftTextarea(draft, "summary", "画像摘要", draft.content?.summary || ""));
+  } else if (draft.draftType === "experience") {
     form.appendChild(createDraftInput(draft, "title", "标题", draft.content?.title || draft.title || ""));
     form.appendChild(createDraftInput(draft, "role", "职责", draft.content?.role || ""));
     form.appendChild(createDraftTextarea(draft, "facts", "事实/指标，每行一条", Array.isArray(draft.content?.facts) ? draft.content.facts.join("\n") : ""));
@@ -2612,6 +3970,28 @@ function readProfileFactDraftEdit(draft) {
   const values = {};
   for (const node of Array.from(editor.querySelectorAll("[data-field]"))) {
     values[node.dataset.field] = String(node.value || "").trim();
+  }
+  if (draft.draftType === "profile") {
+    const target = { ...(draft.content?.target || {}) };
+    const roles = splitEditableList(values.targetRoles);
+    const cities = splitEditableList(values.targetCities);
+    if (roles.length) {
+      target.roles = roles;
+    }
+    if (cities.length) {
+      target.cities = cities;
+    }
+    const content = {};
+    for (const field of ["displayName", "headline", "location", "summary"]) {
+      const value = values[field] || draft.content?.[field] || "";
+      if (value) {
+        content[field] = value;
+      }
+    }
+    if (Object.keys(target).length) {
+      content.target = target;
+    }
+    return content;
   }
   if (draft.draftType === "experience") {
     return {
@@ -2703,6 +4083,7 @@ function formatCareerContextFreshnessStatus(freshness = {}) {
 
 function formatProfileDraftType(value) {
   const labels = {
+    profile: "基本画像",
     experience: "经历",
     skill: "技能",
     constraint: "约束",
@@ -2925,6 +4306,10 @@ function truncateInlineText(value, maxLength) {
 
 function renderResumeDiagnostics(diagnostics, error = null) {
   if (error) {
+    state.resumeVersions = [];
+    state.resumeAudits = [];
+    state.resumeFitEvaluations = [];
+    state.resumeClaimVerifications = [];
     ui.resumeCandidateCount.textContent = "--";
     ui.resumeVersionCount.textContent = "--";
     ui.resumeAuditCount.textContent = "--";
@@ -3051,6 +4436,7 @@ function renderResumeDiagnostics(diagnostics, error = null) {
   if (state.selectedResumeVersionId && !versions.some((version) => Number(version.id) === Number(state.selectedResumeVersionId))) {
     clearResumeDetail();
   }
+  renderWorkbench();
 }
 
 async function showResumeVersionDetail(resumeVersionId) {
@@ -3075,6 +4461,7 @@ async function showResumeVersionDetail(resumeVersionId) {
     state.selectedResumeFitEvaluationId = fits[0]?.id || null;
     state.selectedResumeClaimVerificationId = claims[0]?.id || null;
     renderResumeDetail(version, audits[0] || null, fits[0] || null, claims[0] || null);
+    await refreshRealActionDiagnostics({ silent: true });
     setStatus(`已读取简历版本 #${version.id || id}`);
   } catch (error) {
     ui.resumeDetailStatus.textContent = error.message || String(error);
@@ -3105,6 +4492,7 @@ async function showResumeAuditDetail(resumeAuditId) {
     state.selectedResumeFitEvaluationId = fits[0]?.id || null;
     state.selectedResumeClaimVerificationId = claims[0]?.id || null;
     renderResumeDetail(version, audit, fits[0] || null, claims[0] || null);
+    await refreshRealActionDiagnostics({ silent: true });
     setStatus(`已读取审核记录 #${audit.id || id}`);
   } catch (error) {
     ui.resumeDetailStatus.textContent = error.message || String(error);
@@ -3117,6 +4505,10 @@ function renderResumeDetail(version = {}, audit = null, fitEvaluation = null, cl
   const fields = version.resumeFields && typeof version.resumeFields === "object" ? version.resumeFields : {};
   const renderMetadata = version.renderMetadata && typeof version.renderMetadata === "object" ? version.renderMetadata : {};
   state.selectedResumeVersion = version;
+  if (version.applicationId) {
+    state.selectedApplicationId = version.applicationId;
+    state.selectedExecutionPackageApplicationId = version.applicationId;
+  }
   state.selectedResumeAudit = audit;
   state.selectedResumeFitEvaluation = fitEvaluation;
   state.selectedResumeClaimVerification = claimVerification;
@@ -3236,6 +4628,7 @@ async function saveResumeRevision() {
       }
     });
     await refreshResumeDiagnostics({ silent: true });
+    await refreshApplicationDiagnostics({ silent: true });
     const nextVersion = result.response?.resumeVersion || {};
     if (nextVersion.id) {
       await showResumeVersionDetail(nextVersion.id);
@@ -3270,6 +4663,7 @@ async function approveResumeLocal() {
       }
     });
     await refreshResumeDiagnostics({ silent: true });
+    await refreshApplicationDiagnostics({ silent: true });
     await showResumeVersionDetail(result.response?.resumeVersion?.id || version.id);
     const transition = result.response?.transition || {};
     setStatus(`本地审批已记录：${transition.fromStatus || ""} -> ${transition.toStatus || ""}`.trim());
@@ -3822,7 +5216,10 @@ function shortPath(value) {
 async function runtimeMessage(message) {
   const response = await chrome.runtime.sendMessage(message);
   if (!response?.ok) {
-    throw new Error(response?.error || "扩展后台无响应");
+    const error = new Error(response?.error || "扩展后台无响应");
+    error.code = response?.errorCode || "EXTENSION_BACKGROUND_ERROR";
+    error.context = response?.context || {};
+    throw error;
   }
   return response.result;
 }

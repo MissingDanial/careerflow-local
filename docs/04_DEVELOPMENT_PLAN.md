@@ -2,7 +2,7 @@
 
 本文是当前项目的主开发路线图。M1 已经完成 BOSS 浏览器执行层的技术选型，M2-M12 已建立从岗位采集、用户画像、Agent 简历闭环到本地执行包和投递结果证据的主流程。
 
-截至 2026-07-10，M13“质量基线与可回放工作流”已完成仓库基线、测试分层、CI、有序数据库迁移、不可变输入快照、集中状态迁移和 Agent 固定评测。下一阶段先持续补充匿名真实失败样本，再基于证据与质量结果重新评估真实 BOSS 动作范围。
+截至 2026-07-11，M13“质量基线与可回放工作流”已完成仓库基线、测试分层、CI、有序数据库迁移、不可变输入快照、集中状态迁移和 Agent 固定评测。M14 已完成单岗位真实打招呼授权协议和 options 工作台收敛；真实页面 canary、上传简历和投递仍保持关闭。
 
 ## 0. 开发原则
 
@@ -48,6 +48,7 @@
 | M9 | 投递执行 POC 与复盘 | 验证投递入口、简历上传/选择、投递结果记录 |
 | M10 | Agent 编排与可观测闭环 | 用持久化节点契约和 LangGraph 跑通岗位版简历工作流 |
 | M11 | DOCX 与本地执行包 | 固化模板、渲染 QA、执行包和人工检查清单 |
+| M14 | 真实动作金丝雀 | 用短时授权、单岗位、一次尝试和 DOM 回读验证真实打招呼 |
 | M12 | 投递结果证据 | 只读识别并记录当前 BOSS 页面结果，不推进真实动作 |
 | M13 | 质量基线与可回放工作流 | 建立 CI、迁移、不可变输入、状态不变量和 Agent 评测集 |
 
@@ -1883,3 +1884,112 @@ M13.1 仓库基线与 CI
 -> M13.5 Agent 评测集
 -> 再评估真实 BOSS 动作范围
 ```
+
+## 14. M14 真实动作金丝雀
+
+### M14.1 单岗位真实打招呼授权协议
+
+状态：协议、后端、扩展控制与本地 fixture 验证已完成；真实 BOSS 页面 canary 待用户单独确认后执行。
+
+目标：在不开放批量执行、后台自动发送、真实简历上传或真实投递的前提下，只验证一个用户明确选择岗位的 `SEND_GREETING_REAL` 动作。
+
+实现边界：
+
+- 新增独立任务类型 `SEND_GREETING_REAL`，普通 `POST /api/browser-tasks` 不能直接创建。
+- 全局真实动作策略默认关闭；启用必须提供 actor、rationale 和不超过 30 分钟的截止时间。
+- 每次授权只绑定一个 application、一个岗位和一条已存在的打招呼草稿，原始授权令牌只返回一次，SQLite 只保存 SHA-256 hash。
+- 授权默认 5 分钟失效；入队时再次验证策略、application 状态、消息、岗位、每日额度和 cooldown。
+- 第一阶段每日额度固定为 1，任务 `maxAttempts = 1`，失败或过期任务不能重排。
+- 内容脚本点击前校验当前页面、岗位 hash 和消息 hash；只允许一次发送按钮点击。
+- 点击后必须从 DOM 回读同一条消息并再次校验 hash，后端才将消息写为 `SENT`，并通过 `ApplicationTransitionService` 推进 `GREETING_READY -> GREETING_SENT`。
+- 一旦发生“已点击但 DOM 无法确认”，授权进入 `UNCERTAIN`，application 进入 `NEEDS_USER_REVIEW`，绝不自动重试。
+- 登录失效、验证码、页面/岗位/消息不匹配和发送按钮缺失均在点击前失败并记录错误。
+- 自动化测试只运行本地 SQLite 和拦截的静态 DOM fixture，不访问真实 BOSS，也不产生真实动作。
+
+明确不包含：
+
+- `UPLOAD_RESUME_REAL`。
+- `SUBMIT_APPLICATION_REAL`。
+- 批量打招呼。
+- 页面后台轮询后自动发送。
+- 登录、验证码或平台风控绕过。
+
+验收：
+
+- 默认策略下无法创建授权，也无法通过通用 browser-task API 绕过授权创建真实任务。
+- 错误令牌、过期令牌、重复消费、超额、cooldown、岗位或消息变化均在任务入队或点击前失败。
+- 成功回调必须包含完整 preflight 与 DOM readback 证据；缺失证据时事务回滚，不能写 `SENT/GREETING_SENT`。
+- 确认成功只写一次消息、授权、browser task 和 application 终态，重复相同回调幂等。
+- uncertain 结果保留可诊断证据，任务不可重排，application 进入人工复核。
+- `npm run m14:real-action:smoke`、`npm run m14:extension-real-greeting:smoke`、`npm run test:workflow` 和 `npm run test:ci` 通过。
+
+### M14.1c 用户工作台与诊断收敛
+
+状态：已完成。
+
+目标：把原先平铺 21 个区块、35 个按钮的“设置与诊断”改成面向日常求职流程的 application 工作台，同时保留全部工程诊断和 M14.1 安全协议。
+
+交付物：
+
+- options 页改为 `工作台 / 个人经历 / 设置` 三个 ARIA tab；默认只显示工作台。
+- 工作台直接复用既有 `GET /api/applications`，以岗位表为主视图，并根据 application 状态推导唯一 `nextAction`。
+- `DETAIL_CAPTURED -> 评估岗位` 只传入当前 `applicationIds`；`SHORTLISTED -> 生成定制简历`；`RESUME_DRAFTED/RESUME_AUDITED -> 查看并审批`；`GREETING_READY -> 准备打招呼/发送一次`。
+- 简历详情、受限编辑和本地审批移动到按需打开的审核弹窗；ProfileAgent 保持独立、持久化的个人经历入口。
+- 后端同步、岗位偏好和 DOCX 模板保留在设置页；浏览器任务、采集质量、Agent 手动节点、最近异常、待补 JD 和 workflow 日志默认折叠在“高级诊断”。
+- 真实打招呼的旧工程控件保留在高级诊断；工作台使用两步确认弹窗，确认后仍调用 M14.1 的短时策略、一次性授权和 `SEND_GREETING_REAL` 单次执行协议。
+- 新增 `scripts/m14-options-workspace-ui-smoke.js`，使用 mocked extension API 在桌面和 390px 移动视口验证布局、上下文操作、键盘页签和双确认，不访问 BOSS、不创建 browser task 或真实动作授权。
+
+验收：
+
+- 默认工作台可见按钮固定为 5 个：3 个页签、刷新和 1 个上下文主操作。
+- 桌面与移动视口无文档横向溢出、页签/工作区重叠或按钮文本截断。
+- 同一主按钮可随 application 状态切换为“评估岗位 / 生成定制简历 / 查看并审批 / 发送一次 / 查看并处理”。
+- 高级诊断默认关闭，展开后既有卡片和手动恢复入口仍可使用。
+- `npm run m14:options-workspace-ui:smoke`、`npm run test:extension` 和 `npm run test:ci` 通过。
+
+### M14 后续顺序
+
+```text
+M14.1 单岗位真实打招呼授权协议
+-> M14.1c 用户工作台与诊断收敛
+-> M15.1 Profile Conversation & Memory v2
+-> M14.2 真实模型 Agent 评测
+-> M14.3 简历选择/上传 POC
+-> M14.4 单岗位真实投递金丝雀
+```
+
+## 15. M15 ProfileAgent 长期画像基础
+
+### M15.1 Profile Conversation & Memory v2
+
+状态：已完成实现与本地模型 fixture/Playwright 验证；真实用户对话质量仍需持续评测。
+
+目标：把 ProfileAgent 从规则问卷升级为可恢复的模型多轮对话，让用户经历、目标和修正可以持续沉淀，同时保证后续简历 Agent 只读取用户确认后的正式画像。
+
+交付物：
+
+- schema v14 migration `014_profile_conversation_memory.sql`：新增 dialog sessions/messages、context versions、entity revisions，并为事实草稿增加 operation、target 和来源消息。
+- `server/src/profile-conversation-agent.js`：运行时加载项目内 `career-retrospective-to-job` Skill，调用现有 OpenAI-compatible client，校验严格 JSON 输出。
+- `server/src/services/profile-conversation-service.js`：消息先落库、模型调用、摘要合并、草稿生成、失败记录和原消息重试。
+- ProfileAgent API：session 列表/创建/详情、发送消息、重试消息、entity revision 查询。
+- “个人经历”页以多轮聊天为主入口，展示会话摘要、下一步追问、冲突和待确认草稿；原规则文本入口默认折叠。
+- `career_agent_context.md` 生成同步建立 context version，并用 profile/content hash 判断可复用性。
+- `CREATE` 草稿确认后新增事实；`UPDATE` 草稿确认后修改指定实体并保存 before/after revision。
+- 模型调用失败不自动规则降级，不丢用户消息，也不创建 application/browser task/BOSS 动作。
+
+验收：
+
+- session/message 在刷新和后端重启后可恢复。
+- 模型输出只能形成 `PENDING` 草稿，确认前正式画像不变。
+- 更新草稿必须绑定现有实体，确认后实体 ID 不变且 revision 可查。
+- 模型失败保存 user message、failed assistant message、agent run 和 workflow event；重试不重复 user message。
+- context version 保存来源 session/message 和两类 hash，画像变化后状态变为 `STALE`。
+- 桌面与 390px 移动端对话、摘要、草稿无横向溢出；UI fixture 不触发 BOSS 动作。
+- `npm run m15:profile-conversation:smoke`、`npm run m15:options-profile-conversation:smoke`、`npm run test:profile`、`npm run test:extension` 和 `npm run test:ci` 通过。
+
+明确不包含：
+
+- 向量数据库或跨用户语义检索。
+- 把 ProfileAgent 放入每个岗位的 ResumeWorkflowGraph。
+- 模型自动确认事实或静默删除正式画像。
+- LangGraph checkpoint；只有画像访谈出现复杂分支中断和跨设备恢复需求后再评估。

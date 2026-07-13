@@ -109,6 +109,15 @@ SQLite schema 管理：
 - `job_snapshots` 继续承载岗位采集历史，并为每次工作流额外写入精确的 JD/job payload。
 - `workflow_runs` 保存一次图运行的生命周期、最终输出、错误和 replay 来源。
 - `workflow_input_snapshots` 一对一绑定 workflow run，保存 profile/job snapshot IDs、application、user rules、execution/render options、脱敏后的 model config、graph/prompt/agent version 和 input hash。
+
+Profile Conversation & Memory v2：
+
+- `profile_dialog_sessions` 保存独立画像访谈的标题、状态、增量摘要、未决问题、冲突和脱敏模型配置。
+- `profile_dialog_messages` 保存 user/assistant 消息、模型失败、重试来源和对应 `agent_run`；用户消息在模型调用前提交。
+- `profile_fact_drafts` 增加 `CREATE/UPDATE`、目标 entity 和来源 session/message；模型不能直接写正式画像表。
+- `profile_entity_revisions` 在用户确认草稿时保存 before/after JSON。
+- `profile_context_versions` 保存结构化上下文、Markdown、profile/content hash 和来源会话。
+- 会话记忆、正式画像事实和单岗位 workflow snapshot 是三个独立层次，不能互相替代。
 - `agent_runs.workflow_run_id` 将 Screening、Resume、Fit、Claim、Revision、Audit 节点绑定到同一组输入；对应 snapshot/version 字段冗余保存，便于审计查询。
 - API Key、token、secret、authorization 和 password 类字段在入库前剔除。
 - `POST /api/workflow-runs/:id/replay` 是内存 dry replay，不调用持久化写方法，不改变 application，不创建 browser task。

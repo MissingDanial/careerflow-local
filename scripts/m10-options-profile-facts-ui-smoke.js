@@ -248,8 +248,11 @@ async function main() {
     const optionsUrl = pathToFileURL(path.join(ROOT, "extension", "src", "options.html")).toString();
     await page.goto(optionsUrl, { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => document.querySelector("#status")?.textContent.includes("诊断已刷新"));
+    await page.click("#profileTab");
+    await page.waitForFunction(() => document.querySelector("#profilePanel")?.hidden === false);
 
     const initialDraftText = await page.locator("#profileFactDrafts").innerText();
+    await page.locator(".profile-rule-fallback > summary").click();
     await page.fill("#profileAgentUserUpdate", "新增项目：ProfileAgent 画像入口，用于补充经历、目标岗位和风险约束，先生成待确认草稿。");
     await page.click("#stageProfileAgentUpdate");
     await page.waitForFunction(() => document.querySelector("#profileAgentUpdateStatus")?.textContent.includes("已生成"));

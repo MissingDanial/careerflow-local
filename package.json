@@ -75,7 +75,12 @@
     "m13:sqlite-migrations:smoke": "node scripts/m13-sqlite-migrations-smoke.js",
     "m13:workflow-inputs:smoke": "node scripts/m13-workflow-input-snapshots-smoke.js",
     "m13:application-transitions:smoke": "node scripts/m13-application-transition-invariants-smoke.js",
-    "m13:agent-evaluation:smoke": "node scripts/m13-agent-evaluation-smoke.js"
+    "m13:agent-evaluation:smoke": "node scripts/m13-agent-evaluation-smoke.js",
+    "m14:real-action:smoke": "node scripts/m14-real-action-authorization-smoke.js",
+    "m14:extension-real-greeting:smoke": "node scripts/m14-extension-real-greeting-smoke.js",
+    "m14:options-workspace-ui:smoke": "node scripts/m14-options-workspace-ui-smoke.js",
+    "m15:profile-conversation:smoke": "node scripts/m15-profile-conversation-memory-smoke.js",
+    "m15:options-profile-conversation:smoke": "node scripts/m15-options-profile-conversation-smoke.js"
   },
   "engines": {
     "node": ">=24"

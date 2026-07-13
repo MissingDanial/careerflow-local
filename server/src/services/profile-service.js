@@ -16,12 +16,31 @@ function createProfileService({ store, dataDir }) {
 
   return {
     readCareerContext() {
-      const careerContext = readCareerContextFile({ dataDir });
+      const fileContext = readCareerContextFile({ dataDir });
+      const contextVersion = store.getLatestProfileContextVersion();
+      const versionIsNewer = contextVersion?.id
+        && (!fileContext.exists || Date.parse(contextVersion.createdAt || 0) > Date.parse(fileContext.updatedAt || 0));
+      const careerContext = versionIsNewer
+        ? {
+          ...fileContext,
+          exists: true,
+          markdown: contextVersion.markdown,
+          bytes: Buffer.byteLength(contextVersion.markdown, "utf8"),
+          updatedAt: contextVersion.createdAt,
+          persistenceSource: "sqlite_version"
+        }
+        : {
+          ...fileContext,
+          persistenceSource: fileContext.exists ? "file" : "missing"
+        };
       return {
         ok: true,
         storage: "file",
         careerContext,
-        freshness: store.getCareerContextFreshness(careerContext.updatedAt)
+        contextVersion,
+        freshness: contextVersion
+          ? store.getProfileContextVersionFreshness(contextVersion)
+          : store.getCareerContextFreshness(careerContext.updatedAt)
       };
     },
 
@@ -53,10 +72,19 @@ function createProfileService({ store, dataDir }) {
         if (payload.writeFile !== false) {
           file = writeCareerContextFile(agentResult.result.markdown, { dataDir });
         }
+        const contextVersion = store.createProfileContextVersion({
+          sourceSessionId: payload.sourceSessionId || payload.sessionId || 0,
+          sourceMessageId: payload.sourceMessageId || payload.messageId || 0,
+          structured: agentResult.result.context,
+          markdown: agentResult.result.markdown
+        });
         const output = {
           summary: agentResult.result.summary,
           missingQuestions: agentResult.result.missingQuestions,
           file,
+          contextVersionId: contextVersion.id,
+          profileHash: contextVersion.profileHash,
+          contentHash: contextVersion.contentHash,
           markdownLength: agentResult.result.markdown.length
         };
         const finishedRun = store.finishAgentRun(agentRun.id, {
@@ -83,6 +111,7 @@ function createProfileService({ store, dataDir }) {
           metadata: {
             summary: agentResult.result.summary,
             file,
+            contextVersion,
             pendingFactsRemainPending: true
           }
         });
@@ -93,9 +122,11 @@ function createProfileService({ store, dataDir }) {
           careerContext: {
             context: agentResult.result.context,
             markdown: agentResult.result.markdown,
-            file
+            file,
+            contextVersion
           },
-          freshness: store.getCareerContextFreshness(file?.updatedAt || ""),
+          contextVersion,
+          freshness: store.getProfileContextVersionFreshness(contextVersion),
           missingQuestions: agentResult.result.missingQuestions
         };
       } catch (error) {

@@ -7,6 +7,10 @@ const {
   canTransitionApplication,
   normalizeApplicationStatus
 } = require("./services/application-transition-service");
+const {
+  RealActionAuthorizationService,
+  isRealActionType
+} = require("./services/real-action-authorization-service");
 
 let DatabaseSync;
 try {
@@ -15,7 +19,7 @@ try {
   throw new Error("SQLite storage requires Node.js with node:sqlite support. Use Node.js 24 or newer for this project.");
 }
 
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 14;
 const DEFAULT_DB_NAME = "boss_find.sqlite3";
 
 function createJobStore(options = {}) {
@@ -61,6 +65,15 @@ class SqliteJobStore {
       database: this.database,
       insertApplicationEvent: (event) => this.insertApplicationEvent(event),
       insertWorkflowEvent: (event, now) => this.insertWorkflowEvent(event, now)
+    });
+    this.realActionAuthorizationService = new RealActionAuthorizationService({
+      database: this.database,
+      insertWorkflowEvent: (event, now) => this.insertWorkflowEvent(event, now),
+      createBrowserTaskWithinTransaction: (input, now) => this.createBrowserTaskWithinTransaction(input, now),
+      getBrowserTask: (taskId) => this.getBrowserTask(taskId),
+      transitionApplicationWithinTransaction: (applicationId, transition) => (
+        this.transitionApplicationWithinTransaction(applicationId, transition)
+      )
     });
   }
 
@@ -166,6 +179,10 @@ class SqliteJobStore {
     const constraintCount = this.database.prepare("SELECT COUNT(*) AS count FROM profile_constraints").get().count;
     const factDraftCount = this.database.prepare("SELECT COUNT(*) AS count FROM profile_fact_drafts").get().count;
     const pendingFactDraftCount = this.database.prepare("SELECT COUNT(*) AS count FROM profile_fact_drafts WHERE status = 'PENDING'").get().count;
+    const profileDialogSessionCount = this.database.prepare("SELECT COUNT(*) AS count FROM profile_dialog_sessions").get().count;
+    const profileDialogMessageCount = this.database.prepare("SELECT COUNT(*) AS count FROM profile_dialog_messages").get().count;
+    const profileContextVersionCount = this.database.prepare("SELECT COUNT(*) AS count FROM profile_context_versions").get().count;
+    const profileEntityRevisionCount = this.database.prepare("SELECT COUNT(*) AS count FROM profile_entity_revisions").get().count;
     const agentRunCount = this.database.prepare("SELECT COUNT(*) AS count FROM agent_runs").get().count;
     const screeningCount = this.database.prepare("SELECT COUNT(*) AS count FROM screenings").get().count;
     const resumeVersionCount = this.database.prepare("SELECT COUNT(*) AS count FROM resume_versions").get().count;
@@ -210,6 +227,10 @@ class SqliteJobStore {
       constraintCount: Number(constraintCount || 0),
       factDraftCount: Number(factDraftCount || 0),
       pendingFactDraftCount: Number(pendingFactDraftCount || 0),
+      profileDialogSessionCount: Number(profileDialogSessionCount || 0),
+      profileDialogMessageCount: Number(profileDialogMessageCount || 0),
+      profileContextVersionCount: Number(profileContextVersionCount || 0),
+      profileEntityRevisionCount: Number(profileEntityRevisionCount || 0),
       agentRunCount: Number(agentRunCount || 0),
       screeningCount: Number(screeningCount || 0),
       resumeVersionCount: Number(resumeVersionCount || 0),
@@ -269,6 +290,281 @@ class SqliteJobStore {
   getProfile() {
     const profile = this.getOrCreateProfile();
     return this.readProfileBundle(profile.id);
+  }
+
+  getProfileHash() {
+    return stableJsonHash(this.getProfile());
+  }
+
+  createProfileDialogSession(input = {}) {
+    const profile = this.getOrCreateProfile();
+    const now = new Date().toISOString();
+    const result = this.database.prepare(`
+      INSERT INTO profile_dialog_sessions (
+        profile_id, title, status, summary_json, open_questions_json,
+        conflicts_json, model_config_json, last_message_at, created_at, updated_at
+      ) VALUES (?, ?, 'OPEN', '{}', '[]', '[]', ?, NULL, ?, ?)
+    `).run(
+      profile.id,
+      cleanText(input.title || "职业经历复盘") || "职业经历复盘",
+      stringifyJson(input.modelConfig && typeof input.modelConfig === "object" ? input.modelConfig : {}),
+      now,
+      now
+    );
+    return this.getProfileDialogSession(Number(result.lastInsertRowid));
+  }
+
+  getProfileDialogSessions(options = {}) {
+    const profile = this.getOrCreateProfile();
+    const limit = Math.max(1, Math.min(100, Number(options.limit) || 20));
+    const status = normalizeProfileDialogSessionStatus(options.status || "");
+    if (options.status && !status) {
+      throw validationError("Valid profile dialog session status is required");
+    }
+    const whereParts = ["profile_dialog_sessions.profile_id = ?"];
+    const params = [profile.id];
+    if (status) {
+      whereParts.push("profile_dialog_sessions.status = ?");
+      params.push(status);
+    }
+    params.push(limit);
+    const rows = this.database.prepare(`
+      SELECT
+        profile_dialog_sessions.*,
+        (SELECT COUNT(*) FROM profile_dialog_messages WHERE session_id = profile_dialog_sessions.id) AS message_count,
+        (SELECT COUNT(*) FROM profile_fact_drafts
+          WHERE source_session_id = profile_dialog_sessions.id AND status = 'PENDING') AS pending_draft_count
+      FROM profile_dialog_sessions
+      WHERE ${whereParts.join(" AND ")}
+      ORDER BY datetime(COALESCE(last_message_at, updated_at)) DESC, id DESC
+      LIMIT ?
+    `).all(...params);
+    return {
+      storage: "sqlite",
+      totalSessions: Number(this.database.prepare(
+        "SELECT COUNT(*) AS count FROM profile_dialog_sessions WHERE profile_id = ?"
+      ).get(profile.id).count || 0),
+      sessions: rows.map(rowToProfileDialogSession)
+    };
+  }
+
+  getProfileDialogSession(sessionId) {
+    const id = normalizePositiveInteger(sessionId);
+    if (!id) {
+      throw validationError("Valid profile dialog session id is required");
+    }
+    const profile = this.getOrCreateProfile();
+    const row = this.database.prepare(`
+      SELECT
+        profile_dialog_sessions.*,
+        (SELECT COUNT(*) FROM profile_dialog_messages WHERE session_id = profile_dialog_sessions.id) AS message_count,
+        (SELECT COUNT(*) FROM profile_fact_drafts
+          WHERE source_session_id = profile_dialog_sessions.id AND status = 'PENDING') AS pending_draft_count
+      FROM profile_dialog_sessions
+      WHERE profile_dialog_sessions.id = ? AND profile_dialog_sessions.profile_id = ?
+    `).get(id, profile.id);
+    if (!row) {
+      throw validationError(`Profile dialog session not found: ${id}`);
+    }
+    return rowToProfileDialogSession(row);
+  }
+
+  updateProfileDialogSession(sessionId, input = {}) {
+    const session = this.getProfileDialogSession(sessionId);
+    const status = input.status ? normalizeProfileDialogSessionStatus(input.status) : session.status;
+    if (!status) {
+      throw validationError("Valid profile dialog session status is required");
+    }
+    const summary = input.summary && typeof input.summary === "object" ? input.summary : session.summary;
+    const questions = Array.isArray(input.openQuestions) ? input.openQuestions : session.openQuestions;
+    const conflicts = Array.isArray(input.conflicts) ? input.conflicts : session.conflicts;
+    const modelConfig = input.modelConfig && typeof input.modelConfig === "object" ? input.modelConfig : session.modelConfig;
+    const now = new Date().toISOString();
+    this.database.prepare(`
+      UPDATE profile_dialog_sessions
+      SET title = ?, status = ?, summary_json = ?, open_questions_json = ?,
+          conflicts_json = ?, model_config_json = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      cleanText(input.title ?? session.title) || session.title,
+      status,
+      stringifyJson(summary),
+      stringifyJson(questions),
+      stringifyJson(conflicts),
+      stringifyJson(modelConfig),
+      now,
+      session.id
+    );
+    return this.getProfileDialogSession(session.id);
+  }
+
+  createProfileDialogMessage(sessionId, input = {}) {
+    const session = this.getProfileDialogSession(sessionId);
+    const role = normalizeProfileDialogRole(input.role || "");
+    const status = normalizeProfileDialogMessageStatus(input.status || "COMPLETED");
+    const content = cleanMultiline(input.content || "").slice(0, 50000);
+    if (!role || !status) {
+      throw validationError("Profile dialog message role and status are required");
+    }
+    if (role === "user" && !content) {
+      throw validationError("Profile dialog user message content is required");
+    }
+    const now = new Date().toISOString();
+    const result = this.database.prepare(`
+      INSERT INTO profile_dialog_messages (
+        session_id, role, status, content, structured_json, error_code,
+        error_message, retry_of_message_id, agent_run_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      session.id,
+      role,
+      status,
+      content,
+      stringifyJson(input.structured && typeof input.structured === "object" ? input.structured : {}),
+      cleanText(input.errorCode || ""),
+      cleanMultiline(input.errorMessage || "").slice(0, 4000),
+      normalizePositiveInteger(input.retryOfMessageId) || null,
+      normalizePositiveInteger(input.agentRunId) || null,
+      now
+    );
+    this.database.prepare(`
+      UPDATE profile_dialog_sessions
+      SET last_message_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(now, now, session.id);
+    return this.getProfileDialogMessage(Number(result.lastInsertRowid));
+  }
+
+  getProfileDialogMessage(messageId) {
+    const id = normalizePositiveInteger(messageId);
+    if (!id) {
+      throw validationError("Valid profile dialog message id is required");
+    }
+    const row = this.database.prepare("SELECT * FROM profile_dialog_messages WHERE id = ?").get(id);
+    if (!row) {
+      throw validationError(`Profile dialog message not found: ${id}`);
+    }
+    this.getProfileDialogSession(row.session_id);
+    return rowToProfileDialogMessage(row);
+  }
+
+  getProfileDialogMessages(sessionId, options = {}) {
+    const session = this.getProfileDialogSession(sessionId);
+    const limit = Math.max(1, Math.min(200, Number(options.limit) || 80));
+    const rows = this.database.prepare(`
+      SELECT *
+      FROM profile_dialog_messages
+      WHERE session_id = ?
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(session.id, limit).reverse();
+    return {
+      storage: "sqlite",
+      session,
+      totalMessages: Number(this.database.prepare(
+        "SELECT COUNT(*) AS count FROM profile_dialog_messages WHERE session_id = ?"
+      ).get(session.id).count || 0),
+      messages: rows.map(rowToProfileDialogMessage)
+    };
+  }
+
+  createProfileContextVersion(input = {}) {
+    const profile = this.getOrCreateProfile();
+    const structured = input.structured && typeof input.structured === "object" ? input.structured : {};
+    const markdown = String(input.markdown || "");
+    if (!markdown.trim()) {
+      throw validationError("Profile context markdown is required");
+    }
+    const profileHash = cleanText(input.profileHash || this.getProfileHash());
+    const contentHash = stableJsonHash({ structured, markdown });
+    const now = new Date().toISOString();
+    const result = this.database.prepare(`
+      INSERT INTO profile_context_versions (
+        profile_id, source_session_id, source_message_id, profile_hash,
+        content_hash, structured_json, markdown, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      profile.id,
+      normalizePositiveInteger(input.sourceSessionId) || null,
+      normalizePositiveInteger(input.sourceMessageId) || null,
+      profileHash,
+      contentHash,
+      stringifyJson(structured),
+      markdown,
+      now
+    );
+    return rowToProfileContextVersion(this.database.prepare(
+      "SELECT * FROM profile_context_versions WHERE id = ?"
+    ).get(Number(result.lastInsertRowid)));
+  }
+
+  getLatestProfileContextVersion() {
+    const profile = this.getOrCreateProfile();
+    const row = this.database.prepare(`
+      SELECT * FROM profile_context_versions
+      WHERE profile_id = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(profile.id);
+    return row ? rowToProfileContextVersion(row) : null;
+  }
+
+  getProfileContextVersionFreshness(version = null) {
+    const snapshot = this.getProfileFreshnessSnapshot();
+    if (!version?.id) {
+      return {
+        status: "MISSING",
+        isFresh: false,
+        contextUpdatedAt: "",
+        latestProfileChangedAt: snapshot.latestProfileChangedAt,
+        latestProfileChangeSource: snapshot.latestProfileChangeSource,
+        latestProfileChangeId: snapshot.latestProfileChangeId,
+        staleReasons: ["career_context_version_missing"],
+        snapshot
+      };
+    }
+    const currentProfileHash = this.getProfileHash();
+    const isFresh = currentProfileHash === version.profileHash;
+    return {
+      status: isFresh ? "FRESH" : "STALE",
+      isFresh,
+      contextUpdatedAt: version.createdAt,
+      latestProfileChangedAt: snapshot.latestProfileChangedAt,
+      latestProfileChangeSource: snapshot.latestProfileChangeSource,
+      latestProfileChangeId: snapshot.latestProfileChangeId,
+      staleReasons: isFresh ? [] : ["profile_hash_changed_after_context_version"],
+      profileHash: version.profileHash,
+      currentProfileHash,
+      contextVersionId: version.id,
+      snapshot
+    };
+  }
+
+  getProfileEntityRevisions(options = {}) {
+    const profile = this.getOrCreateProfile();
+    const limit = Math.max(1, Math.min(200, Number(options.limit) || 50));
+    const entityType = normalizeProfileEntityType(options.entityType || options.type || "");
+    const entityId = normalizePositiveInteger(options.entityId || options.id || 0);
+    const whereParts = ["profile_id = ?"];
+    const params = [profile.id];
+    if (entityType) {
+      whereParts.push("entity_type = ?");
+      params.push(entityType);
+    }
+    if (entityId) {
+      whereParts.push("entity_id = ?");
+      params.push(entityId);
+    }
+    params.push(limit);
+    const rows = this.database.prepare(`
+      SELECT * FROM profile_entity_revisions
+      WHERE ${whereParts.join(" AND ")}
+      ORDER BY id DESC LIMIT ?
+    `).all(...params);
+    return {
+      storage: "sqlite",
+      revisions: rows.map(rowToProfileEntityRevision)
+    };
   }
 
   getProfileFreshnessSnapshot() {
@@ -332,13 +628,28 @@ class SqliteJobStore {
   }
 
   updateProfile(input = {}) {
-    const now = new Date().toISOString();
     const profile = this.getOrCreateProfile();
-    const current = parseJsonValue(profile.target_json, {});
-    const target = input.target && typeof input.target === "object"
-      ? { ...current, ...input.target }
-      : current;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.updateProfileWithinTransaction(profile.id, input);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.readProfileBundle(profile.id);
+  }
 
+  updateProfileWithinTransaction(profileId, input = {}) {
+    const profile = this.database.prepare("SELECT * FROM candidate_profiles WHERE id = ?").get(profileId);
+    if (!profile) {
+      throw validationError(`Profile not found: ${profileId}`);
+    }
+    const currentTarget = parseJsonValue(profile.target_json, {});
+    const target = input.target && typeof input.target === "object"
+      ? { ...currentTarget, ...input.target }
+      : currentTarget;
+    const now = new Date().toISOString();
     this.database.prepare(`
       UPDATE candidate_profiles
       SET display_name = ?, headline = ?, location = ?, target_json = ?, summary = ?, updated_at = ?
@@ -352,7 +663,7 @@ class SqliteJobStore {
       now,
       profile.id
     );
-    return this.readProfileBundle(profile.id);
+    return rowToProfile(this.database.prepare("SELECT * FROM candidate_profiles WHERE id = ?").get(profile.id));
   }
 
   createResumeSource(input = {}) {
@@ -420,6 +731,8 @@ class SqliteJobStore {
 
   createProfileFactDrafts(input = {}) {
     const resumeSourceId = normalizePositiveInteger(input.resumeSourceId || input.sourceId || 0);
+    const sourceSessionId = normalizePositiveInteger(input.sourceSessionId || input.sessionId || 0);
+    const sourceMessageId = normalizePositiveInteger(input.sourceMessageId || input.messageId || 0);
     const resumeSource = input.resumeSource || (resumeSourceId ? this.getResumeSource(resumeSourceId) : null);
     const drafts = Array.isArray(input.drafts) ? input.drafts : [];
     if (!drafts.length) {
@@ -442,7 +755,11 @@ class SqliteJobStore {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       for (const draft of drafts) {
-        const normalized = normalizeFactDraftInput(draft, resumeSourceId || null);
+        const normalized = normalizeFactDraftInput(draft, {
+          resumeSourceId: resumeSourceId || null,
+          sourceSessionId: sourceSessionId || null,
+          sourceMessageId: sourceMessageId || null
+        });
         if (!normalized) {
           skipped += 1;
           continue;
@@ -454,22 +771,45 @@ class SqliteJobStore {
             WHERE profile_id = ?
               AND resume_source_id = ?
               AND draft_type = ?
+              AND operation = ?
+              AND COALESCE(target_entity_type, '') = ?
+              AND COALESCE(target_entity_id, 0) = ?
               AND title = ?
               AND evidence_text = ?
               AND status IN ('PENDING', 'CONFIRMED')
-            LIMIT 1
-          `).get(profile.id, resumeSourceId, normalized.draftType, normalized.title, normalized.evidenceText)
+              LIMIT 1
+            `).get(
+              profile.id,
+              resumeSourceId,
+              normalized.draftType,
+              normalized.operation,
+              normalized.targetEntityType,
+              normalized.targetEntityId || 0,
+              normalized.title,
+              normalized.evidenceText
+            )
           : this.database.prepare(`
             SELECT id
             FROM profile_fact_drafts
             WHERE profile_id = ?
               AND resume_source_id IS NULL
               AND draft_type = ?
+              AND operation = ?
+              AND COALESCE(target_entity_type, '') = ?
+              AND COALESCE(target_entity_id, 0) = ?
               AND title = ?
               AND evidence_text = ?
               AND status IN ('PENDING', 'CONFIRMED')
-            LIMIT 1
-          `).get(profile.id, normalized.draftType, normalized.title, normalized.evidenceText);
+              LIMIT 1
+            `).get(
+              profile.id,
+              normalized.draftType,
+              normalized.operation,
+              normalized.targetEntityType,
+              normalized.targetEntityId || 0,
+              normalized.title,
+              normalized.evidenceText
+            );
         if (duplicate) {
           skipped += 1;
           continue;
@@ -477,8 +817,9 @@ class SqliteJobStore {
         const result = this.database.prepare(`
           INSERT INTO profile_fact_drafts (
             profile_id, resume_source_id, draft_type, status, title, content_json,
-            evidence_text, confidence, metadata_json, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            evidence_text, confidence, metadata_json, operation, target_entity_type,
+            target_entity_id, source_session_id, source_message_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           profile.id,
           resumeSourceId || null,
@@ -489,6 +830,11 @@ class SqliteJobStore {
           normalized.evidenceText,
           normalized.confidence,
           stringifyJson(normalized.metadata),
+          normalized.operation,
+          normalized.targetEntityType || null,
+          normalized.targetEntityId || null,
+          normalized.sourceSessionId || null,
+          normalized.sourceMessageId || null,
           now,
           now
         );
@@ -523,6 +869,7 @@ class SqliteJobStore {
       throw validationError("Valid fact draft type is required");
     }
     const resumeSourceId = normalizePositiveInteger(options.resumeSourceId || options.sourceId || 0);
+    const sourceSessionId = normalizePositiveInteger(options.sourceSessionId || options.sessionId || 0);
     const whereParts = ["profile_id = ?"];
     const params = [profile.id];
     if (status) {
@@ -537,6 +884,10 @@ class SqliteJobStore {
       whereParts.push("resume_source_id = ?");
       params.push(resumeSourceId);
     }
+    if (sourceSessionId) {
+      whereParts.push("source_session_id = ?");
+      params.push(sourceSessionId);
+    }
     params.push(limit);
     const rows = this.database.prepare(`
       SELECT *
@@ -549,7 +900,7 @@ class SqliteJobStore {
     `).all(...params);
     return {
       storage: "sqlite",
-      totalDrafts: this.countProfileFactDrafts({ status, draftType, resumeSourceId }),
+      totalDrafts: this.countProfileFactDrafts({ status, draftType, resumeSourceId, sourceSessionId }),
       drafts: rows.map(rowToProfileFactDraft)
     };
   }
@@ -573,28 +924,57 @@ class SqliteJobStore {
     }
 
     const now = new Date().toISOString();
-    let createdEntity = null;
+    let resolvedEntity = null;
+    let revision = null;
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      if (draft.draftType === "experience") {
-        createdEntity = this.createExperienceWithinTransaction({
-          ...draft.content,
-          ...(input.content && typeof input.content === "object" ? input.content : {}),
-          confidence: input.confidence || draft.content.confidence || "user_confirmed"
-        });
-      } else if (draft.draftType === "skill") {
-        createdEntity = this.createSkillWithinTransaction({
-          ...draft.content,
-          ...(input.content && typeof input.content === "object" ? input.content : {})
-        });
-      } else if (draft.draftType === "constraint") {
-        createdEntity = this.createConstraintWithinTransaction({
-          ...draft.content,
-          ...(input.content && typeof input.content === "object" ? input.content : {})
-        });
-      } else {
+      if (draft.draftType === "question") {
         throw validationError("Question drafts cannot be confirmed into fact library");
       }
+      const operation = normalizeFactDraftOperation(draft.operation);
+      const content = {
+        ...draft.content,
+        ...(input.content && typeof input.content === "object" ? input.content : {})
+      };
+      const targetType = normalizeProfileEntityType(draft.targetEntityType || draft.draftType);
+      const targetId = normalizePositiveInteger(draft.targetEntityId);
+      if (operation === "UPDATE" && targetType !== draft.draftType) {
+        throw validationError(`Profile draft target type must match draft type: ${draft.draftType}`);
+      }
+      const beforeEntity = operation === "UPDATE"
+        ? this.getProfileEntityForRevision(targetType, targetId)
+        : null;
+
+      if (operation === "UPDATE") {
+        resolvedEntity = this.updateProfileEntityWithinTransaction(targetType, targetId, {
+          ...content,
+          confidence: input.confidence || content.confidence || "user_confirmed"
+        });
+      } else if (draft.draftType === "profile") {
+        const profile = this.getOrCreateProfile();
+        resolvedEntity = this.updateProfileWithinTransaction(profile.id, content);
+      } else if (draft.draftType === "experience") {
+        resolvedEntity = this.createExperienceWithinTransaction({
+          ...content,
+          confidence: input.confidence || content.confidence || "user_confirmed"
+        });
+      } else if (draft.draftType === "skill") {
+        resolvedEntity = this.createSkillWithinTransaction(content);
+      } else if (draft.draftType === "constraint") {
+        resolvedEntity = this.createConstraintWithinTransaction(content);
+      } else {
+        throw validationError(`Unsupported profile fact draft type: ${draft.draftType}`);
+      }
+
+      revision = this.insertProfileEntityRevisionWithinTransaction({
+        entityType: draft.draftType,
+        entityId: Number(resolvedEntity.id || 0),
+        operation,
+        sourceDraftId: draft.id,
+        before: beforeEntity,
+        after: resolvedEntity,
+        now
+      });
 
       this.database.prepare(`
         UPDATE profile_fact_drafts
@@ -603,7 +983,7 @@ class SqliteJobStore {
       `).run(
         now,
         draft.draftType,
-        Number(createdEntity.id || 0),
+        Number(resolvedEntity.id || 0),
         now,
         draft.id
       );
@@ -617,9 +997,148 @@ class SqliteJobStore {
       storage: "sqlite",
       ok: true,
       action: "confirm",
+      operation: normalizeFactDraftOperation(draft.operation),
       draft: this.getProfileFactDraft(draft.id),
-      createdEntity
+      createdEntity: resolvedEntity,
+      resolvedEntity,
+      revision
     };
+  }
+
+  getProfileEntityForRevision(entityType, entityId) {
+    const profile = this.getOrCreateProfile();
+    if (entityType === "profile") {
+      if (entityId !== profile.id) {
+        throw validationError(`Profile draft target does not match active profile: ${entityId}`);
+      }
+      return rowToProfile(profile);
+    }
+    const tableByType = {
+      experience: "profile_experiences",
+      skill: "profile_skills",
+      constraint: "profile_constraints"
+    };
+    const mapperByType = {
+      experience: rowToExperience,
+      skill: rowToSkill,
+      constraint: rowToConstraint
+    };
+    const table = tableByType[entityType];
+    if (!table || !entityId) {
+      throw validationError("Profile draft update requires a valid target entity");
+    }
+    const row = this.database.prepare(`SELECT * FROM ${table} WHERE id = ? AND profile_id = ?`).get(entityId, profile.id);
+    if (!row) {
+      throw validationError(`Profile ${entityType} target not found: ${entityId}`);
+    }
+    return mapperByType[entityType](row);
+  }
+
+  updateProfileEntityWithinTransaction(entityType, entityId, input = {}) {
+    const current = this.getProfileEntityForRevision(entityType, entityId);
+    const now = new Date().toISOString();
+    if (entityType === "profile") {
+      return this.updateProfileWithinTransaction(entityId, input);
+    }
+    if (entityType === "experience") {
+      const normalized = normalizeExperienceInput({
+        ...current,
+        ...input,
+        facts: input.facts ?? current.facts,
+        skills: input.skills ?? current.skills,
+        allowedRewrites: input.allowedRewrites ?? current.allowedRewrites,
+        forbiddenClaims: input.forbiddenClaims ?? current.forbiddenClaims
+      });
+      if (!normalized.title && !normalized.facts.length) {
+        throw validationError("Experience title or facts are required");
+      }
+      this.database.prepare(`
+        UPDATE profile_experiences
+        SET kind = ?, title = ?, organization = ?, role = ?, start_date = ?, end_date = ?,
+            facts_json = ?, skills_json = ?, evidence_text = ?, evidence_source = ?, confidence = ?,
+            allowed_rewrites_json = ?, forbidden_claims_json = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        normalized.kind,
+        normalized.title,
+        normalized.organization,
+        normalized.role,
+        normalized.startDate,
+        normalized.endDate,
+        stringifyJson(normalized.facts),
+        stringifyJson(normalized.skills),
+        normalized.evidenceText,
+        normalized.evidenceSource,
+        normalized.confidence,
+        stringifyJson(normalized.allowedRewrites),
+        stringifyJson(normalized.forbiddenClaims),
+        now,
+        entityId
+      );
+      return this.getExperience(entityId);
+    }
+    if (entityType === "skill") {
+      const name = cleanText(input.name ?? current.name);
+      if (!name) {
+        throw validationError("Skill name is required");
+      }
+      this.database.prepare(`
+        UPDATE profile_skills
+        SET name = ?, category = ?, proficiency = ?, evidence_json = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        name,
+        cleanText(input.category ?? current.category),
+        normalizeSkillProficiency(input.proficiency ?? current.proficiency),
+        stringifyJson(normalizeArray(input.evidence ?? current.evidence)),
+        now,
+        entityId
+      );
+      return rowToSkill(this.database.prepare("SELECT * FROM profile_skills WHERE id = ?").get(entityId));
+    }
+    if (entityType === "constraint") {
+      const ruleType = normalizeConstraintRuleType(input.ruleType ?? input.type ?? current.ruleType);
+      const content = cleanMultiline(input.content ?? input.text ?? current.content);
+      if (!ruleType || !content) {
+        throw validationError("Constraint ruleType and content are required");
+      }
+      this.database.prepare(`
+        UPDATE profile_constraints
+        SET rule_type = ?, content = ?, severity = ?, metadata_json = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        ruleType,
+        content,
+        normalizeConstraintSeverity(input.severity ?? current.severity),
+        stringifyJson(input.metadata && typeof input.metadata === "object" ? input.metadata : current.metadata),
+        now,
+        entityId
+      );
+      return rowToConstraint(this.database.prepare("SELECT * FROM profile_constraints WHERE id = ?").get(entityId));
+    }
+    throw validationError(`Unsupported profile entity type: ${entityType}`);
+  }
+
+  insertProfileEntityRevisionWithinTransaction(input = {}) {
+    const profile = this.getOrCreateProfile();
+    const result = this.database.prepare(`
+      INSERT INTO profile_entity_revisions (
+        profile_id, entity_type, entity_id, operation, source_draft_id,
+        before_json, after_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      profile.id,
+      normalizeProfileEntityType(input.entityType),
+      normalizePositiveInteger(input.entityId),
+      normalizeFactDraftOperation(input.operation),
+      normalizePositiveInteger(input.sourceDraftId) || null,
+      stringifyJson(input.before ?? null),
+      stringifyJson(input.after ?? null),
+      input.now || new Date().toISOString()
+    );
+    return rowToProfileEntityRevision(this.database.prepare(
+      "SELECT * FROM profile_entity_revisions WHERE id = ?"
+    ).get(Number(result.lastInsertRowid)));
   }
 
   rejectProfileFactDraft(draftId, input = {}) {
@@ -1664,7 +2183,8 @@ class SqliteJobStore {
     this.database.prepare(`
       UPDATE agent_runs
       SET status = ?, provider = ?, output_json = ?, error_code = ?, error_message = ?,
-        fallback_used = ?, finished_at = ?, updated_at = ?
+        fallback_used = ?, prompt_version = ?, agent_version = ?, model_config_json = ?,
+        graph_version = ?, finished_at = ?, updated_at = ?
       WHERE id = ?
     `).run(
       status,
@@ -1673,6 +2193,12 @@ class SqliteJobStore {
       cleanText(input.errorCode || input.code || ""),
       cleanText(input.errorMessage || input.error || ""),
       input.fallbackUsed ? 1 : 0,
+      cleanText(input.promptVersion ?? existing.prompt_version ?? ""),
+      cleanText(input.agentVersion ?? existing.agent_version ?? ""),
+      input.modelConfig === undefined
+        ? existing.model_config_json
+        : stringifyJson(sanitizeModelConfig(input.modelConfig || {})),
+      cleanText(input.graphVersion ?? existing.graph_version ?? ""),
       now,
       now,
       id
@@ -3412,6 +3938,9 @@ class SqliteJobStore {
     if (!taskType) {
       throw validationError("Valid browser task type is required");
     }
+    if (isRealActionType(taskType)) {
+      throw validationError(`${taskType} must be created through the real-action authorization API`);
+    }
 
     const payload = input.payload && typeof input.payload === "object" ? input.payload : {};
     const applicationId = resolveBrowserTaskApplicationId(this.database, input, payload);
@@ -3452,6 +3981,26 @@ class SqliteJobStore {
     const applicationId = resolveBrowserTaskApplicationId(this.database, input, payload);
     const expiresAt = resolveBrowserTaskExpiry(input.expiresAt || payload.expiresAt, taskType, now);
     const maxAttempts = normalizeBrowserTaskMaxAttempts(input.maxAttempts || payload.maxAttempts);
+    if (isRealActionType(taskType)) {
+      const authorizationId = normalizePositiveInteger(input.realActionAuthorizationId || payload.authorizationId);
+      const authorization = authorizationId
+        ? this.database.prepare(`
+          SELECT id, application_id, action_type, status, browser_task_id
+          FROM real_action_authorizations
+          WHERE id = ?
+        `).get(authorizationId)
+        : null;
+      if (
+        !authorization
+        || Number(authorization.application_id) !== Number(applicationId)
+        || authorization.action_type !== taskType
+        || authorization.status !== "ARMED"
+        || authorization.browser_task_id !== null
+        || maxAttempts !== 1
+      ) {
+        throw validationError(`${taskType} requires one matching ARMED authorization and maxAttempts = 1`);
+      }
+    }
     const existingTask = this.findOpenBrowserTask({ applicationId, taskType, payload });
     if (existingTask) {
       return {
@@ -3627,6 +4176,7 @@ class SqliteJobStore {
 
   claimBrowserTask(options = {}) {
     const requestedTypes = normalizeTaskTypeList(options.taskTypes || options.types || options.taskType || options.type);
+    const requestedTaskId = normalizeOptionalPositiveInteger(options.taskId || options.id);
     const hasTypeFilter = Array.isArray(options.taskTypes)
       || Array.isArray(options.types)
       || Boolean(options.taskType)
@@ -3646,6 +4196,10 @@ class SqliteJobStore {
       const params = [now];
       whereParts.push("(expires_at IS NULL OR expires_at = '' OR expires_at > ?)");
       whereParts.push("attempt_count < max_attempts");
+      if (requestedTaskId) {
+        whereParts.push("id = ?");
+        params.push(requestedTaskId);
+      }
       if (requestedTypes.length) {
         whereParts.push(`task_type IN (${requestedTypes.map(() => "?").join(", ")})`);
         params.push(...requestedTypes);
@@ -3672,6 +4226,40 @@ class SqliteJobStore {
           storage: "sqlite",
           claimed: false,
           task: null,
+          expiredCount
+        };
+      }
+
+      const taskBeforeClaim = this.database.prepare("SELECT * FROM browser_tasks WHERE id = ?").get(row.id);
+      const realActionClaim = this.realActionAuthorizationService.validateTaskClaimWithinTransaction(taskBeforeClaim, now);
+      if (!realActionClaim.ok) {
+        const rejectedResult = {
+          ok: false,
+          errorCode: realActionClaim.errorCode,
+          message: realActionClaim.message,
+          realAction: {
+            clickedSend: false,
+            clickCount: 0,
+            preflightValidated: false,
+            postSendReadback: false,
+            outcome: "ABORTED"
+          }
+        };
+        this.database.prepare(`
+          UPDATE browser_tasks
+          SET status = 'FAILED', result_json = ?, error_message = ?, claim_token = '', updated_at = ?
+          WHERE id = ? AND status = 'QUEUED'
+        `).run(stringifyJson(rejectedResult), realActionClaim.errorCode, now, row.id);
+        this.insertBrowserTaskFailureEvent(taskBeforeClaim, rejectedResult, realActionClaim.errorCode, now);
+        this.realActionAuthorizationService.rejectTaskBeforeClaimWithinTransaction(taskBeforeClaim, realActionClaim, now);
+        this.database.exec("COMMIT");
+        return {
+          storage: "sqlite",
+          claimed: false,
+          rejected: true,
+          task: this.getBrowserTask(Number(row.id)),
+          errorCode: realActionClaim.errorCode,
+          message: realActionClaim.message,
           expiredCount
         };
       }
@@ -3769,6 +4357,9 @@ class SqliteJobStore {
       if (existing.status === "RUNNING" && Number(existing.attempt_count || 0) > 1 && !claimToken) {
         throw conflictError("Retry callback requires the current browser task claim token");
       }
+      if (existing.status === "RUNNING" && isRealActionType(existing.task_type) && !claimToken) {
+        throw conflictError("Real-action callback requires the current browser task claim token");
+      }
       if (claimToken && claimToken !== cleanText(existing.claim_token || "")) {
         throw conflictError("Stale browser task callback claim token");
       }
@@ -3809,7 +4400,9 @@ class SqliteJobStore {
       if (toStatus === "FAILED") {
         this.insertBrowserTaskFailureEvent(existing, result, errorMessage, now);
       }
-      if (toStatus === "SUCCEEDED") {
+      if (isRealActionType(existing.task_type)) {
+        this.realActionAuthorizationService.applyBrowserTaskResultWithinTransaction(existing, result, toStatus, now);
+      } else if (toStatus === "SUCCEEDED") {
         this.applySuccessfulBrowserTaskResult(existing, result, now);
       }
       this.insertWorkflowEvent({
@@ -3894,6 +4487,18 @@ class SqliteJobStore {
       WHERE id = ?
     `).run(stringifyJson(result), now, taskRow.id);
     this.insertBrowserTaskFailureEvent(taskRow, result, "TASK_EXPIRED", now);
+    if (isRealActionType(taskRow.task_type)) {
+      this.realActionAuthorizationService.applyBrowserTaskResultWithinTransaction(taskRow, {
+        ...result,
+        realAction: {
+          clickedSend: false,
+          clickCount: 0,
+          preflightValidated: false,
+          postSendReadback: false,
+          outcome: "ABORTED"
+        }
+      }, "FAILED", now);
+    }
     this.insertWorkflowEvent({
       applicationId: taskRow.application_id || null,
       sourceType: "browser_task",
@@ -4194,7 +4799,10 @@ class SqliteJobStore {
     }
 
     const candidates = this.selectBrowserTasksForScope({ statuses, taskTypes, sourceUrl });
-    const cancelableRows = candidates.filter((row) => canTransitionBrowserTask(row.status, "CANCELED"));
+    const cancelableRows = candidates.filter((row) => (
+      canTransitionBrowserTask(row.status, "CANCELED")
+      && !(isRealActionType(row.task_type) && row.status === "RUNNING")
+    ));
     const now = new Date().toISOString();
 
     this.database.exec("BEGIN IMMEDIATE");
@@ -4206,6 +4814,20 @@ class SqliteJobStore {
       `);
       for (const row of cancelableRows) {
         stmt.run(reason, now, row.id);
+        if (isRealActionType(row.task_type)) {
+          this.realActionAuthorizationService.applyBrowserTaskResultWithinTransaction(row, {
+            ok: false,
+            errorCode: "REAL_ACTION_CANCELED",
+            message: reason,
+            realAction: {
+              clickedSend: false,
+              clickCount: 0,
+              preflightValidated: false,
+              postSendReadback: false,
+              outcome: "ABORTED"
+            }
+          }, "CANCELED", now);
+        }
         this.insertWorkflowEvent({
           applicationId: row.application_id || null,
           sourceType: "browser_task",
@@ -4261,6 +4883,7 @@ class SqliteJobStore {
     const now = new Date().toISOString();
     const requeueableRows = candidates.filter((row) => (
       canTransitionBrowserTask(row.status, "QUEUED")
+      && !isRealActionType(row.task_type)
       && Number(row.attempt_count || 0) < Number(row.max_attempts || 3)
       && (!browserTaskIsExpired(row, now) || refreshExpiry)
     ));
@@ -4366,6 +4989,34 @@ class SqliteJobStore {
 
   transitionApplicationWithinTransaction(applicationId, transition = {}) {
     return this.applicationTransitionService.transitionWithinTransaction(applicationId, transition);
+  }
+
+  getRealActionPolicy(options = {}) {
+    return this.realActionAuthorizationService.getPolicy(options);
+  }
+
+  updateRealActionPolicy(input = {}) {
+    return this.realActionAuthorizationService.updatePolicy(input);
+  }
+
+  armRealActionAuthorization(input = {}) {
+    return this.realActionAuthorizationService.armAuthorization(input);
+  }
+
+  queueRealActionAuthorization(authorizationId, input = {}) {
+    return this.realActionAuthorizationService.queueAuthorization(authorizationId, input);
+  }
+
+  revokeRealActionAuthorization(authorizationId, input = {}) {
+    return this.realActionAuthorizationService.revokeAuthorization(authorizationId, input);
+  }
+
+  getRealActionAuthorization(authorizationId) {
+    return this.realActionAuthorizationService.getAuthorization(authorizationId);
+  }
+
+  getRealActionAuthorizations(options = {}) {
+    return this.realActionAuthorizationService.listAuthorizations(options);
   }
 
   getMissingDescriptions(options = {}) {
@@ -4971,6 +5622,10 @@ class SqliteJobStore {
       whereParts.push("resume_source_id = ?");
       params.push(options.resumeSourceId);
     }
+    if (options.sourceSessionId) {
+      whereParts.push("source_session_id = ?");
+      params.push(options.sourceSessionId);
+    }
     return Number(this.database.prepare(`
       SELECT COUNT(*) AS count
       FROM profile_fact_drafts
@@ -5243,11 +5898,88 @@ function rowToProfileFactDraft(row) {
     evidenceText: row.evidence_text || "",
     confidence: row.confidence || "",
     metadata: parseJsonValue(row.metadata_json, {}),
+    operation: row.operation || "CREATE",
+    targetEntityType: row.target_entity_type || "",
+    targetEntityId: row.target_entity_id === null || row.target_entity_id === undefined ? null : Number(row.target_entity_id || 0),
+    sourceSessionId: row.source_session_id === null || row.source_session_id === undefined ? null : Number(row.source_session_id || 0),
+    sourceMessageId: row.source_message_id === null || row.source_message_id === undefined ? null : Number(row.source_message_id || 0),
     resolvedEntityType: row.resolved_entity_type || "",
     resolvedEntityId: row.resolved_entity_id === null || row.resolved_entity_id === undefined ? null : Number(row.resolved_entity_id || 0),
     resolvedAt: row.resolved_at || "",
     createdAt: row.created_at || "",
     updatedAt: row.updated_at || ""
+  };
+}
+
+function rowToProfileDialogSession(row) {
+  return {
+    id: Number(row.id || 0),
+    profileId: Number(row.profile_id || 0),
+    title: row.title || "",
+    status: row.status || "",
+    summary: parseJsonValue(row.summary_json, {}),
+    openQuestions: parseJsonArray(row.open_questions_json),
+    conflicts: parseJsonArray(row.conflicts_json),
+    modelConfig: parseJsonValue(row.model_config_json, {}),
+    messageCount: Number(row.message_count || 0),
+    pendingDraftCount: Number(row.pending_draft_count || 0),
+    lastMessageAt: row.last_message_at || "",
+    createdAt: row.created_at || "",
+    updatedAt: row.updated_at || ""
+  };
+}
+
+function rowToProfileDialogMessage(row) {
+  return {
+    id: Number(row.id || 0),
+    sessionId: Number(row.session_id || 0),
+    role: row.role || "",
+    status: row.status || "",
+    content: row.content || "",
+    structured: parseJsonValue(row.structured_json, {}),
+    errorCode: row.error_code || "",
+    errorMessage: row.error_message || "",
+    retryOfMessageId: row.retry_of_message_id === null || row.retry_of_message_id === undefined
+      ? null
+      : Number(row.retry_of_message_id || 0),
+    agentRunId: row.agent_run_id === null || row.agent_run_id === undefined
+      ? null
+      : Number(row.agent_run_id || 0),
+    createdAt: row.created_at || ""
+  };
+}
+
+function rowToProfileContextVersion(row) {
+  return {
+    id: Number(row.id || 0),
+    profileId: Number(row.profile_id || 0),
+    sourceSessionId: row.source_session_id === null || row.source_session_id === undefined
+      ? null
+      : Number(row.source_session_id || 0),
+    sourceMessageId: row.source_message_id === null || row.source_message_id === undefined
+      ? null
+      : Number(row.source_message_id || 0),
+    profileHash: row.profile_hash || "",
+    contentHash: row.content_hash || "",
+    structured: parseJsonValue(row.structured_json, {}),
+    markdown: row.markdown || "",
+    createdAt: row.created_at || ""
+  };
+}
+
+function rowToProfileEntityRevision(row) {
+  return {
+    id: Number(row.id || 0),
+    profileId: Number(row.profile_id || 0),
+    entityType: row.entity_type || "",
+    entityId: Number(row.entity_id || 0),
+    operation: row.operation || "",
+    sourceDraftId: row.source_draft_id === null || row.source_draft_id === undefined
+      ? null
+      : Number(row.source_draft_id || 0),
+    before: parseJsonValue(row.before_json, null),
+    after: parseJsonValue(row.after_json, null),
+    createdAt: row.created_at || ""
   };
 }
 
@@ -5921,17 +6653,28 @@ function normalizeResumeSourceType(value) {
   return new Set(["text", "docx", "pdf", "markdown", "manual"]).has(type) ? type : "text";
 }
 
-function normalizeFactDraftInput(input = {}, resumeSourceId = null) {
+function normalizeFactDraftInput(input = {}, source = {}) {
   const draftType = normalizeFactDraftType(input.draftType || input.type || "");
   const title = cleanText(input.title || input.name || "");
   const evidenceText = cleanMultiline(input.evidenceText || input.evidence || "");
   const content = input.content && typeof input.content === "object" ? input.content : {};
+  const operation = normalizeFactDraftOperation(input.operation || (input.targetEntityId || input.target?.id ? "UPDATE" : "CREATE"));
+  const targetEntityType = normalizeProfileEntityType(input.targetEntityType || input.target?.type || (operation === "UPDATE" ? draftType : ""));
+  const targetEntityId = normalizePositiveInteger(input.targetEntityId || input.target?.id || 0);
   if (!draftType || (!title && !evidenceText)) {
     return null;
   }
+  if (operation === "UPDATE" && (!targetEntityType || !targetEntityId)) {
+    return null;
+  }
   return {
-    resumeSourceId: normalizePositiveInteger(resumeSourceId),
+    resumeSourceId: normalizePositiveInteger(source.resumeSourceId),
+    sourceSessionId: normalizePositiveInteger(input.sourceSessionId || source.sourceSessionId),
+    sourceMessageId: normalizePositiveInteger(input.sourceMessageId || source.sourceMessageId),
     draftType,
+    operation,
+    targetEntityType,
+    targetEntityId,
     title: title || cleanText(content.title || content.name || draftType),
     content,
     evidenceText,
@@ -5942,12 +6685,37 @@ function normalizeFactDraftInput(input = {}, resumeSourceId = null) {
 
 function normalizeFactDraftType(value) {
   const draftType = cleanText(value).toLowerCase();
-  return new Set(["experience", "skill", "constraint", "question"]).has(draftType) ? draftType : "";
+  return new Set(["profile", "experience", "skill", "constraint", "question"]).has(draftType) ? draftType : "";
+}
+
+function normalizeFactDraftOperation(value) {
+  const operation = cleanText(value).toUpperCase();
+  return new Set(["CREATE", "UPDATE"]).has(operation) ? operation : "CREATE";
+}
+
+function normalizeProfileEntityType(value) {
+  const entityType = cleanText(value).toLowerCase();
+  return new Set(["profile", "experience", "skill", "constraint"]).has(entityType) ? entityType : "";
 }
 
 function normalizeFactDraftStatus(value) {
   const status = cleanText(value).toUpperCase();
   return new Set(["PENDING", "CONFIRMED", "REJECTED"]).has(status) ? status : "";
+}
+
+function normalizeProfileDialogSessionStatus(value) {
+  const status = cleanText(value).toUpperCase();
+  return new Set(["OPEN", "ARCHIVED"]).has(status) ? status : "";
+}
+
+function normalizeProfileDialogRole(value) {
+  const role = cleanText(value).toLowerCase();
+  return new Set(["user", "assistant", "system"]).has(role) ? role : "";
+}
+
+function normalizeProfileDialogMessageStatus(value) {
+  const status = cleanText(value).toUpperCase();
+  return new Set(["COMPLETED", "FAILED"]).has(status) ? status : "";
 }
 
 function normalizePositiveInteger(value) {
@@ -6008,7 +6776,7 @@ function normalizeWorkflowEventInput(input = {}) {
 
 function normalizeWorkflowSourceType(value) {
   const sourceType = cleanText(value).toLowerCase();
-  return new Set(["workflow", "agent_run", "browser_task", "application_event", "browser_event", "api"]).has(sourceType)
+  return new Set(["workflow", "agent_run", "browser_task", "application_event", "browser_event", "profile_dialog_session", "api"]).has(sourceType)
     ? sourceType
     : "";
 }
@@ -6878,6 +7646,7 @@ function normalizeApplicationStatusList(value) {
 const BROWSER_TASK_TYPES = new Set([
   "CAPTURE_DETAIL",
   "SEND_GREETING",
+  "SEND_GREETING_REAL",
   "REFRESH_CONVERSATION",
   "CHECK_RESUME_UNLOCK",
   "UPLOAD_RESUME",
@@ -6991,6 +7760,9 @@ function resolveBrowserTaskExpiry(value, taskType, now = new Date().toISOString(
 }
 
 function browserTaskDefaultTtlMs(taskType) {
+  if (isRealActionType(taskType)) {
+    return 5 * 60 * 1000;
+  }
   return new Set(["UPLOAD_RESUME", "SUBMIT_APPLICATION"]).has(normalizeTaskType(taskType))
     ? 10 * 60 * 1000
     : 30 * 60 * 1000;

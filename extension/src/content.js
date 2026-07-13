@@ -121,6 +121,9 @@
     if (taskType === "SEND_GREETING") {
       return runSendGreetingTask(task);
     }
+    if (taskType === "SEND_GREETING_REAL") {
+      return runSendGreetingRealTask(task);
+    }
     if (taskType === "REFRESH_CONVERSATION") {
       return runRefreshConversationTask(task);
     }
@@ -242,6 +245,253 @@
         clickedEntry: Boolean(clickedEntry),
         messageLength: messageText.length,
         sendButtonText: getElementLabel(sendButton)
+      }
+    });
+  }
+
+  async function runSendGreetingRealTask(task) {
+    const payload = getTaskPayload(task);
+    const messageText = cleanMultiline(payload.messageText || task?.messageText || "");
+    const diagnostics = getPageDiagnostics(findJobCards());
+    const initialEvidence = {
+      outcome: "ABORTED",
+      preflightValidated: false,
+      clickedSend: false,
+      clickCount: 0,
+      postSendReadback: false,
+      messageHash: "",
+      observedMessageHash: "",
+      observedMessageText: "",
+      targetJobHash: "",
+      targetPageHash: ""
+    };
+    const blocker = getGreetingPageBlocker(diagnostics);
+    if (blocker) {
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: blocker.errorCode,
+        message: blocker.message,
+        diagnostics,
+        realAction: initialEvidence
+      });
+    }
+    if (!Number(payload.authorizationId || 0) || !messageText) {
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: "REAL_ACTION_AUTHORIZATION_PAYLOAD_INVALID",
+        message: "Real greeting task is missing authorization or message data.",
+        diagnostics,
+        realAction: initialEvidence
+      });
+    }
+    if (!payload.authorizationExpiresAt || Date.parse(payload.authorizationExpiresAt) <= Date.now()) {
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: "REAL_ACTION_AUTHORIZATION_EXPIRED",
+        message: "Real greeting authorization expired before browser execution.",
+        diagnostics,
+        realAction: initialEvidence
+      });
+    }
+
+    const pageReady = await ensureRealGreetingTaskTargetVisible(task);
+    if (!pageReady.ok) {
+      return pageReady;
+    }
+    const observedTarget = getObservedRealActionTarget(task);
+    const [messageHash, targetJobHash, targetPageHash] = await Promise.all([
+      hashBrowserText(cleanMultiline(messageText)),
+      hashRealActionTargetJob(observedTarget),
+      hashRealActionTargetPage(observedTarget)
+    ]);
+    const expectedMessageHash = cleanText(payload.messageHash);
+    const expectedTargetJobHash = cleanText(payload.targetJobHash);
+    const expectedTargetPageHash = cleanText(payload.targetPageHash);
+    if (
+      !expectedMessageHash
+      || messageHash !== expectedMessageHash
+      || targetJobHash !== expectedTargetJobHash
+      || targetPageHash !== expectedTargetPageHash
+    ) {
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: "REAL_ACTION_PREFLIGHT_HASH_MISMATCH",
+        message: "Current page, job, or greeting hash does not match the explicit authorization.",
+        diagnostics: {
+          ...diagnostics,
+          observedTarget
+        },
+        realAction: {
+          ...initialEvidence,
+          messageHash,
+          targetJobHash,
+          targetPageHash
+        }
+      });
+    }
+
+    let input = isCurrentPageChatContext() ? findGreetingInput() : null;
+    let clickedEntry = false;
+    if (!input) {
+      const entry = findSafeGreetingEntry();
+      if (!entry) {
+        return createRealGreetingTaskResult(task, {
+          ok: false,
+          errorCode: "GREETING_ENTRY_NOT_FOUND",
+          message: "No existing chat entry is available. Real canary will not click a first-contact control.",
+          diagnostics: { ...diagnostics, greeting: getGreetingDomDiagnostics() },
+          realAction: {
+            ...initialEvidence,
+            messageHash,
+            targetJobHash,
+            targetPageHash
+          }
+        });
+      }
+      await clickGreetingEntry(entry);
+      clickedEntry = true;
+      input = await waitForGreetingInput(5000);
+    }
+    if (!input) {
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: "GREETING_INPUT_NOT_FOUND",
+        message: "Greeting input was not found before the real send click.",
+        diagnostics: { ...diagnostics, greeting: getGreetingDomDiagnostics() },
+        realAction: {
+          ...initialEvidence,
+          messageHash,
+          targetJobHash,
+          targetPageHash
+        }
+      });
+    }
+
+    stageGreetingMessage(input, messageText);
+    await sleep(350);
+    const stagedText = cleanMultiline(readGreetingInputValue(input));
+    const stagedMessageHash = await hashBrowserText(stagedText);
+    if (stagedMessageHash !== expectedMessageHash) {
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: "REAL_ACTION_STAGED_MESSAGE_MISMATCH",
+        message: "The text visible in the greeting input differs from the authorized message.",
+        diagnostics: { ...diagnostics, greeting: getGreetingDomDiagnostics() },
+        realAction: {
+          ...initialEvidence,
+          messageHash: stagedMessageHash,
+          targetJobHash,
+          targetPageHash
+        }
+      });
+    }
+    const sendButton = findGreetingSendButton(input);
+    if (!sendButton) {
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: "GREETING_BUTTON_NOT_FOUND",
+        message: "A visible send button was not found. No real send click occurred.",
+        diagnostics: { ...diagnostics, greeting: getGreetingDomDiagnostics() },
+        realAction: {
+          ...initialEvidence,
+          messageHash: stagedMessageHash,
+          targetJobHash,
+          targetPageHash
+        }
+      });
+    }
+
+    let clickedSend = false;
+    try {
+      clickedSend = true;
+      sendButton.click();
+    } catch (error) {
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: "REAL_ACTION_OUTCOME_UNCERTAIN",
+        message: `Send click was attempted once but raised an error: ${error.message || String(error)}`,
+        diagnostics: { ...diagnostics, greeting: getGreetingDomDiagnostics() },
+        realAction: {
+          outcome: "UNCERTAIN",
+          preflightValidated: true,
+          clickedSend,
+          clickCount: 1,
+          postSendReadback: false,
+          messageHash: stagedMessageHash,
+          observedMessageHash: "",
+          observedMessageText: "",
+          targetJobHash,
+          targetPageHash,
+          clickedEntry
+        }
+      });
+    }
+
+    const readback = await waitForGreetingDomReadback(messageText, input, 6000);
+    if (!readback) {
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: "REAL_ACTION_OUTCOME_UNCERTAIN",
+        message: "Send was clicked once, but the authorized greeting was not confirmed in the message DOM.",
+        diagnostics: { ...diagnostics, greeting: getGreetingDomDiagnostics() },
+        realAction: {
+          outcome: "UNCERTAIN",
+          preflightValidated: true,
+          clickedSend: true,
+          clickCount: 1,
+          postSendReadback: false,
+          messageHash: stagedMessageHash,
+          observedMessageHash: "",
+          observedMessageText: "",
+          targetJobHash,
+          targetPageHash,
+          clickedEntry
+        }
+      });
+    }
+    const observedMessageText = cleanMultiline(readback.text);
+    const observedMessageHash = await hashBrowserText(observedMessageText);
+    if (observedMessageHash !== expectedMessageHash) {
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: "REAL_ACTION_OUTCOME_UNCERTAIN",
+        message: "A post-send message appeared, but its hash differs from the authorized greeting.",
+        diagnostics: { ...diagnostics, greeting: getGreetingDomDiagnostics() },
+        realAction: {
+          outcome: "UNCERTAIN",
+          preflightValidated: true,
+          clickedSend: true,
+          clickCount: 1,
+          postSendReadback: false,
+          messageHash: stagedMessageHash,
+          observedMessageHash,
+          observedMessageText,
+          targetJobHash,
+          targetPageHash,
+          clickedEntry
+        }
+      });
+    }
+
+    return createRealGreetingTaskResult(task, {
+      ok: true,
+      errorCode: "",
+      statusReason: "REAL_GREETING_DOM_CONFIRMED",
+      message: "Real greeting send was confirmed by matching post-send DOM readback.",
+      diagnostics: { ...diagnostics, greeting: getGreetingDomDiagnostics() },
+      realAction: {
+        outcome: "CONFIRMED",
+        preflightValidated: true,
+        clickedSend: true,
+        clickCount: 1,
+        postSendReadback: true,
+        messageHash: stagedMessageHash,
+        observedMessageHash,
+        observedMessageText,
+        targetJobHash,
+        targetPageHash,
+        clickedEntry,
+        readbackSelector: readback.selector
       }
     });
   }
@@ -780,6 +1030,189 @@
         title: document.title
       }
     };
+  }
+
+  async function ensureRealGreetingTaskTargetVisible(task) {
+    const baseEvidence = {
+      outcome: "ABORTED",
+      preflightValidated: false,
+      clickedSend: false,
+      clickCount: 0,
+      postSendReadback: false
+    };
+    if (!hasGreetingTaskIdentity(task)) {
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: "PAGE_MISMATCH",
+        message: "Real greeting task has no strict job identity.",
+        diagnostics: getPageDiagnostics(findJobCards()),
+        realAction: baseEvidence
+      });
+    }
+    if (currentPageMatchesBrowserTask(task)) {
+      return { ok: true };
+    }
+
+    const target = findBrowserTaskTarget(task);
+    if (!target) {
+      const capture = await extractAndCache();
+      if (captureSelectedDetailMatchesTask(capture, task)) {
+        return { ok: true };
+      }
+      return createRealGreetingTaskResult(task, {
+        ok: false,
+        errorCode: "PAGE_MISMATCH",
+        message: "Current BOSS page does not show the explicitly authorized job.",
+        diagnostics: capture.diagnostics,
+        captureSummary: summarizeCaptureForTask(capture),
+        realAction: baseEvidence
+      });
+    }
+
+    await clickJobTarget(target);
+    await waitForDetailChange(target.fingerprint, 4200);
+    await sleep(1000);
+    const capture = await extractAndCache();
+    if (captureSelectedDetailMatchesTask(capture, task) || currentPageMatchesBrowserTask(task)) {
+      return { ok: true };
+    }
+    return createRealGreetingTaskResult(task, {
+      ok: false,
+      errorCode: "PAGE_MISMATCH",
+      message: "The loaded BOSS detail does not match the explicitly authorized job.",
+      diagnostics: capture.diagnostics,
+      captureSummary: summarizeCaptureForTask(capture),
+      realAction: baseEvidence
+    });
+  }
+
+  function createRealGreetingTaskResult(task, options = {}) {
+    const ok = Boolean(options.ok);
+    const evidence = options.realAction && typeof options.realAction === "object" ? options.realAction : {};
+    return {
+      ok,
+      status: ok ? "SUCCEEDED" : "FAILED",
+      taskType: "SEND_GREETING_REAL",
+      errorCode: options.errorCode || "",
+      statusReason: options.statusReason || options.errorCode || "",
+      message: options.message || "",
+      task: summarizeBrowserTask(task),
+      diagnostics: options.diagnostics || getPageDiagnostics(findJobCards()),
+      captureSummary: options.captureSummary || null,
+      realAction: {
+        outcome: evidence.outcome || (ok ? "CONFIRMED" : "ABORTED"),
+        preflightValidated: evidence.preflightValidated === true,
+        clickedSend: evidence.clickedSend === true,
+        clickCount: Number(evidence.clickCount || 0),
+        postSendReadback: evidence.postSendReadback === true,
+        messageHash: evidence.messageHash || "",
+        observedMessageHash: evidence.observedMessageHash || "",
+        observedMessageText: evidence.observedMessageText || "",
+        targetJobHash: evidence.targetJobHash || "",
+        targetPageHash: evidence.targetPageHash || "",
+        clickedEntry: evidence.clickedEntry === true,
+        readbackSelector: evidence.readbackSelector || "",
+        noAutomaticRetry: true
+      },
+      page: {
+        url: location.href,
+        title: document.title
+      }
+    };
+  }
+
+  function getObservedRealActionTarget(task) {
+    const payload = getTaskPayload(task);
+    const selected = extractSelectedDetail(location.href) || {};
+    const selectedDetailUrl = normalizeUrl(selected.detailUrl || "", location.href);
+    const currentDetailUrl = /\/job_detail\//i.test(location.pathname) ? location.href : "";
+    const detailUrl = selectedDetailUrl || currentDetailUrl;
+    return {
+      jobId: cleanText(selected.jobId || extractJobId(detailUrl) || extractJobId(location.href)),
+      title: cleanText(selected.title || ""),
+      company: cleanText(selected.company || ""),
+      detailUrl: canonicalRealActionUrl(detailUrl),
+      expectedJobId: cleanText(payload.jobId || payload.bossJobId || "")
+    };
+  }
+
+  async function hashRealActionTargetJob(target = {}) {
+    const jobId = cleanText(target.jobId || extractJobId(target.detailUrl || ""));
+    const detailUrl = canonicalRealActionUrl(target.detailUrl || "");
+    const title = cleanText(target.title || "").toLowerCase();
+    const company = cleanText(target.company || "").toLowerCase();
+    const identity = jobId
+      ? `job:${jobId.toLowerCase()}`
+      : detailUrl
+        ? `url:${detailUrl}`
+        : `title_company:${title}|${company}`;
+    return hashBrowserText(identity);
+  }
+
+  async function hashRealActionTargetPage(target = {}) {
+    const jobId = cleanText(target.jobId || extractJobId(target.detailUrl || ""));
+    const detailUrl = canonicalRealActionUrl(target.detailUrl || "");
+    return hashBrowserText(detailUrl || (jobId ? `job:${jobId.toLowerCase()}` : ""));
+  }
+
+  function canonicalRealActionUrl(value) {
+    const text = cleanText(value);
+    if (!text) {
+      return "";
+    }
+    try {
+      const url = new URL(text, location.href);
+      return `${url.protocol}//${url.hostname.toLowerCase()}${url.pathname.replace(/\/+$/, "")}`;
+    } catch {
+      return text.replace(/[?#].*$/, "").replace(/\/+$/, "");
+    }
+  }
+
+  async function hashBrowserText(value) {
+    const bytes = new TextEncoder().encode(String(value || ""));
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  function readGreetingInputValue(input) {
+    if (input instanceof HTMLTextAreaElement || input instanceof HTMLInputElement) {
+      return input.value || "";
+    }
+    return input?.textContent || "";
+  }
+
+  async function waitForGreetingDomReadback(messageText, input, timeoutMs) {
+    const deadline = Date.now() + Math.max(500, Number(timeoutMs) || 6000);
+    const expected = cleanMultiline(messageText);
+    const selectors = [
+      "[data-boss-find-message]",
+      ".message-bubble",
+      "[class*='message-item']",
+      "[class*='message-content']",
+      "[class*='message-text']",
+      "[class*='chat-record']",
+      "[class*='bubble']",
+      "[class*='item-myself']",
+      "[class*='message']"
+    ];
+    while (Date.now() < deadline) {
+      for (const selector of selectors) {
+        for (const element of document.querySelectorAll(selector)) {
+          if (!(element instanceof HTMLElement) || element === input || element.contains(input) || input?.contains(element)) {
+            continue;
+          }
+          if (!isVisible(element)) {
+            continue;
+          }
+          const text = cleanMultiline(element.innerText || element.textContent || "");
+          if (text === expected) {
+            return { element, text, selector };
+          }
+        }
+      }
+      await sleep(250);
+    }
+    return null;
   }
 
   function findGreetingInput() {

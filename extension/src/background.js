@@ -30,7 +30,12 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender)
     .then((result) => sendResponse({ ok: true, result }))
-    .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    .catch((error) => sendResponse({
+      ok: false,
+      error: error.message || String(error),
+      errorCode: error.code || "EXTENSION_BACKGROUND_ERROR",
+      context: error.context || {}
+    }));
   return true;
 });
 
@@ -69,6 +74,8 @@ async function handleMessage(message, sender) {
       return requeueBrowserTasks(message.options || {});
     case "GET_MISSING_DESCRIPTIONS":
       return fetchMissingDescriptions(message.limit || 5);
+    case "GET_APPLICATIONS":
+      return fetchApplications(message.options || message.limit || 50);
     case "GET_SCREENING_CANDIDATES":
       return fetchScreeningCandidates(message.options || message.limit || 8);
     case "GET_SCREENINGS":
@@ -87,6 +94,20 @@ async function handleMessage(message, sender) {
       return confirmProfileFactDraft(message.draftId || message.id, message.options || {});
     case "REJECT_PROFILE_FACT_DRAFT":
       return rejectProfileFactDraft(message.draftId || message.id, message.options || {});
+    case "GET_PROFILE_DIALOG_SESSIONS":
+      return fetchProfileDialogSessions(message.options || {});
+    case "CREATE_PROFILE_DIALOG_SESSION":
+      return createProfileDialogSession(message.options || {});
+    case "GET_PROFILE_DIALOG_SESSION":
+      return fetchProfileDialogSession(message.sessionId || message.id, message.options || {});
+    case "SEND_PROFILE_DIALOG_MESSAGE":
+      return sendProfileDialogMessage(message.sessionId || message.id, message.options || {});
+    case "RETRY_PROFILE_DIALOG_MESSAGE":
+      return retryProfileDialogMessage(
+        message.sessionId || message.options?.sessionId,
+        message.messageId || message.options?.messageId,
+        message.options || {}
+      );
     case "GET_WORKFLOW_EVENTS":
       return fetchWorkflowEvents(message.options || message.limit || 20);
     case "GET_WORKFLOW_ERRORS":
@@ -139,6 +160,18 @@ async function handleMessage(message, sender) {
       return reviewSubmissionReadiness(message.applicationId, message.options || {});
     case "PREPARE_GREETING":
       return prepareGreeting(message.applicationId, message.options || {});
+    case "GET_REAL_ACTION_POLICY":
+      return fetchRealActionPolicy(message.options || {});
+    case "UPDATE_REAL_ACTION_POLICY":
+      return updateRealActionPolicy(message.options || {});
+    case "GET_REAL_ACTION_AUTHORIZATIONS":
+      return fetchRealActionAuthorizations(message.options || {});
+    case "ARM_REAL_ACTION_AUTHORIZATION":
+      return armRealActionAuthorization(message.options || {});
+    case "QUEUE_REAL_ACTION_AUTHORIZATION":
+      return queueRealActionAuthorization(message.authorizationId, message.options || {});
+    case "REVOKE_REAL_ACTION_AUTHORIZATION":
+      return revokeRealActionAuthorization(message.authorizationId, message.options || {});
     case "GET_EXECUTION_PACKAGE":
       return fetchExecutionPackage(message.applicationId, message.options || {});
     case "PREPARE_EXECUTION_PACKAGE":
@@ -463,6 +496,24 @@ async function fetchScreeningCandidates(options = 8) {
   };
 }
 
+async function fetchApplications(options = 50) {
+  const settings = await getSettings();
+  const normalizedOptions = typeof options === "object" && options !== null
+    ? options
+    : { limit: options };
+  const applicationLimit = clampNumber(normalizedOptions.limit, 1, 500, 50);
+  const applicationsUrl = new URL("/api/applications", ensureTrailingSlash(settings.backendUrl));
+  applicationsUrl.searchParams.set("limit", String(applicationLimit));
+  return {
+    endpoint: applicationsUrl.toString(),
+    response: await backendJson(applicationsUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "岗位队列读取失败"
+    })
+  };
+}
+
 async function fetchScreenings(options = 8) {
   const settings = await getSettings();
   const normalizedOptions = typeof options === "object" && options !== null
@@ -528,6 +579,8 @@ async function generateCareerContext(options = {}) {
       token: settings.token,
       body: {
         resumeSourceId: options.resumeSourceId || null,
+        sourceSessionId: options.sourceSessionId || options.sessionId || null,
+        sourceMessageId: options.sourceMessageId || options.messageId || null,
         answers: Array.isArray(options.answers) ? options.answers : [],
         writeFile: options.writeFile !== false
       },
@@ -1192,6 +1245,223 @@ async function prepareGreeting(applicationId, options = {}) {
   };
 }
 
+async function fetchProfileDialogSessions(options = {}) {
+  const settings = await getSettings();
+  const sessionUrl = new URL("/api/profile/dialog-sessions", ensureTrailingSlash(settings.backendUrl));
+  sessionUrl.searchParams.set("limit", String(clampNumber(options.limit, 1, 100, 20)));
+  if (options.status) {
+    sessionUrl.searchParams.set("status", String(options.status));
+  }
+  return {
+    endpoint: sessionUrl.toString(),
+    response: await backendJson(sessionUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "ProfileAgent 会话读取失败"
+    })
+  };
+}
+
+async function createProfileDialogSession(options = {}) {
+  const settings = await getSettings();
+  const sessionUrl = new URL("/api/profile/dialog-sessions", ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: sessionUrl,
+    response: await backendJson(sessionUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {
+        title: options.title || "",
+        modelConfig: options.modelConfig || {}
+      },
+      errorPrefix: "ProfileAgent 会话创建失败"
+    })
+  };
+}
+
+async function fetchProfileDialogSession(sessionId, options = {}) {
+  const id = Number(sessionId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("缺少有效的 ProfileAgent 会话 ID");
+  }
+  const settings = await getSettings();
+  const sessionUrl = new URL(`/api/profile/dialog-sessions/${id}`, ensureTrailingSlash(settings.backendUrl));
+  sessionUrl.searchParams.set("messageLimit", String(clampNumber(options.messageLimit || options.limit, 1, 200, 80)));
+  sessionUrl.searchParams.set("draftLimit", String(clampNumber(options.draftLimit, 1, 200, 100)));
+  return {
+    endpoint: sessionUrl.toString(),
+    response: await backendJson(sessionUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "ProfileAgent 会话详情读取失败"
+    })
+  };
+}
+
+async function sendProfileDialogMessage(sessionId, options = {}) {
+  const id = Number(sessionId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("缺少有效的 ProfileAgent 会话 ID");
+  }
+  const settings = await getSettings();
+  const messageUrl = new URL(`/api/profile/dialog-sessions/${id}/messages`, ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: messageUrl,
+    response: await backendJson(messageUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {
+        content: options.content || options.message || "",
+        modelConfig: options.modelConfig || {}
+      },
+      errorPrefix: "ProfileAgent 对话失败"
+    })
+  };
+}
+
+async function retryProfileDialogMessage(sessionId, messageId, options = {}) {
+  const normalizedSessionId = Number(sessionId);
+  const normalizedMessageId = Number(messageId);
+  if (!Number.isInteger(normalizedSessionId) || normalizedSessionId <= 0
+    || !Number.isInteger(normalizedMessageId) || normalizedMessageId <= 0) {
+    throw new Error("缺少有效的 ProfileAgent 会话或消息 ID");
+  }
+  const settings = await getSettings();
+  const retryUrl = new URL(
+    `/api/profile/dialog-sessions/${normalizedSessionId}/messages/${normalizedMessageId}/retry`,
+    ensureTrailingSlash(settings.backendUrl)
+  ).toString();
+  return {
+    endpoint: retryUrl,
+    response: await backendJson(retryUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {
+        modelConfig: options.modelConfig || {}
+      },
+      errorPrefix: "ProfileAgent 消息重试失败"
+    })
+  };
+}
+
+async function fetchRealActionPolicy(options = {}) {
+  const settings = await getSettings();
+  const policyUrl = new URL("/api/real-actions/policy", ensureTrailingSlash(settings.backendUrl));
+  policyUrl.searchParams.set("actionType", options.actionType || "SEND_GREETING_REAL");
+  return {
+    endpoint: policyUrl.toString(),
+    response: await backendJson(policyUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "真实动作策略读取失败"
+    })
+  };
+}
+
+async function updateRealActionPolicy(options = {}) {
+  const settings = await getSettings();
+  const policyUrl = new URL("/api/real-actions/policy", ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: policyUrl,
+    response: await backendJson(policyUrl, {
+      method: "PUT",
+      token: settings.token,
+      body: {
+        actionType: "SEND_GREETING_REAL",
+        enabled: options.enabled === true,
+        durationMinutes: Number(options.durationMinutes || 15),
+        actor: options.actor || "user",
+        rationale: options.rationale || ""
+      },
+      errorPrefix: "真实动作策略更新失败"
+    })
+  };
+}
+
+async function fetchRealActionAuthorizations(options = {}) {
+  const settings = await getSettings();
+  const authorizationUrl = new URL("/api/real-actions/authorizations", ensureTrailingSlash(settings.backendUrl));
+  if (options.applicationId) {
+    authorizationUrl.searchParams.set("applicationId", String(options.applicationId));
+  }
+  authorizationUrl.searchParams.set("actionType", options.actionType || "SEND_GREETING_REAL");
+  authorizationUrl.searchParams.set("limit", String(options.limit || 20));
+  return {
+    endpoint: authorizationUrl.toString(),
+    response: await backendJson(authorizationUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "真实动作授权记录读取失败"
+    })
+  };
+}
+
+async function armRealActionAuthorization(options = {}) {
+  const applicationId = Number(options.applicationId);
+  if (!Number.isInteger(applicationId) || applicationId <= 0) {
+    throw new Error("缺少有效的 application ID");
+  }
+  const settings = await getSettings();
+  const authorizationUrl = new URL("/api/real-actions/authorizations", ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: authorizationUrl,
+    response: await backendJson(authorizationUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {
+        actionType: "SEND_GREETING_REAL",
+        applicationId,
+        messageId: options.messageId || null,
+        durationMinutes: Number(options.durationMinutes || 5),
+        actor: options.actor || "user",
+        rationale: options.rationale || ""
+      },
+      errorPrefix: "真实打招呼授权创建失败"
+    })
+  };
+}
+
+async function queueRealActionAuthorization(authorizationId, options = {}) {
+  const id = Number(authorizationId || options.authorizationId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("缺少有效的真实动作授权 ID");
+  }
+  const settings = await getSettings();
+  const queueUrl = new URL(`/api/real-actions/authorizations/${id}/queue`, ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: queueUrl,
+    response: await backendJson(queueUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {
+        authorizationToken: options.authorizationToken || options.token || ""
+      },
+      errorPrefix: "真实打招呼任务入队失败"
+    })
+  };
+}
+
+async function revokeRealActionAuthorization(authorizationId, options = {}) {
+  const id = Number(authorizationId || options.authorizationId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("缺少有效的真实动作授权 ID");
+  }
+  const settings = await getSettings();
+  const revokeUrl = new URL(`/api/real-actions/authorizations/${id}/revoke`, ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: revokeUrl,
+    response: await backendJson(revokeUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {
+        actor: options.actor || "user",
+        rationale: options.rationale || ""
+      },
+      errorPrefix: "真实动作授权撤销失败"
+    })
+  };
+}
+
 async function fetchExecutionPackage(applicationId, options = {}) {
   const id = Number(applicationId || options.applicationId);
   if (!Number.isInteger(id) || id <= 0) {
@@ -1414,7 +1684,8 @@ async function claimBrowserTask(options = {}) {
       token: settings.token,
       body: {
         taskTypes: Array.isArray(options.taskTypes) ? options.taskTypes : [],
-        sourceUrl: options.sourceUrl || ""
+        sourceUrl: options.sourceUrl || "",
+        taskId: options.taskId || null
       },
       errorPrefix: "浏览器任务领取失败"
     })
@@ -1505,7 +1776,10 @@ async function backendJson(url, options = {}) {
 
   if (!response.ok) {
     const message = data?.error || data?.message || `${options.errorPrefix || "后端请求失败"}：HTTP ${response.status}`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.code = data?.code || "BACKEND_REQUEST_FAILED";
+    error.context = data?.context || {};
+    throw error;
   }
 
   return data;
