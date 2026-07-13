@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS = {
   crawlDelayMs: 1600,
   crawlMaxJobs: 30,
   resumeTemplateName: "resume-to-word-campus-product-v1",
+  agentExecutionMode: "hybrid",
   riskGateEnabled: false,
   excludedDirections: []
 };
@@ -82,6 +83,8 @@ async function handleMessage(message, sender) {
       return fetchScreenings(message.options || message.limit || 8);
     case "GET_AGENT_RUNS":
       return fetchAgentRuns(message.options || message.limit || 8);
+    case "GET_AGENT_QUALITY":
+      return fetchAgentQuality(message.options || {});
     case "GET_CAREER_CONTEXT":
       return fetchCareerContext();
     case "GENERATE_CAREER_CONTEXT":
@@ -219,6 +222,7 @@ async function saveSettings(settings) {
     crawlDelayMs: clampNumber(settings.crawlDelayMs, 800, 8000, current.crawlDelayMs),
     crawlMaxJobs: clampNumber(settings.crawlMaxJobs, 1, 100, current.crawlMaxJobs),
     resumeTemplateName: normalizeResumeTemplateName(settings.resumeTemplateName ?? current.resumeTemplateName),
+    agentExecutionMode: normalizeAgentExecutionMode(settings.agentExecutionMode ?? current.agentExecutionMode),
     riskGateEnabled: parseBoolean(settings.riskGateEnabled, current.riskGateEnabled),
     excludedDirections: normalizeDelimitedStringArray(settings.excludedDirections ?? current.excludedDirections)
   };
@@ -1245,6 +1249,20 @@ async function prepareGreeting(applicationId, options = {}) {
   };
 }
 
+async function fetchAgentQuality(options = {}) {
+  const settings = await getSettings();
+  const qualityUrl = new URL("/api/agent-quality", ensureTrailingSlash(settings.backendUrl));
+  qualityUrl.searchParams.set("limit", String(clampNumber(options.limit, 1, 1000, 500)));
+  return {
+    endpoint: qualityUrl.toString(),
+    response: await backendJson(qualityUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "Agent 质量读取失败"
+    })
+  };
+}
+
 async function fetchProfileDialogSessions(options = {}) {
   const settings = await getSettings();
   const sessionUrl = new URL("/api/profile/dialog-sessions", ensureTrailingSlash(settings.backendUrl));
@@ -2126,6 +2144,13 @@ function normalizeDelimitedStringArray(value) {
 
 function normalizeResumeTemplateName(value) {
   return String(value || "").trim() || DEFAULT_SETTINGS.resumeTemplateName;
+}
+
+function normalizeAgentExecutionMode(value) {
+  const mode = String(value || "").trim().toLowerCase();
+  return new Set(["hybrid", "auto", "llm", "rules"]).has(mode)
+    ? mode
+    : DEFAULT_SETTINGS.agentExecutionMode;
 }
 
 function unionStrings(left = [], right = []) {

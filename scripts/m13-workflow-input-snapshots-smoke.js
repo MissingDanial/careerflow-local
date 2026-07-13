@@ -99,7 +99,7 @@ async function main() {
     const agentRuns = original.agentRuns;
     const checks = {
       schemaMigratedToCurrentVersion: stats.schemaVersion === SCHEMA_VERSION
-        && SCHEMA_VERSION === 14,
+        && SCHEMA_VERSION === 15,
       graphCompletesWithWorkflowRun: graphResult.ok
         && graphResult.workflowRunId > 0
         && graphResult.inputSnapshot.profileSnapshotId > 0
@@ -118,9 +118,12 @@ async function main() {
         run.workflowRunId === graphResult.workflowRunId
         && run.profileSnapshotId === original.inputSnapshot.profileSnapshotId
         && run.jobSnapshotId === original.inputSnapshot.jobSnapshotId
-        && run.promptVersion === PROMPT_VERSION
-        && run.agentVersion === AGENT_VERSION
+        && Boolean(run.promptVersion)
+        && Boolean(run.agentVersion)
         && run.graphVersion === GRAPH_VERSION
+      )) && agentRuns.some((run) => (
+        run.promptVersion !== PROMPT_VERSION
+        && run.agentVersion !== AGENT_VERSION
       )),
       profileAndJdEditsDoNotChangeHistory: originalFrozenCopy === historicalAfterEditCopy
         && historicalAfterEdit.profile.profile.displayName === "Snapshot Candidate"

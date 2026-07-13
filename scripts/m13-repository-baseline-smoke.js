@@ -19,6 +19,7 @@ function main() {
   const requiredPaths = [
     ".gitignore",
     "README.md",
+    "boss-model.example.json",
     "package-lock.json",
     "extension/manifest.json",
     "extension/src/background.js",
@@ -32,6 +33,8 @@ function main() {
     "server/src/services/profile-conversation-service.js",
     "server/src/profile-conversation-agent.js",
     "server/src/agent-evaluation-runner.js",
+    "server/src/agent-output-schemas.js",
+    "server/src/real-model-evaluation-runner.js",
     "server/src/resume-workflow-graph.js",
     "evaluation/fixtures/m13-agent-evaluation.v1.json",
     "scripts/check-js-syntax.js",
@@ -47,8 +50,12 @@ function main() {
     "scripts/m14-extension-real-greeting-smoke.js",
     "scripts/m15-profile-conversation-memory-smoke.js",
     "scripts/m15-options-profile-conversation-smoke.js",
+    "scripts/m16-real-model-agents-smoke.js",
+    "scripts/m16-agent-quality-evaluation-smoke.js",
+    "scripts/m16-options-agent-quality-smoke.js",
+    "scripts/run-real-model-evaluation.js",
     ".github/workflows/ci.yml",
-    ...Array.from({ length: 14 }, (_, index) => {
+    ...Array.from({ length: 15 }, (_, index) => {
       const version = String(index + 1).padStart(3, "0");
       const migrationNames = [
         "core_job_capture",
@@ -64,7 +71,8 @@ function main() {
         "workflow_input_snapshots",
         "application_transition_invariants",
         "real_action_authorization",
-        "profile_conversation_memory"
+        "profile_conversation_memory",
+        "agent_model_quality"
       ];
       return `server/migrations/${version}_${migrationNames[index]}.sql`;
     }),
@@ -91,6 +99,7 @@ function main() {
     "test:baseline",
     "test:ci",
     "agent:evaluate",
+    "agent:evaluate:real",
     "m13:repository-baseline:smoke",
     "m13:sqlite-migrations:smoke",
     "m13:workflow-inputs:smoke",
@@ -99,12 +108,16 @@ function main() {
     "m14:real-action:smoke",
     "m14:extension-real-greeting:smoke",
     "m15:profile-conversation:smoke",
-    "m15:options-profile-conversation:smoke"
+    "m15:options-profile-conversation:smoke",
+    "m16:real-model-agents:smoke",
+    "m16:agent-quality-evaluation:smoke",
+    "m16:options-agent-quality:smoke"
   ];
   const ignoredSentinels = [
     ".env",
     ".env.local",
     "gpt5.5.txt",
+    "boss-model.local.json",
     "private.docx",
     "private.pdf",
     "server/data/boss_find.sqlite3",
@@ -120,7 +133,7 @@ function main() {
     requiredPathsPresent: requiredPaths.every((relativePath) => fs.existsSync(path.join(ROOT, relativePath))),
     requiredPackageScriptsPresent: requiredScripts.every((name) => typeof packageJson.scripts?.[name] === "string"),
     nodeRuntimePinned: packageJson.engines?.node === ">=24",
-    schemaVersionPinned: /const SCHEMA_VERSION = 14;/.test(sqliteStoreSource)
+    schemaVersionPinned: /const SCHEMA_VERSION = 15;/.test(sqliteStoreSource)
       && /runSqliteMigrations\(\{/.test(sqliteStoreSource)
       && !/applySchema\(\)/.test(sqliteStoreSource),
     privateArtifactsIgnored: ignoredSentinels.every(isIgnoredByGit),

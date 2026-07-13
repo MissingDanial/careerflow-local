@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 gpt5.5.txt
+boss-model.local.json
 scripts/generate-kimi-resume.js
 .firecrawl/
 .codex/

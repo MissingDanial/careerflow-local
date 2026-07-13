@@ -13,6 +13,7 @@
     "test:baseline": "node scripts/run-test-tier.js baseline",
     "test:ci": "node scripts/run-test-tier.js ci",
     "agent:evaluate": "node scripts/run-agent-evaluation.js",
+    "agent:evaluate:real": "node scripts/run-real-model-evaluation.js",
     "poc:firecrawl": "node scripts/m1-firecrawl-poc.js",
     "poc:firecrawl:report": "node scripts/m1-firecrawl-report.js",
     "poc:local": "node scripts/m1-local-playwright-poc.js",
@@ -80,7 +81,10 @@
     "m14:extension-real-greeting:smoke": "node scripts/m14-extension-real-greeting-smoke.js",
     "m14:options-workspace-ui:smoke": "node scripts/m14-options-workspace-ui-smoke.js",
     "m15:profile-conversation:smoke": "node scripts/m15-profile-conversation-memory-smoke.js",
-    "m15:options-profile-conversation:smoke": "node scripts/m15-options-profile-conversation-smoke.js"
+    "m15:options-profile-conversation:smoke": "node scripts/m15-options-profile-conversation-smoke.js",
+    "m16:real-model-agents:smoke": "node scripts/m16-real-model-agents-smoke.js",
+    "m16:agent-quality-evaluation:smoke": "node scripts/m16-agent-quality-evaluation-smoke.js",
+    "m16:options-agent-quality:smoke": "node scripts/m16-options-agent-quality-smoke.js"
   },
   "engines": {
     "node": ">=24"
@@ -92,6 +96,8 @@
   "dependencies": {
     "@langchain/langgraph": "^1.4.7",
     "mammoth": "^1.12.0",
-    "unpdf": "^1.6.2"
+    "openai": "^6.46.0",
+    "unpdf": "^1.6.2",
+    "zod": "^4.4.3"
   }
 }

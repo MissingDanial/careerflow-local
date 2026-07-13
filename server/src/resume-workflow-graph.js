@@ -9,9 +9,9 @@ const { runAuditAgent } = require("./audit-agent");
 const { renderResumeDocx } = require("./document-renderer");
 const { DEFAULT_RESUME_TEMPLATE } = require("./resume-template-registry");
 
-const GRAPH_VERSION = "m13.3.resume-workflow-graph.v2";
-const PROMPT_VERSION = "m13.3.resume-workflow.prompts.v1";
-const AGENT_VERSION = "m13.3.resume-workflow.agents.v1";
+const GRAPH_VERSION = "m16.resume-workflow-graph.v3";
+const PROMPT_VERSION = "m16.resume-workflow.prompts.v1";
+const AGENT_VERSION = "m16.resume-workflow.agents.v1";
 const GRAPH_AGENT_NAME = "ResumeWorkflowGraph";
 const DEFAULT_MAX_REVISIONS = 1;
 
@@ -324,7 +324,11 @@ async function screenApplicationNode(state) {
         fallbackReason: agentResult.fallbackReason || "",
         modelConfig: agentResult.modelConfig || {}
       },
-      fallbackUsed: agentResult.fallbackUsed
+      fallbackUsed: agentResult.fallbackUsed,
+      promptVersion: agentResult.promptVersion,
+      agentVersion: agentResult.agentVersion,
+      modelConfig: agentResult.modelConfig,
+      telemetry: agentResult.telemetry
     });
     const saved = state.store.createScreening({
       applicationId: state.applicationId,
@@ -352,7 +356,8 @@ async function screenApplicationNode(state) {
       provider: state.mode,
       output: { error: structuredError(error) },
       errorCode: error.code || "SCREENING_AGENT_FAILED",
-      errorMessage: error.message || String(error)
+      errorMessage: error.message || String(error),
+      telemetry: error.telemetry || {}
     });
     throw error;
   }
@@ -379,8 +384,9 @@ async function prepareResumeNode(state) {
     }
   });
   try {
-    const agentResult = runResumeAgent(resumeInput, {
-      mode: state.mode
+    const agentResult = await runResumeAgent(resumeInput, {
+      mode: state.mode,
+      modelConfig: state.modelConfig || {}
     });
     const finishedRun = state.store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -389,7 +395,11 @@ async function prepareResumeNode(state) {
         result: agentResult.result,
         fallbackUsed: agentResult.fallbackUsed
       },
-      fallbackUsed: agentResult.fallbackUsed
+      fallbackUsed: agentResult.fallbackUsed,
+      promptVersion: agentResult.promptVersion,
+      agentVersion: agentResult.agentVersion,
+      modelConfig: agentResult.modelConfig,
+      telemetry: agentResult.telemetry
     });
     const saved = state.store.createResumeVersion({
       applicationId: state.applicationId,
@@ -421,7 +431,8 @@ async function prepareResumeNode(state) {
       provider: state.mode,
       output: { error: structuredError(error) },
       errorCode: error.code || "RESUME_AGENT_FAILED",
-      errorMessage: error.message || String(error)
+      errorMessage: error.message || String(error),
+      telemetry: error.telemetry || {}
     });
     throw error;
   }
@@ -445,12 +456,13 @@ async function evaluateFitNode(state) {
     }
   });
   try {
-    const agentResult = runResumeFitEvaluator({
+    const agentResult = await runResumeFitEvaluator({
       application: resumeInput.application,
       job: resumeInput.job,
       resumeVersion
     }, {
-      mode: state.mode
+      mode: state.mode,
+      modelConfig: state.modelConfig || {}
     });
     const finishedRun = state.store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -459,7 +471,11 @@ async function evaluateFitNode(state) {
         result: agentResult.result,
         fallbackUsed: agentResult.fallbackUsed
       },
-      fallbackUsed: agentResult.fallbackUsed
+      fallbackUsed: agentResult.fallbackUsed,
+      promptVersion: agentResult.promptVersion,
+      agentVersion: agentResult.agentVersion,
+      modelConfig: agentResult.modelConfig,
+      telemetry: agentResult.telemetry
     });
     const saved = state.store.createResumeFitEvaluation({
       resumeVersionId: resumeVersion.id,
@@ -506,7 +522,8 @@ async function evaluateFitNode(state) {
       provider: state.mode,
       output: { error: structuredError(error) },
       errorCode: error.code || "RESUME_FIT_EVALUATOR_FAILED",
-      errorMessage: error.message || String(error)
+      errorMessage: error.message || String(error),
+      telemetry: error.telemetry || {}
     });
     throw error;
   }
@@ -594,7 +611,8 @@ async function verifyClaimsNode(state) {
       provider: state.mode,
       output: { error: structuredError(error) },
       errorCode: error.code || "CLAIM_VERIFIER_FAILED",
-      errorMessage: error.message || String(error)
+      errorMessage: error.message || String(error),
+      telemetry: error.telemetry || {}
     });
     throw error;
   }
@@ -655,15 +673,17 @@ async function reviseResumeNode(state) {
     }
   });
   try {
-    const agentResult = runResumeRevisionAgent({
+    const agentResult = await runResumeRevisionAgent({
       application: resumeInput.application,
       job: resumeInput.job,
+      screening: resumeInput.screening,
       profile: resumeInput.profile,
       resumeVersion,
       resumeFitEvaluation: state.resumeFitEvaluation,
       resumeClaimVerification: state.resumeClaimVerification
     }, {
-      mode: state.mode
+      mode: state.mode,
+      modelConfig: state.modelConfig || {}
     });
     const finishedRun = state.store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -672,7 +692,11 @@ async function reviseResumeNode(state) {
         result: agentResult.result,
         fallbackUsed: agentResult.fallbackUsed
       },
-      fallbackUsed: agentResult.fallbackUsed
+      fallbackUsed: agentResult.fallbackUsed,
+      promptVersion: agentResult.promptVersion,
+      agentVersion: agentResult.agentVersion,
+      modelConfig: agentResult.modelConfig,
+      telemetry: agentResult.telemetry
     });
     const saved = state.store.createResumeVersion({
       applicationId: resumeVersion.applicationId,
@@ -735,7 +759,8 @@ async function reviseResumeNode(state) {
       provider: state.mode,
       output: { error: structuredError(error) },
       errorCode: error.code || "RESUME_REVISION_AGENT_FAILED",
-      errorMessage: error.message || String(error)
+      errorMessage: error.message || String(error),
+      telemetry: error.telemetry || {}
     });
     throw error;
   }
@@ -760,7 +785,7 @@ async function auditResumeNode(state) {
     }
   });
   try {
-    const agentResult = runAuditAgent({
+    const agentResult = await runAuditAgent({
       resumeVersionId: resumeVersion.id,
       job: resumeInput.job,
       screening: resumeInput.screening,
@@ -770,7 +795,8 @@ async function auditResumeNode(state) {
       unsupportedClaims: resumeVersion.unsupportedClaims,
       renderMetadata: resumeVersion.renderMetadata
     }, {
-      mode: state.mode
+      mode: state.mode,
+      modelConfig: state.modelConfig || {}
     });
     const finishedRun = state.store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -779,7 +805,11 @@ async function auditResumeNode(state) {
         result: agentResult.result,
         fallbackUsed: agentResult.fallbackUsed
       },
-      fallbackUsed: agentResult.fallbackUsed
+      fallbackUsed: agentResult.fallbackUsed,
+      promptVersion: agentResult.promptVersion,
+      agentVersion: agentResult.agentVersion,
+      modelConfig: agentResult.modelConfig,
+      telemetry: agentResult.telemetry
     });
     const saved = state.store.createResumeAudit({
       resumeVersionId: resumeVersion.id,
@@ -804,7 +834,8 @@ async function auditResumeNode(state) {
       provider: state.mode,
       output: { error: structuredError(error) },
       errorCode: error.code || "AUDIT_AGENT_FAILED",
-      errorMessage: error.message || String(error)
+      errorMessage: error.message || String(error),
+      telemetry: error.telemetry || {}
     });
     throw error;
   }
@@ -995,7 +1026,7 @@ function workflowError(code, message, context = {}) {
 
 function normalizeMode(value) {
   const mode = String(value || "").trim().toLowerCase();
-  return new Set(["rules", "auto", "llm"]).has(mode) ? mode : "rules";
+  return new Set(["rules", "auto", "llm", "hybrid"]).has(mode) ? mode : "rules";
 }
 
 function positiveInteger(value) {

@@ -1,13 +1,26 @@
 const AGENT_NAME = "ResumeRevisionAgent";
 const { DEFAULT_RESUME_TEMPLATE } = require("./resume-template-registry");
+const { loadModelConfig } = require("./model-client");
+const { runResumeAgent } = require("./resume-agent");
+
+const PROMPT_VERSION = "m16.resume-revision.prompt.v1";
+const AGENT_VERSION = "m16.resume-revision.agent.v1";
 
 function runResumeRevisionAgent(input = {}, options = {}) {
   const context = normalizeInput(input);
   const mode = normalizeMode(options.mode || input.mode || "rules");
-  if (mode !== "rules") {
-    return runResumeRevisionAgent(input, { ...options, mode: "rules" });
+  const baseline = runRuleBasedResumeRevisionAgent(context);
+  const modelConfig = loadModelConfig(options.modelConfig || {});
+  if (mode === "rules" || (mode === "auto" && !modelConfig.configured)) {
+    return baseline;
   }
+  if (!modelConfig.configured) {
+    throw revisionAgentError("LLM_CONFIG_INVALID", "OpenAI-compatible model config is not available for ResumeRevisionAgent");
+  }
+  return runModelResumeRevisionAgent(context, baseline, mode, modelConfig, options);
+}
 
+function runRuleBasedResumeRevisionAgent(context) {
   const revision = reviseFields(context);
   const unsupportedClaims = detectUnsupportedClaims(revision.resumeFields, revision.sourceMapping);
   const changed = JSON.stringify(revision.resumeFields) !== JSON.stringify(context.resumeVersion.resumeFields);
@@ -47,8 +60,129 @@ function runResumeRevisionAgent(input = {}, options = {}) {
           noBrowserTaskCreated: true
         }
       }
-    }
+    },
+    promptVersion: "m10.resume-revision.rules.v1",
+    agentVersion: "m10.resume-revision.rules.v1",
+    telemetry: {}
   };
+}
+
+async function runModelResumeRevisionAgent(context, baseline, mode, modelConfig, options = {}) {
+  try {
+    const generated = await runResumeAgent({
+      application: context.application,
+      job: context.job,
+      screening: context.screening,
+      profile: context.profile,
+      userRules: {
+        revisionTask: true,
+        currentResume: context.resumeVersion.resumeFields,
+        fitIssues: {
+          blockers: context.resumeFitEvaluation.blockers || [],
+          coverageItems: context.resumeFitEvaluation.coverageItems || []
+        },
+        claimIssues: (context.resumeClaimVerification.claims || [])
+          .filter((claim) => ["UNSUPPORTED", "NEEDS_USER_CONFIRMATION", "WEAK"].includes(claim.status))
+          .slice(0, 30),
+        instruction: "Regenerate from confirmed profile evidence, fixing listed fit and claim issues without inventing facts."
+      }
+    }, {
+      mode: "llm",
+      modelConfig,
+      requestStructuredCompletion: options.requestStructuredCompletion
+    });
+    const changed = JSON.stringify(generated.result.resumeFields) !== JSON.stringify(context.resumeVersion.resumeFields);
+    return {
+      ok: true,
+      agent: AGENT_NAME,
+      provider: mode === "hybrid" ? "hybrid" : "llm",
+      fallbackUsed: false,
+      result: {
+        resumeFields: generated.result.resumeFields,
+        sourceMapping: generated.result.sourceMapping,
+        diffSummary: unique([
+          ...generated.result.diffSummary,
+          `基于 Fit #${context.resumeFitEvaluation.id || "-"} 与 Claim #${context.resumeClaimVerification.id || "-"} 重新生成。`
+        ]),
+        compressionNotes: generated.result.compressionNotes,
+        unsupportedClaims: generated.result.unsupportedClaims,
+        renderMetadata: {
+          ...context.resumeVersion.renderMetadata,
+          maxPages: 2,
+          template: context.resumeVersion.renderMetadata?.template || DEFAULT_RESUME_TEMPLATE,
+          revisedBy: AGENT_NAME
+        },
+        metadata: {
+          method: "llm_regeneration_from_confirmed_evidence",
+          revisedFromVersionId: context.resumeVersion.id || null,
+          applicationId: context.application.id || context.resumeVersion.applicationId || null,
+          resumeFitEvaluationId: context.resumeFitEvaluation.id || null,
+          resumeClaimVerificationId: context.resumeClaimVerification.id || null,
+          selectedExperienceIds: generated.result.metadata.selectedExperienceIds || [],
+          selectedSkillIds: generated.result.metadata.selectedSkillIds || [],
+          changed,
+          actions: ["regenerated_from_confirmed_evidence"],
+          policy: {
+            canProceedToReEvaluation: true,
+            requiresFitReEvaluation: true,
+            requiresClaimReVerification: true,
+            noRealBossAction: true,
+            noApplicationStatusChange: true,
+            noBrowserTaskCreated: true
+          }
+        }
+      },
+      modelConfig: generated.modelConfig || publicModelConfig(modelConfig),
+      promptVersion: PROMPT_VERSION,
+      agentVersion: AGENT_VERSION,
+      telemetry: generated.telemetry || {}
+    };
+  } catch (error) {
+    if (mode === "llm" || mode === "hybrid") {
+      const structured = revisionAgentError(error.code || "RESUME_REVISION_AGENT_FAILED", error.message || String(error));
+      structured.telemetry = error.telemetry || {};
+      throw structured;
+    }
+    return {
+      ...baseline,
+      fallbackUsed: true,
+      fallbackReason: error.code || "LLM_REQUEST_FAILED",
+      fallbackMessage: error.message || String(error),
+      modelConfig: publicModelConfig(modelConfig),
+      promptVersion: PROMPT_VERSION,
+      agentVersion: AGENT_VERSION,
+      telemetry: error.telemetry || {},
+      result: {
+        ...baseline.result,
+        metadata: {
+          ...baseline.result.metadata,
+          method: "rules_fallback",
+          fallbackReason: error.code || "LLM_REQUEST_FAILED"
+        }
+      }
+    };
+  }
+}
+
+function publicModelConfig(config = {}) {
+  return {
+    configured: Boolean(config.configured),
+    baseUrl: config.baseUrl || "",
+    model: config.model || "",
+    wireApi: config.wireApi || "",
+    reasoningEffort: config.reasoningEffort || "",
+    maxRetries: Number(config.maxRetries || 0),
+    source: config.source || ""
+  };
+}
+
+function revisionAgentError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  error.agent = AGENT_NAME;
+  error.step = "revise_resume_from_checks";
+  error.retryable = code === "LLM_REQUEST_FAILED" || code === "AGENT_OUTPUT_SCHEMA_INVALID";
+  return error;
 }
 
 function reviseFields(context) {
@@ -445,6 +579,7 @@ function normalizeInput(input = {}) {
   return {
     application: normalizeObject(input.application),
     job: normalizeObject(input.job),
+    screening: normalizeObject(input.screening),
     profile: normalizeProfile(input.profile || {}),
     resumeVersion: normalizeResumeVersion(input.resumeVersion || input.resume_version || {}),
     resumeFitEvaluation: normalizeObject(input.resumeFitEvaluation || input.resume_fit_evaluation || {}),
@@ -469,6 +604,7 @@ function normalizeResumeVersion(resumeVersion = {}) {
 
 function normalizeProfile(profile = {}) {
   return {
+    profile: normalizeObject(profile.profile || profile),
     experiences: Array.isArray(profile.experiences) ? profile.experiences : [],
     skills: Array.isArray(profile.skills) ? profile.skills : [],
     constraints: Array.isArray(profile.constraints) ? profile.constraints : []
@@ -501,7 +637,7 @@ function dedupeSourceMapping(items) {
 
 function normalizeMode(value) {
   const mode = cleanText(value).toLowerCase();
-  return new Set(["rules", "auto", "llm"]).has(mode) ? mode : "rules";
+  return new Set(["rules", "auto", "llm", "hybrid"]).has(mode) ? mode : "rules";
 }
 
 function normalizeObject(value) {

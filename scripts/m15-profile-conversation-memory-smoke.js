@@ -145,8 +145,8 @@ async function runServiceChecks(dataDir) {
 
     return {
       checks: {
-        schemaIncludesConversationMemory: SCHEMA_VERSION === 14
-          && store.getStats().schemaVersion === 14,
+        schemaIncludesConversationMemory: SCHEMA_VERSION === 15
+          && store.getStats().schemaVersion === 15,
         servicePersistsBothSides: firstTurn.userMessage.id > 0
           && firstTurn.assistantMessage.id > firstTurn.userMessage.id
           && service.getSession(session.id).totalMessages >= 2,

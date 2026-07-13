@@ -1,4 +1,9 @@
 const AGENT_NAME = "ResumeFitEvaluator";
+const { FitReviewOutputSchema } = require("./agent-output-schemas");
+const { loadModelConfig, requestStructuredCompletion } = require("./model-client");
+
+const PROMPT_VERSION = "m16.resume-fit.prompt.v1";
+const AGENT_VERSION = "m16.resume-fit.agent.v1";
 
 const TECH_TERMS = [
   "javascript",
@@ -71,10 +76,18 @@ const RESPONSIBILITY_HINTS = [
 function runResumeFitEvaluator(input = {}, options = {}) {
   const context = normalizeInput(input);
   const mode = normalizeMode(options.mode || input.mode || "rules");
-  if (mode !== "rules") {
-    return runResumeFitEvaluator(input, { ...options, mode: "rules" });
+  const baseline = runRuleBasedResumeFitEvaluator(context);
+  const modelConfig = loadModelConfig(options.modelConfig || {});
+  if (mode === "rules" || (mode === "auto" && !modelConfig.configured)) {
+    return baseline;
   }
+  if (!modelConfig.configured) {
+    throw fitEvaluatorError("LLM_CONFIG_INVALID", "OpenAI-compatible model config is not available for ResumeFitEvaluator");
+  }
+  return runModelResumeFitEvaluator(context, baseline, mode, modelConfig, options);
+}
 
+function runRuleBasedResumeFitEvaluator(context) {
   const jdRequirements = extractJdRequirements(context.job);
   const resumeEvidence = extractResumeEvidence(context.resumeVersion);
   const coverageItems = jdRequirements.requirements.map((requirement) => evaluateRequirement(requirement, resumeEvidence));
@@ -123,8 +136,227 @@ function runResumeFitEvaluator(input = {}, options = {}) {
         applicationId: context.application.id || context.resumeVersion.applicationId || null,
         requirementCount: coverageItems.length
       }
+    },
+    promptVersion: "m10.resume-fit.rules.v1",
+    agentVersion: "m10.resume-fit.rules.v1",
+    telemetry: {}
+  };
+}
+
+async function runModelResumeFitEvaluator(context, baseline, mode, modelConfig, options = {}) {
+  const invoke = options.requestStructuredCompletion || requestStructuredCompletion;
+  try {
+    const evidenceItems = extractResumeEvidence(context.resumeVersion);
+    const completion = await invoke({
+      system: fitSystemPrompt(),
+      user: JSON.stringify(buildFitModelInput(context, baseline, evidenceItems), null, 2),
+      config: modelConfig,
+      schema: FitReviewOutputSchema,
+      schemaName: "resume_fit_review_output"
+    });
+    const result = buildModelFitResult(completion.data, context, baseline, evidenceItems);
+    return {
+      ok: true,
+      agent: AGENT_NAME,
+      provider: mode === "hybrid" ? "hybrid" : "llm",
+      fallbackUsed: false,
+      result,
+      modelConfig: publicModelConfig(modelConfig),
+      promptVersion: PROMPT_VERSION,
+      agentVersion: AGENT_VERSION,
+      telemetry: completion.telemetry || {}
+    };
+  } catch (error) {
+    if (mode === "llm" || mode === "hybrid") {
+      const structured = fitEvaluatorError(error.code || "RESUME_FIT_EVALUATOR_FAILED", error.message || String(error));
+      structured.telemetry = error.telemetry || {};
+      throw structured;
+    }
+    return {
+      ...baseline,
+      fallbackUsed: true,
+      fallbackReason: error.code || "LLM_REQUEST_FAILED",
+      fallbackMessage: error.message || String(error),
+      modelConfig: publicModelConfig(modelConfig),
+      promptVersion: PROMPT_VERSION,
+      agentVersion: AGENT_VERSION,
+      telemetry: error.telemetry || {},
+      result: {
+        ...baseline.result,
+        metadata: {
+          ...baseline.result.metadata,
+          method: "rules_fallback",
+          fallbackReason: error.code || "LLM_REQUEST_FAILED"
+        }
+      }
+    };
+  }
+}
+
+function buildFitModelInput(context, baseline, evidenceItems) {
+  return {
+    task: "Review semantic coverage of each indexed JD requirement using exact resume evidence. Return JSON only.",
+    outputSchema: {
+      items: [{
+        requirementIndex: "zero-based index from jdRequirements",
+        status: "covered | weak | missing",
+        evidenceField: "exact field from resumeEvidence, or empty for missing",
+        evidenceText: "verbatim text from resumeEvidence, or empty for missing",
+        reason: "short evidence-based explanation"
+      }],
+      recommendations: ["evidence-bound improvement"],
+      confidence: "low | medium | high"
+    },
+    rules: [
+      "Return one item for every indexed requirement.",
+      "covered or weak requires an exact evidenceField and verbatim evidenceText from resumeEvidence.",
+      "Do not infer experience from JD keywords alone.",
+      "Missing must-have requirements remain blockers.",
+      "Do not decide application submission."
+    ],
+    job: context.job,
+    jdRequirements: baseline.result.jdRequirements.requirements.map((requirement, index) => ({ index, ...requirement })),
+    resumeEvidence: evidenceItems,
+    deterministicBaseline: baseline.result.coverage.items
+  };
+}
+
+function fitSystemPrompt() {
+  return [
+    "You are ResumeFitEvaluator in a local-first resume workflow.",
+    "Evaluate JD coverage only from the supplied resume evidence.",
+    "Semantic matches are allowed only when you quote the exact supporting evidence.",
+    "Be conservative with must-have requirements.",
+    "Return exactly one JSON object."
+  ].join("\n");
+}
+
+function buildModelFitResult(output, context, baseline, evidenceItems) {
+  const requirements = baseline.result.jdRequirements.requirements;
+  const evidenceByField = new Map(evidenceItems.map((item) => [item.field, item]));
+  const reviewByIndex = new Map();
+  for (const review of output.items || []) {
+    const index = Number(review.requirementIndex);
+    if (!Number.isInteger(index) || index < 0 || index >= requirements.length || reviewByIndex.has(index)) {
+      continue;
+    }
+    reviewByIndex.set(index, review);
+  }
+  if (reviewByIndex.size !== requirements.length) {
+    throw fitEvaluatorError(
+      "AGENT_OUTPUT_EVIDENCE_INVALID",
+      `ResumeFitEvaluator returned ${reviewByIndex.size}/${requirements.length} indexed requirement reviews`
+    );
+  }
+
+  const coverageItems = requirements.map((requirement, index) => {
+    const review = reviewByIndex.get(index);
+    if (review.status === "missing") {
+      return {
+        ...requirement,
+        status: "missing",
+        score: 0,
+        evidenceField: "",
+        evidenceText: "",
+        reason: text(review.reason)
+      };
+    }
+    const evidence = evidenceByField.get(text(review.evidenceField));
+    const canonicalEvidence = evidence && evidenceMatchesVerbatim(evidence.text, review.evidenceText)
+      ? evidence
+      : null;
+    if (!canonicalEvidence) {
+      return {
+        ...requirement,
+        status: "missing",
+        score: 0,
+        evidenceField: "",
+        evidenceText: "",
+        reason: "Model proposed coverage without a valid verbatim resume evidence reference."
+      };
+    }
+    return {
+      ...requirement,
+      status: review.status,
+      score: review.status === "covered" ? 100 : 50,
+      evidenceField: canonicalEvidence.field,
+      evidenceText: canonicalEvidence.text,
+      reason: text(review.reason)
+    };
+  });
+  const covered = coverageItems.filter((item) => item.status === "covered").length;
+  const weak = coverageItems.filter((item) => item.status === "weak").length;
+  const missing = coverageItems.filter((item) => item.status === "missing").length;
+  const coverageScore = coverageItems.length
+    ? Math.round(((covered + weak * 0.45) / coverageItems.length) * 100)
+    : 0;
+  const blockers = coverageItems
+    .filter((item) => item.priority === "must" && item.status === "missing")
+    .map((item) => item.requirement)
+    .slice(0, 10);
+  return {
+    jdRequirements: baseline.result.jdRequirements,
+    coverage: {
+      score: coverageScore,
+      fitLevel: coverageScore >= 78 ? "strong" : coverageScore >= 58 ? "mixed" : "weak",
+      confidence: normalizeConfidence(output.confidence),
+      covered,
+      weak,
+      missing,
+      total: coverageItems.length,
+      items: coverageItems
+    },
+    blockers,
+    recommendations: unique([
+      ...normalizeStringArray(output.recommendations),
+      ...buildRecommendations(coverageItems, context.resumeVersion)
+    ]).slice(0, 15),
+    policy: {
+      canProceedToAudit: coverageScore >= 55 && blockers.length === 0,
+      requiresResumeRevision: coverageScore < 75 || weak > 0 || missing > 0,
+      noRealBossAction: true,
+      noApplicationStatusChange: true
+    },
+    metadata: {
+      method: "llm_with_verbatim_evidence_gate",
+      resumeVersionId: context.resumeVersion.id || null,
+      applicationId: context.application.id || context.resumeVersion.applicationId || null,
+      requirementCount: coverageItems.length,
+      evidenceReferenceCount: coverageItems.filter((item) => item.evidenceField).length
     }
   };
+}
+
+function evidenceMatchesVerbatim(canonical, proposed) {
+  const left = multiline(canonical);
+  const right = multiline(proposed);
+  return Boolean(left && right && (left === right || (Math.min(left.length, right.length) >= 12 && left.includes(right))));
+}
+
+function normalizeConfidence(value) {
+  const normalized = text(value).toLowerCase();
+  return new Set(["low", "medium", "high"]).has(normalized) ? normalized : "low";
+}
+
+function publicModelConfig(config = {}) {
+  return {
+    configured: Boolean(config.configured),
+    baseUrl: config.baseUrl || "",
+    model: config.model || "",
+    wireApi: config.wireApi || "",
+    reasoningEffort: config.reasoningEffort || "",
+    maxRetries: Number(config.maxRetries || 0),
+    source: config.source || ""
+  };
+}
+
+function fitEvaluatorError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  error.agent = AGENT_NAME;
+  error.step = "evaluate_resume_fit";
+  error.retryable = code === "LLM_REQUEST_FAILED" || code === "AGENT_OUTPUT_SCHEMA_INVALID";
+  return error;
 }
 
 function extractJdRequirements(job = {}) {
@@ -317,7 +549,7 @@ function normalizeResumeVersion(resumeVersion = {}) {
 
 function normalizeMode(value) {
   const mode = text(value).toLowerCase();
-  return new Set(["rules", "auto", "llm"]).has(mode) ? mode : "rules";
+  return new Set(["rules", "auto", "llm", "hybrid"]).has(mode) ? mode : "rules";
 }
 
 function normalizeObject(value) {

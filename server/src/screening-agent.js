@@ -1,7 +1,10 @@
-const { loadModelConfig, requestJsonCompletion } = require("./model-client");
+const { ScreeningOutputSchema } = require("./agent-output-schemas");
+const { loadModelConfig, requestStructuredCompletion } = require("./model-client");
 const { buildRiskGateScreeningResult, evaluateJobRiskGate } = require("./job-risk-gate");
 
 const AGENT_NAME = "ScreeningAgent";
+const PROMPT_VERSION = "m16.screening.prompt.v2";
+const AGENT_VERSION = "m16.screening.agent.v1";
 
 async function runScreeningAgent(input = {}, options = {}) {
   const context = normalizeScreeningInput(input);
@@ -33,31 +36,38 @@ async function runScreeningAgent(input = {}, options = {}) {
       modelConfig: publicModelConfig(modelConfig)
     };
   }
-  if (mode === "llm" && !modelConfig.configured) {
+  if ((mode === "llm" || mode === "hybrid") && !modelConfig.configured) {
     throw structuredAgentError(agentClientError("LLM_CONFIG_INVALID", "OpenAI-compatible model config is not available"), {
       fallbackAvailable: true
     });
   }
 
   try {
-    const modelOutput = await requestJsonCompletion({
+    const invoke = options.requestStructuredCompletion || requestStructuredCompletion;
+    const completion = await invoke({
       system: screeningSystemPrompt(),
       user: JSON.stringify(buildModelInput(context, baseline), null, 2),
-      config: modelConfig
+      config: modelConfig,
+      schema: ScreeningOutputSchema,
+      schemaName: "screening_output"
     });
-    const result = normalizeScreeningOutput(modelOutput, baseline);
+    const result = normalizeScreeningOutput(completion.data, baseline, mode);
     return {
       ok: true,
       agent: AGENT_NAME,
-      provider: "llm",
+      provider: mode === "hybrid" ? "hybrid" : "llm",
       fallbackUsed: false,
       result,
-      modelConfig: publicModelConfig(modelConfig)
+      modelConfig: publicModelConfig(modelConfig),
+      promptVersion: PROMPT_VERSION,
+      agentVersion: AGENT_VERSION,
+      telemetry: completion.telemetry || {}
     };
   } catch (error) {
-    if (mode === "llm") {
+    if (mode === "llm" || mode === "hybrid") {
       throw structuredAgentError(error, {
-        fallbackAvailable: true
+        fallbackAvailable: true,
+        telemetry: error.telemetry || {}
       });
     }
     return {
@@ -75,7 +85,10 @@ async function runScreeningAgent(input = {}, options = {}) {
         ],
         requiresUserConfirmation: true
       },
-      modelConfig: publicModelConfig(modelConfig)
+      modelConfig: publicModelConfig(modelConfig),
+      promptVersion: PROMPT_VERSION,
+      agentVersion: AGENT_VERSION,
+      telemetry: error.telemetry || {}
     };
   }
 }
@@ -202,21 +215,56 @@ function normalizeJob(job = {}) {
   };
 }
 
-function normalizeScreeningOutput(output = {}, baseline) {
-  const recommendation = normalizeRecommendation(output.recommendation) || baseline.recommendation;
-  const matchScore = clamp(Number(output.matchScore ?? output.match_score ?? baseline.matchScore), 0, 100);
-  const riskScore = clamp(Number(output.riskScore ?? output.risk_score ?? baseline.riskScore), 0, 100);
+function normalizeScreeningOutput(output = {}, baseline, mode = "llm") {
+  const modelRecommendation = normalizeRecommendation(output.recommendation) || baseline.recommendation;
+  const modelMatchScore = clamp(Number(output.matchScore ?? output.match_score ?? baseline.matchScore), 0, 100);
+  const modelRiskScore = clamp(Number(output.riskScore ?? output.risk_score ?? baseline.riskScore), 0, 100);
+  const baselineMatchScore = clamp(Number(baseline.matchScore), 0, 100);
+  const baselineRiskScore = clamp(Number(baseline.riskScore), 0, 100);
+  const matchScore = mode === "hybrid"
+    ? clamp((baselineMatchScore * 0.7) + (modelMatchScore * 0.3), 0, 100)
+    : modelMatchScore;
+  const riskScore = mode === "hybrid"
+    ? Math.max(baselineRiskScore, modelRiskScore)
+    : modelRiskScore;
+  const hardConditions = normalizeHardConditions(output.hardConditions || output.hard_conditions || baseline.hardConditions);
+  const policyRecommendation = chooseRecommendation({
+    matchScore,
+    riskScore,
+    hardFailures: hardConditions.filter((condition) => !condition.passed),
+    descriptionLength: baseline.hardConditions?.find((condition) => condition.name === "jd_description")?.passed ? 80 : 0
+  });
+  const recommendation = mode === "hybrid" ? policyRecommendation : modelRecommendation;
+  const modelRequiresUserConfirmation = Boolean(
+    output.requiresUserConfirmation ?? output.requires_user_confirmation ?? baseline.requiresUserConfirmation
+  );
   return {
     matchScore,
     riskScore,
     recommendation,
-    hardConditions: normalizeHardConditions(output.hardConditions || output.hard_conditions || baseline.hardConditions),
+    hardConditions,
     matchedPoints: array(output.matchedPoints || output.matched_points || baseline.matchedPoints).slice(0, 20),
     riskPoints: array(output.riskPoints || output.risk_points || baseline.riskPoints).slice(0, 20),
     resumeStrategy: array(output.resumeStrategy || output.resume_strategy || baseline.resumeStrategy).slice(0, 20),
-    requiresUserConfirmation: Boolean(output.requiresUserConfirmation ?? output.requires_user_confirmation ?? baseline.requiresUserConfirmation),
+    requiresUserConfirmation: mode === "hybrid"
+      ? recommendation === "review_needed" || hardConditions.some((condition) => !condition.passed)
+      : modelRequiresUserConfirmation,
     confidence: normalizeConfidence(output.confidence || baseline.confidence),
-    method: "llm"
+    method: "llm",
+    metadata: {
+      modelRecommendation,
+      policyRecommendation,
+      recommendationAdjusted: recommendation !== modelRecommendation,
+      modelRequiresUserConfirmation,
+      scoreEnsemble: mode === "hybrid" ? {
+        baselineWeight: 0.7,
+        modelWeight: 0.3,
+        baselineMatchScore,
+        modelMatchScore,
+        baselineRiskScore,
+        modelRiskScore
+      } : null
+    }
   };
 }
 
@@ -247,6 +295,10 @@ function buildModelInput(context, baseline) {
       "Use only confirmed profile facts.",
       "Do not decide application submission.",
       "If evidence is weak or JD is incomplete, choose review_needed or skip.",
+      "Score every job on the same 100-point scale: target-role alignment 20, confirmed must-have skill coverage 35, relevant experience evidence 25, education/location constraints 10, and JD completeness 10.",
+      "A narrower target-role match plus more direct confirmed skill evidence must outrank a broad role match when constraints are otherwise equal.",
+      "Use deterministicBaseline as a calibration anchor; deviate by more than 10 points only for a semantic mismatch or risk that you name in matchedPoints or riskPoints.",
+      "Choose auto_prepare only when matchScore >= 75 and riskScore <= 35; choose skip when matchScore < 45, riskScore >= 70, or a hard condition fails; otherwise choose review_needed.",
       "Prefer conservative risk scoring."
     ],
     job: context.job,
@@ -259,6 +311,7 @@ function screeningSystemPrompt() {
   return [
     "You are ScreeningAgent for a local-first job application workflow.",
     "You score jobs using the candidate's confirmed facts only.",
+    "Scores must be calibrated consistently across different jobs, not judged in isolation.",
     "You must return one strict JSON object and no prose.",
     "You must not claim the candidate has skills or experience that are not in confirmedProfile.",
     "You cannot approve final application submission."
@@ -322,7 +375,7 @@ function containsLoose(haystack, needle) {
 
 function normalizeMode(value) {
   const mode = text(value).toLowerCase();
-  return new Set(["auto", "rules", "llm"]).has(mode) ? mode : "auto";
+  return new Set(["auto", "rules", "llm", "hybrid"]).has(mode) ? mode : "auto";
 }
 
 function normalizeRecommendation(value) {
@@ -341,6 +394,8 @@ function publicModelConfig(config) {
     baseUrl: config.baseUrl || "",
     model: config.model || "",
     wireApi: config.wireApi || "",
+    reasoningEffort: config.reasoningEffort || "",
+    maxRetries: Number(config.maxRetries || 0),
     source: config.source || ""
   };
 }
@@ -353,6 +408,7 @@ function structuredAgentError(error, context = {}) {
   structured.retryable = structured.code === "LLM_REQUEST_FAILED";
   structured.severity = "error";
   structured.context = context;
+  structured.telemetry = error.telemetry || context.telemetry || {};
   return structured;
 }
 

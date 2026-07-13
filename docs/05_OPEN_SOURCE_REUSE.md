@@ -925,3 +925,49 @@ Sources checked:
 - [LangGraph SQLite checkpointer](https://www.npmjs.com/package/@langchain/langgraph-checkpoint-sqlite)
 - [Mem0](https://github.com/mem0ai/mem0)
 - [TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory)
+
+## M16 Real-model Agent quality reuse check
+
+M16 reuse checks were refreshed on 2026-07-12 with GitHub and npm metadata:
+
+- `openai/openai-node` / `openai@6.46.0`: 11k+ GitHub stars, Apache-2.0, active updates, official Responses/Chat client and usage/error types. Selected as a direct npm dependency.
+- `colinhacks/zod` / `zod@4.4.3`: 43k+ GitHub stars, MIT, active updates, no runtime dependency tree. Selected for strict Agent output contracts.
+- `langchain-ai/langchainjs` / `@langchain/openai@1.5.5`: 17k+ GitHub stars and active maintenance. The OpenAI adapter was rejected for this slice because it already depends on the same `openai` and Zod packages, while the repository needs provider telemetry and retry semantics below LangGraph rather than another message abstraction. Existing `@langchain/langgraph` remains the orchestrator.
+- `promptfoo`, DeepEval, LangSmith, and Evalite from the M13.5 check remain useful report/provider frameworks. They were not adopted because risk recall, pairwise job ranking, confirmed-fact ownership, claim support, Audit monotonicity, and SQLite evaluation history are project-domain metrics that still require the local runner.
+- Official `ResponsesWS` plus `ws@8.21.0` was tested because the configured provider advertised WebSocket-only Responses. The current Cloudflare path returned HTTP 426 to standard WebSocket upgrades, so Chat compatibility was selected and `ws` was removed instead of retaining an unused dependency.
+
+Selected integration:
+
+- Install `openai` and `zod` directly.
+- Keep LangGraph responsible only for node routing and workflow state.
+- Keep one backend-owned model client responsible for config precedence, provider transport, JSON extraction, Zod validation, retries, request hashes, usage, latency, optional cost, and sanitized errors.
+- Support provider-compatible JSON-string-wrapped Chat responses by unwrapping exactly one object layer before normal validation.
+- Persist only sanitized model config and telemetry; never persist API keys, prompts, failed output bodies, resume files, or local credential paths in evaluation reports.
+- Reuse the M13 anonymous fixture for both deterministic CI and repeated live-model runs.
+- Keep real-model evaluation outside CI because it requires credentials, external availability, time, and token spend.
+
+Provider finding:
+
+- The local credential file selected `gpt-5.5/responses`, but the provider returned 502 for HTTP Responses and 426 for WebSocket upgrades.
+- `gpt-5.4` Chat produced truncated long JSON at roughly 100 completion tokens even when token-limit parameters were supplied.
+- `gpt-5.4-mini/chat` completed long structured output and the full 9-job x 3-sample evaluation. This is a local provider compatibility result, not a universal OpenAI model recommendation.
+- The first unpaced formal run preserved a failed evaluation after repeated 502s. The passing run used a 2500 ms minimum interval, three retries, and exponential 5xx backoff, demonstrating that provider availability is measured separately from Agent output quality.
+
+Validation:
+
+```powershell
+npm run m16:real-model-agents:smoke
+npm run m16:agent-quality-evaluation:smoke
+npm run m16:options-agent-quality:smoke
+npm run agent:evaluate:real -- --samples 3 --delay-ms 2500
+```
+
+Sources checked:
+
+- [OpenAI Node SDK](https://github.com/openai/openai-node)
+- [OpenAI npm](https://www.npmjs.com/package/openai)
+- [Zod](https://github.com/colinhacks/zod)
+- [Zod npm](https://www.npmjs.com/package/zod)
+- [LangChain.js](https://github.com/langchain-ai/langchainjs)
+- [LangChain OpenAI npm](https://www.npmjs.com/package/@langchain/openai)
+- [ws](https://github.com/websockets/ws)

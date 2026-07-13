@@ -10,10 +10,12 @@ const { findBrowserExecutable } = require("../server/src/browser-executor/local-
 const ROOT = path.join(__dirname, "..");
 const ARTIFACT_DIR = path.join(ROOT, "server", "data", "ui-smoke");
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
 
 async function main() {
   const executablePath = findBrowserExecutable();
@@ -177,23 +179,28 @@ async function installChromeMock(page) {
         metadata: { actionMode: "dry_run" }
       }
     ];
+    let settings = {
+      backendUrl: "http://127.0.0.1:8787",
+      syncPath: "/api/jobs/sync",
+      token: "",
+      autoSync: true,
+      maxCachedJobs: 500,
+      crawlMaxJobs: 30,
+      crawlDelayMs: 1600,
+      resumeTemplateName: "resume-to-word-campus-product-v1",
+      agentExecutionMode: "hybrid",
+      riskGateEnabled: true,
+      excludedDirections: ["销售", "直播"]
+    };
 
     function responseFor(message) {
       calls.push(message);
       switch (message.type) {
         case "GET_SETTINGS":
-          return {
-            backendUrl: "http://127.0.0.1:8787",
-            syncPath: "/api/jobs/sync",
-            token: "",
-            autoSync: true,
-            maxCachedJobs: 500,
-            crawlMaxJobs: 30,
-            crawlDelayMs: 1600,
-            resumeTemplateName: "resume-to-word-campus-product-v1",
-            riskGateEnabled: true,
-            excludedDirections: ["销售", "直播"]
-          };
+          return structuredClone(settings);
+        case "SAVE_SETTINGS":
+          settings = { ...settings, ...(message.settings || {}) };
+          return structuredClone(settings);
         case "GET_APPLICATIONS":
           return { response: { applications, totalApplications: applications.length } };
         case "GET_CACHE":
@@ -220,6 +227,22 @@ async function installChromeMock(page) {
           return { response: { screenings, totalScreenings: screenings.length } };
         case "GET_AGENT_RUNS":
           return { response: { runs: [], totalAgentRuns: 0 } };
+        case "GET_AGENT_QUALITY":
+          return {
+            response: {
+              invocationCount: 12,
+              totals: { totalTokens: 3456, fallbackCount: 1, failedCount: 0 },
+              latencyMs: { p50: 820, p95: 1450, max: 1700 },
+              evaluations: [{
+                id: 7,
+                status: "SUCCEEDED",
+                metrics: {
+                  structuredOutputSuccessRate: { value: 1, threshold: 0.95, passed: true },
+                  generatedClaimSupportRate: { value: 1, threshold: 0.95, passed: true }
+                }
+              }]
+            }
+          };
         case "GET_CAREER_CONTEXT":
           return { response: { ok: true, careerContext: null, freshness: { status: "MISSING", isFresh: false }, missingQuestions: [] } };
         case "GET_PROFILE_FACT_DRAFTS":
@@ -297,6 +320,12 @@ async function installChromeMock(page) {
     };
   });
 }
+
+module.exports = {
+  ARTIFACT_DIR,
+  ROOT,
+  installChromeMock
+};
 
 function inspectWorkspaceLayout() {
   const visibleButtons = Array.from(document.querySelectorAll("button")).filter((button) => {

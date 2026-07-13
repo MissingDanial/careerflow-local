@@ -6,6 +6,7 @@ const fields = {
   maxCachedJobs: document.getElementById("maxCachedJobs"),
   crawlMaxJobs: document.getElementById("crawlMaxJobs"),
   crawlDelayMs: document.getElementById("crawlDelayMs"),
+  agentExecutionMode: document.getElementById("agentExecutionMode"),
   riskGateEnabled: document.getElementById("riskGateEnabled"),
   excludedDirections: document.getElementById("excludedDirections")
 };
@@ -51,6 +52,7 @@ const ui = {
   refreshDiagnostics: document.getElementById("refreshDiagnostics"),
   refreshWorkflow: document.getElementById("refreshWorkflow"),
   refreshScreening: document.getElementById("refreshScreening"),
+  refreshAgentQuality: document.getElementById("refreshAgentQuality"),
   runRulesBatchScreening: document.getElementById("runRulesBatchScreening"),
   runRiskGateRescreen: document.getElementById("runRiskGateRescreen"),
   refreshResume: document.getElementById("refreshResume"),
@@ -107,6 +109,11 @@ const ui = {
   screeningCandidates: document.getElementById("screeningCandidates"),
   screeningResults: document.getElementById("screeningResults"),
   agentRuns: document.getElementById("agentRuns"),
+  agentQualityInvocations: document.getElementById("agentQualityInvocations"),
+  agentQualityTokens: document.getElementById("agentQualityTokens"),
+  agentQualityLatency: document.getElementById("agentQualityLatency"),
+  agentQualityGate: document.getElementById("agentQualityGate"),
+  agentQualityStatus: document.getElementById("agentQualityStatus"),
   refreshCareerContext: document.getElementById("refreshCareerContext"),
   profileAgentPortal: document.getElementById("profileAgentPortal"),
   profileDialogSessionSelect: document.getElementById("profileDialogSessionSelect"),
@@ -237,7 +244,8 @@ const state = {
   latestSubmissionPageResult: null,
   realActionPolicy: null,
   realActionAuthorization: null,
-  realActionAuthorizationToken: ""
+  realActionAuthorizationToken: "",
+  agentQuality: null
 };
 
 organizeOptionPanels();
@@ -506,6 +514,7 @@ ui.save.addEventListener("click", save);
 ui.refreshDiagnostics.addEventListener("click", () => refreshDiagnostics());
 ui.refreshWorkflow.addEventListener("click", () => refreshWorkflowDiagnostics());
 ui.refreshScreening.addEventListener("click", () => refreshScreeningDiagnostics());
+ui.refreshAgentQuality.addEventListener("click", () => refreshAgentQualityDiagnostics());
 ui.runRulesBatchScreening.addEventListener("click", runRulesBatchScreening);
 ui.runRiskGateRescreen.addEventListener("click", runRiskGateRescreen);
 ui.refreshCareerContext.addEventListener("click", () => refreshCareerContextDiagnostics());
@@ -530,6 +539,7 @@ ui.regenerateCareerContextAfterFacts.addEventListener("click", () => generateCar
 ui.refreshResume.addEventListener("click", () => refreshResumeDiagnostics());
 ui.runSelectedResumeWorkflow.addEventListener("click", () => runResumeWorkflowForSelectedApplication());
 ui.resumeTemplateName.addEventListener("change", saveResumeTemplateSelection);
+fields.agentExecutionMode.addEventListener("change", saveAgentExecutionMode);
 ui.prepareRulesResume.addEventListener("click", prepareRulesResume);
 ui.evaluateResumeFit.addEventListener("click", evaluateSelectedResumeFit);
 ui.verifyResumeClaims.addEventListener("click", verifySelectedResumeClaims);
@@ -567,6 +577,7 @@ async function init() {
     renderSettings(settings);
     await refreshResumeTemplates({ silent: true });
     await refreshDiagnostics({ silent: true });
+    await refreshAgentQualityDiagnostics({ silent: true });
     await refreshRealActionDiagnostics({ silent: true });
   } catch (error) {
     setStatus(error.message || String(error), true);
@@ -595,6 +606,7 @@ function readSettings() {
     maxCachedJobs: fields.maxCachedJobs.value,
     crawlMaxJobs: fields.crawlMaxJobs.value,
     crawlDelayMs: fields.crawlDelayMs.value,
+    agentExecutionMode: getSelectedAgentExecutionMode(),
     resumeTemplateName: getSelectedResumeTemplateName(),
     riskGateEnabled: fields.riskGateEnabled.checked,
     excludedDirections: parseDelimitedList(fields.excludedDirections.value)
@@ -609,6 +621,7 @@ function renderSettings(settings) {
   fields.maxCachedJobs.value = settings.maxCachedJobs || 500;
   fields.crawlMaxJobs.value = settings.crawlMaxJobs || 30;
   fields.crawlDelayMs.value = settings.crawlDelayMs || 1600;
+  fields.agentExecutionMode.value = normalizeAgentExecutionMode(settings.agentExecutionMode || "hybrid");
   if (ui.resumeTemplateName && settings.resumeTemplateName) {
     ui.resumeTemplateName.dataset.pendingValue = settings.resumeTemplateName;
     ui.resumeTemplateName.value = settings.resumeTemplateName;
@@ -1540,7 +1553,7 @@ async function runResumeWorkflowForSelectedApplication(applicationId = null) {
       type: "RUN_RESUME_WORKFLOW_GRAPH",
       applicationId: targetApplicationId,
       options: {
-        mode: "rules",
+        mode: getSelectedAgentExecutionMode(),
         renderDocx: true,
         maxRevisions: 1,
         renderOptions: {
@@ -1836,6 +1849,77 @@ async function prepareGreetingDryRun(applicationId = null) {
   } finally {
     ui.prepareGreetingDryRun.disabled = false;
   }
+}
+
+function normalizeAgentExecutionMode(value) {
+  const mode = String(value || "").trim().toLowerCase();
+  return new Set(["hybrid", "auto", "llm", "rules"]).has(mode) ? mode : "hybrid";
+}
+
+function getSelectedAgentExecutionMode() {
+  return normalizeAgentExecutionMode(fields.agentExecutionMode?.value || "hybrid");
+}
+
+async function saveAgentExecutionMode() {
+  try {
+    const savedSettings = await runtimeMessage({
+      type: "SAVE_SETTINGS",
+      settings: readSettings()
+    });
+    renderSettings(savedSettings);
+    setStatus(`Agent 模式已保存：${formatAgentExecutionMode(getSelectedAgentExecutionMode())}`);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  }
+}
+
+async function refreshAgentQualityDiagnostics(options = {}) {
+  try {
+    const result = await runtimeMessage({
+      type: "GET_AGENT_QUALITY",
+      options: { limit: 500 }
+    });
+    renderAgentQuality(result.response || {});
+  } catch (error) {
+    if (!options.silent) {
+      setStatus(error.message || String(error), true);
+    }
+    if (ui.agentQualityStatus) {
+      ui.agentQualityStatus.textContent = error.message || String(error);
+      ui.agentQualityStatus.classList.add("error");
+    }
+  }
+}
+
+function renderAgentQuality(payload = {}) {
+  state.agentQuality = payload;
+  const totals = payload.totals || {};
+  const latency = payload.latencyMs || {};
+  const evaluations = Array.isArray(payload.evaluations) ? payload.evaluations : [];
+  const latest = evaluations[0] || null;
+  const latestMetrics = latest?.metrics && typeof latest.metrics === "object" ? latest.metrics : {};
+  const gatePassed = latest && latest.status === "SUCCEEDED"
+    && Object.values(latestMetrics).every((metric) => metric?.passed !== false);
+  ui.agentQualityInvocations.textContent = Number(payload.invocationCount || 0).toLocaleString("zh-CN");
+  ui.agentQualityTokens.textContent = Number(totals.totalTokens || 0).toLocaleString("zh-CN");
+  ui.agentQualityLatency.textContent = latency.p95 ? `${Number(latency.p95)} ms` : "--";
+  ui.agentQualityGate.textContent = latest ? (gatePassed ? "通过" : latest.status === "RUNNING" ? "运行中" : "未通过") : "未评测";
+  ui.agentQualityStatus.textContent = [
+    `模式 ${formatAgentExecutionMode(getSelectedAgentExecutionMode())}`,
+    `回退 ${Number(totals.fallbackCount || 0)}`,
+    `失败 ${Number(totals.failedCount || 0)}`,
+    latest ? `评测 #${latest.id}` : "暂无评测"
+  ].join(" · ");
+  ui.agentQualityStatus.classList.toggle("error", Boolean(latest && latest.status === "FAILED"));
+}
+
+function formatAgentExecutionMode(mode) {
+  return ({
+    hybrid: "混合",
+    auto: "自动降级",
+    llm: "严格模型",
+    rules: "仅规则"
+  })[normalizeAgentExecutionMode(mode)] || "混合";
 }
 
 async function refreshRealActionDiagnostics(options = {}) {

@@ -1324,3 +1324,62 @@ npm run test:agents
 ```
 
 `agent:evaluate` writes reports under `server/data/agent-evaluation/` by default and exits nonzero on threshold regression. Use `--output-dir <path>` for an isolated report directory and `--no-fail` only when inspecting a known regression locally.
+
+## 28. M16 Real-model Agent Quality Loop
+
+M16 keeps the existing LangGraph topology but replaces rule-only content decisions with validated real-model nodes when the selected mode permits it:
+
+```text
+frozen profile + frozen JD
+-> JobRiskGate (deterministic)
+-> ScreeningAgent (model score + hybrid policy)
+-> ResumeAgent (model, confirmed IDs/facts only)
+-> ResumeFitEvaluator (model, exact resume evidence required)
+-> ClaimVerifier (deterministic)
+-> ResumeRevisionAgent (model when revision is required)
+-> re-check Fit + Claim
+-> AuditAgent (model cannot weaken deterministic blockers)
+```
+
+ProfileAgent remains outside this per-job graph. It updates the persistent upstream profile only through its dedicated conversation and fact-confirmation flow.
+
+Execution modes:
+
+- `hybrid`: real model plus deterministic risk, evidence, recommendation, claim, render and Audit gates. A model failure stops the graph.
+- `auto`: try the model, then use the existing rule implementation only after a recorded model failure.
+- `llm`: strict model output with Schema/evidence validation and no rule fallback.
+- `rules`: deterministic implementation for CI and offline recovery.
+
+Screening consistency:
+
+- Model and rule scores are both retained.
+- Hybrid `matchScore = 0.7 * deterministicBaseline + 0.3 * modelScore`.
+- Hybrid `riskScore = max(deterministicRisk, modelRisk)`.
+- Recommendation is derived from the final scores and hard conditions: `auto_prepare` requires match >= 75 and risk <= 35; match < 45, risk >= 70, or a failed hard condition becomes `skip`; the remaining range is `review_needed`.
+- Metadata preserves the model recommendation, policy recommendation, both score sets, weights, and whether the recommendation was adjusted.
+
+Evidence contracts:
+
+- ResumeAgent may select only confirmed experience/skill IDs supplied in the frozen profile.
+- Every generated project bullet cites one verbatim confirmed `sourceFact`; invalid IDs or unsupported facts fail the node.
+- ResumeFitEvaluator can mark `covered/weak` only with an exact text fragment and field from the generated resume evidence list.
+- ClaimVerifier remains rule-owned and blocks unsupported claims before Audit.
+- Audit may add a stricter conclusion but cannot remove unsupported-claim, must-have, or render-QA blockers.
+
+Transport and failure handling:
+
+- `openai@6.46.0` owns HTTP transport; `zod@4.4.3` owns output validation.
+- Responses and Chat APIs are supported. A provider that returns a JSON string containing a Chat Completion object is unwrapped once and then validated normally.
+- Empty, malformed, or wrong-shape output never enters business tables.
+- Schema failures retry quickly; 429/5xx use second-level exponential backoff. Attempt status, delay, request hash, response ID, token usage, latency, reasoning tokens, and optional estimated cost are stored without prompts, output bodies, or API keys.
+- `hybrid` does not silently downgrade. `auto` fallback is explicit in `fallbackUsed`, Agent output metadata, workflow events, and quality summaries.
+
+Quality gate:
+
+```powershell
+npm run agent:evaluate:real -- --samples 3 --delay-ms 2500
+```
+
+The formal anonymous run `382ad0764126c5ff` covered 9 jobs x 3 samples. All 27 samples and 75 model stages completed. All 11 gates passed: structure/sample success 100%, risk recall/precision 100%, ranking 100%, Screening recommendation 100%, JD must-have status 100%, claim support 96.68%, Audit consistency 100%, maximum Screening standard deviation 2.357, and zero unsupported claims.
+
+This gate validates Agent behavior on the versioned anonymous fixture. It does not validate real BOSS selectors, greetings, uploads, applications, or hiring outcomes, and it creates no browser task.
