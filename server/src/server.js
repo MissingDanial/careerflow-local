@@ -19,6 +19,7 @@ const { createProfileConversationService } = require("./services/profile-convers
 const { createResumeWorkflowService } = require("./services/resume-workflow-service");
 const { createExecutionPackageService } = require("./services/execution-package-service");
 const { createSubmissionResultService } = require("./services/submission-result-service");
+const { createAgentShadowService } = require("./services/agent-shadow-service");
 const {
   httpError,
   structuredError,
@@ -35,6 +36,8 @@ const profileConversationService = createProfileConversationService({ store, dat
 const resumeWorkflowService = createResumeWorkflowService({ store, dataDir: DATA_DIR });
 const executionPackageService = createExecutionPackageService({ store, dataDir: DATA_DIR });
 const submissionResultService = createSubmissionResultService({ store, dataDir: DATA_DIR });
+const agentShadowService = createAgentShadowService({ store });
+agentShadowService.recoverInterruptedRuns();
 
 const server = http.createServer(async (request, response) => {
   setCors(response);
@@ -658,6 +661,41 @@ const server = http.createServer(async (request, response) => {
           limit: Number(url.searchParams.get("limit") || 20)
         })
       });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/agent-shadow-runs") {
+      sendJson(response, 200, agentShadowService.listRuns({
+        limit: Number(url.searchParams.get("limit") || 20)
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/agent-shadow-runs") {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 202, agentShadowService.startRun(payload));
+      return;
+    }
+
+    const agentShadowRunMatch = url.pathname.match(/^\/api\/agent-shadow-runs\/([0-9]+)$/);
+    if (request.method === "GET" && agentShadowRunMatch) {
+      sendJson(response, 200, agentShadowService.getRun(Number(agentShadowRunMatch[1])));
+      return;
+    }
+
+    const agentShadowReviewMatch = url.pathname.match(/^\/api\/agent-shadow-items\/([0-9]+)\/reviews$/);
+    if (request.method === "POST" && agentShadowReviewMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 201, agentShadowService.addReview(Number(agentShadowReviewMatch[1]), payload));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/agent-shadow-failures") {
+      sendJson(response, 200, agentShadowService.listFailureCandidates({
+        limit: Number(url.searchParams.get("limit") || 50)
+      }));
       return;
     }
 

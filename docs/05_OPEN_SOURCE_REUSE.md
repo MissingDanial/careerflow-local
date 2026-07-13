@@ -946,6 +946,18 @@ Selected integration:
 - Reuse the M13 anonymous fixture for both deterministic CI and repeated live-model runs.
 - Keep real-model evaluation outside CI because it requires credentials, external availability, time, and token spend.
 
+### M16.1 human feedback and Shadow review
+
+Candidates checked on 2026-07-13:
+
+- `argilla-io/argilla`: LLM/data feedback collaboration, Apache-2.0, 5k+ GitHub stars. Rejected because it requires a separate Python service and data model.
+- `HumanSignal/label-studio`: general annotation platform, Apache-2.0, 27k+ stars. Rejected as too broad and operationally heavy for one local job-review workflow.
+- `langfuse/langfuse`: LLM observability, evaluation, and feedback, 31k+ stars. Rejected because it adds an external service and a second runtime data store.
+- `comet-ml/opik`: Agent tracing and evaluation, Apache-2.0, 20k+ stars. Rejected for the same deployment and data-ownership cost.
+- `promptfoo/promptfoo`: MIT, 23k+ stars, mature declarative prompt/Agent evaluation. Rejected as the core Shadow runner because application state, deterministic risk gates, confirmed-fact ownership, and evidence-bound recommendations remain project-specific.
+
+Selected integration: reuse the common pattern of versioned inputs, per-sample outcomes, human labels, and failure-case promotion without adding a runtime dependency. M16.1 stores this contract in the existing Node/SQLite backend and renders it in options advanced diagnostics. A non-`CORRECT` review becomes a local promotion candidate; anonymization and fixed-dataset edits remain explicit later steps.
+
 Provider finding:
 
 - The local credential file selected `gpt-5.5/responses`, but the provider returned 502 for HTTP Responses and 426 for WebSocket upgrades.

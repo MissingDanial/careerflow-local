@@ -84,7 +84,9 @@
     "m15:options-profile-conversation:smoke": "node scripts/m15-options-profile-conversation-smoke.js",
     "m16:real-model-agents:smoke": "node scripts/m16-real-model-agents-smoke.js",
     "m16:agent-quality-evaluation:smoke": "node scripts/m16-agent-quality-evaluation-smoke.js",
-    "m16:options-agent-quality:smoke": "node scripts/m16-options-agent-quality-smoke.js"
+    "m16:options-agent-quality:smoke": "node scripts/m16-options-agent-quality-smoke.js",
+    "m16:shadow-review:smoke": "node scripts/m16-1-agent-shadow-review-smoke.js",
+    "m16:options-shadow-review:smoke": "node scripts/m16-1-options-shadow-review-smoke.js"
   },
   "engines": {
     "node": ">=24"

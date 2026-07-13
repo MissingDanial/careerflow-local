@@ -382,8 +382,8 @@ function main() {
       ...transitionServiceSource.matchAll(/UPDATE\s+applications/gi)
     ];
     const checks = {
-      schemaVersionIsCurrent: SCHEMA_VERSION === 15
-        && Number(store.database.prepare("PRAGMA user_version").get().user_version) === 15,
+      schemaVersionIsCurrent: SCHEMA_VERSION >= 16
+        && Number(store.database.prepare("PRAGMA user_version").get().user_version) === SCHEMA_VERSION,
       rejectsIllegalJump: illegalJumpRejected?.code === "APPLICATION_TRANSITION_INVALID",
       rejectsMissingEvidence: missingEvidenceRejected?.code === "APPLICATION_TRANSITION_EVIDENCE_REQUIRED",
       requiresExplicitOperatorIdempotency: missingOperatorIdempotencyRejected?.code === "APPLICATION_TRANSITION_EVIDENCE_REQUIRED",

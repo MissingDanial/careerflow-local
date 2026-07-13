@@ -1383,3 +1383,24 @@ npm run agent:evaluate:real -- --samples 3 --delay-ms 2500
 The formal anonymous run `382ad0764126c5ff` covered 9 jobs x 3 samples. All 27 samples and 75 model stages completed. All 11 gates passed: structure/sample success 100%, risk recall/precision 100%, ranking 100%, Screening recommendation 100%, JD must-have status 100%, claim support 96.68%, Audit consistency 100%, maximum Screening standard deviation 2.357, and zero unsupported claims.
 
 This gate validates Agent behavior on the versioned anonymous fixture. It does not validate real BOSS selectors, greetings, uploads, applications, or hiring outcomes, and it creates no browser task.
+
+## 29. M16.1 Real-job Shadow Review
+
+Shadow review applies only the Screening stage to real jobs already stored locally:
+
+```text
+confirmed profile + complete local JD set
+-> freeze one profile snapshot and one job snapshot per application
+-> first-pass Screening for at most 20 jobs
+-> rank successful non-skip results
+-> repeat only Top 5 until each has three samples
+-> persist mean score, standard deviation, recommendation, telemetry, and failures
+-> user appends review labels
+-> non-CORRECT latest reviews become failure-case promotion candidates
+```
+
+The HTTP start call returns a `QUEUED` run and the backend executes it asynchronously. The options page polls the run while it is `QUEUED/RUNNING`; a backend restart marks unfinished work `AGENT_SHADOW_RUN_INTERRUPTED` instead of replaying model calls. One active Shadow run is allowed, and the hard maximum is 50 Screening samples.
+
+Review labels are append-only: `CORRECT`, `FALSE_POSITIVE`, `FALSE_NEGATIVE`, `BAD_REASON`, and `RISK_MISSED`. The latest label drives the failure-candidate view, while earlier corrections remain auditable. `BAD_REASON` and `RISK_MISSED` require a note.
+
+Shadow is isolated from the application workflow. It does not call `createScreening`, does not transition applications, does not create workflow or browser tasks, and does not open BOSS pages. A Shadow rank is evidence for user review, not authorization to greet, upload, or apply.

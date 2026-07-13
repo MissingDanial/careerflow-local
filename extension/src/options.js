@@ -114,6 +114,20 @@ const ui = {
   agentQualityLatency: document.getElementById("agentQualityLatency"),
   agentQualityGate: document.getElementById("agentQualityGate"),
   agentQualityStatus: document.getElementById("agentQualityStatus"),
+  agentShadowRunBadge: document.getElementById("agentShadowRunBadge"),
+  startAgentShadowRun: document.getElementById("startAgentShadowRun"),
+  agentShadowProgress: document.getElementById("agentShadowProgress"),
+  agentShadowSamples: document.getElementById("agentShadowSamples"),
+  agentShadowTokens: document.getElementById("agentShadowTokens"),
+  agentShadowFailures: document.getElementById("agentShadowFailures"),
+  agentShadowStatus: document.getElementById("agentShadowStatus"),
+  agentShadowItems: document.getElementById("agentShadowItems"),
+  agentShadowReviewForm: document.getElementById("agentShadowReviewForm"),
+  agentShadowReviewItem: document.getElementById("agentShadowReviewItem"),
+  agentShadowReviewLabel: document.getElementById("agentShadowReviewLabel"),
+  agentShadowCorrectedRecommendation: document.getElementById("agentShadowCorrectedRecommendation"),
+  agentShadowReviewNote: document.getElementById("agentShadowReviewNote"),
+  saveAgentShadowReview: document.getElementById("saveAgentShadowReview"),
   refreshCareerContext: document.getElementById("refreshCareerContext"),
   profileAgentPortal: document.getElementById("profileAgentPortal"),
   profileDialogSessionSelect: document.getElementById("profileDialogSessionSelect"),
@@ -245,7 +259,9 @@ const state = {
   realActionPolicy: null,
   realActionAuthorization: null,
   realActionAuthorizationToken: "",
-  agentQuality: null
+  agentQuality: null,
+  agentShadowRun: null,
+  agentShadowPollTimer: null
 };
 
 organizeOptionPanels();
@@ -515,6 +531,8 @@ ui.refreshDiagnostics.addEventListener("click", () => refreshDiagnostics());
 ui.refreshWorkflow.addEventListener("click", () => refreshWorkflowDiagnostics());
 ui.refreshScreening.addEventListener("click", () => refreshScreeningDiagnostics());
 ui.refreshAgentQuality.addEventListener("click", () => refreshAgentQualityDiagnostics());
+ui.startAgentShadowRun.addEventListener("click", startAgentShadowRun);
+ui.agentShadowReviewForm.addEventListener("submit", saveAgentShadowReview);
 ui.runRulesBatchScreening.addEventListener("click", runRulesBatchScreening);
 ui.runRiskGateRescreen.addEventListener("click", runRiskGateRescreen);
 ui.refreshCareerContext.addEventListener("click", () => refreshCareerContextDiagnostics());
@@ -578,6 +596,7 @@ async function init() {
     await refreshResumeTemplates({ silent: true });
     await refreshDiagnostics({ silent: true });
     await refreshAgentQualityDiagnostics({ silent: true });
+    await refreshAgentShadowDiagnostics({ silent: true });
     await refreshRealActionDiagnostics({ silent: true });
   } catch (error) {
     setStatus(error.message || String(error), true);
@@ -1911,6 +1930,207 @@ function renderAgentQuality(payload = {}) {
     latest ? `评测 #${latest.id}` : "暂无评测"
   ].join(" · ");
   ui.agentQualityStatus.classList.toggle("error", Boolean(latest && latest.status === "FAILED"));
+}
+
+async function refreshAgentShadowDiagnostics(options = {}) {
+  try {
+    const listed = await runtimeMessage({
+      type: "GET_AGENT_SHADOW_RUNS",
+      options: { limit: 10 }
+    });
+    const latest = listed.response?.runs?.[0] || null;
+    if (!latest) {
+      renderAgentShadow(null);
+      return;
+    }
+    const detail = await runtimeMessage({
+      type: "GET_AGENT_SHADOW_RUN",
+      runId: latest.id
+    });
+    renderAgentShadow(detail.response || null);
+  } catch (error) {
+    renderAgentShadow(null, error);
+    if (!options.silent) {
+      setStatus(error.message || String(error), true);
+    }
+  }
+}
+
+async function startAgentShadowRun() {
+  ui.startAgentShadowRun.disabled = true;
+  ui.agentShadowStatus.textContent = "正在创建 Shadow run";
+  ui.agentShadowStatus.classList.remove("error", "warn");
+  try {
+    const mode = getSelectedAgentExecutionMode();
+    const result = await runtimeMessage({
+      type: "START_AGENT_SHADOW_RUN",
+      options: {
+        mode,
+        limit: 20,
+        topK: 5,
+        samplesPerTopJob: 3,
+        requestDelayMs: mode === "rules" ? 0 : 2500
+      }
+    });
+    const runId = Number(result.response?.run?.id || 0);
+    if (!runId) {
+      throw new Error("Shadow run 未返回有效 ID");
+    }
+    const detail = await runtimeMessage({ type: "GET_AGENT_SHADOW_RUN", runId });
+    renderAgentShadow(detail.response || null);
+    setStatus(`Shadow run #${runId} 已进入队列`);
+  } catch (error) {
+    ui.startAgentShadowRun.disabled = false;
+    ui.agentShadowStatus.textContent = error.message || String(error);
+    ui.agentShadowStatus.classList.add("error");
+    setStatus(error.message || String(error), true);
+  }
+}
+
+async function saveAgentShadowReview(event) {
+  event.preventDefault();
+  const itemId = Number(ui.agentShadowReviewItem.value || 0);
+  if (!itemId) {
+    setStatus("请选择一个 Shadow 岗位", true);
+    return;
+  }
+  ui.saveAgentShadowReview.disabled = true;
+  try {
+    const result = await runtimeMessage({
+      type: "REVIEW_AGENT_SHADOW_ITEM",
+      itemId,
+      review: {
+        label: ui.agentShadowReviewLabel.value,
+        correctedRecommendation: ui.agentShadowCorrectedRecommendation.value,
+        reviewer: "local-user",
+        note: ui.agentShadowReviewNote.value.trim()
+      }
+    });
+    ui.agentShadowReviewNote.value = "";
+    await refreshAgentShadowDiagnostics({ silent: true });
+    setStatus(`Shadow 评审 #${result.response?.review?.id || ""} 已保存`.trim());
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    ui.saveAgentShadowReview.disabled = !Number(ui.agentShadowReviewItem.value || 0);
+  }
+}
+
+function renderAgentShadow(payload, error = null) {
+  if (state.agentShadowPollTimer) {
+    clearTimeout(state.agentShadowPollTimer);
+    state.agentShadowPollTimer = null;
+  }
+  if (error) {
+    state.agentShadowRun = null;
+    ui.agentShadowRunBadge.textContent = "读取失败";
+    ui.agentShadowProgress.textContent = "--";
+    ui.agentShadowSamples.textContent = "--";
+    ui.agentShadowTokens.textContent = "--";
+    ui.agentShadowFailures.textContent = "--";
+    ui.agentShadowStatus.textContent = error.message || String(error);
+    ui.agentShadowStatus.classList.add("error");
+    ui.agentShadowItems.textContent = "Shadow 数据不可用";
+    populateAgentShadowReviewItems([]);
+    ui.startAgentShadowRun.disabled = false;
+    return;
+  }
+  const run = payload?.run || null;
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  state.agentShadowRun = payload || null;
+  if (!run) {
+    ui.agentShadowRunBadge.textContent = "未运行";
+    ui.agentShadowProgress.textContent = "0/0";
+    ui.agentShadowSamples.textContent = "0";
+    ui.agentShadowTokens.textContent = "0";
+    ui.agentShadowFailures.textContent = "0";
+    ui.agentShadowStatus.textContent = "尚无 Shadow run";
+    ui.agentShadowStatus.classList.remove("error", "warn");
+    ui.agentShadowItems.textContent = "暂无 Shadow 结果";
+    populateAgentShadowReviewItems([]);
+    ui.startAgentShadowRun.disabled = false;
+    return;
+  }
+
+  const active = new Set(["QUEUED", "RUNNING"]).has(run.status);
+  const telemetry = run.telemetry || {};
+  const usage = telemetry.usage || {};
+  ui.agentShadowRunBadge.textContent = formatAgentShadowStatus(run.status);
+  ui.agentShadowProgress.textContent = `${Number(run.completedCount || 0)}/${Number(run.selectedCount || 0)}`;
+  ui.agentShadowSamples.textContent = Number(run.sampleCount || 0).toLocaleString("zh-CN");
+  ui.agentShadowTokens.textContent = Number(usage.totalTokens || 0).toLocaleString("zh-CN");
+  ui.agentShadowFailures.textContent = Number(telemetry.failedSampleCount ?? run.failedCount ?? 0).toLocaleString("zh-CN");
+  ui.agentShadowStatus.textContent = [
+    `Run #${run.id}`,
+    formatAgentExecutionMode(run.mode),
+    `${Number(run.modelInvocationCount || 0)} 次模型调用`,
+    run.errorCode || ""
+  ].filter(Boolean).join(" · ");
+  ui.agentShadowStatus.classList.toggle("error", run.status === "FAILED");
+  ui.agentShadowStatus.classList.toggle("warn", run.status === "PARTIAL");
+  ui.startAgentShadowRun.disabled = active;
+
+  renderList(ui.agentShadowItems, items.slice(0, 20), (item) => ({
+    title: `${item.rank ? `#${item.rank} ` : ""}${item.job?.title || "未命名岗位"} · ${item.job?.company || "未知公司"}`,
+    meta: [
+      item.averageMatchScore === null ? "无评分" : `均分 ${Number(item.averageMatchScore).toFixed(1)}`,
+      item.screeningScoreStddev === null ? "" : `σ ${Number(item.screeningScoreStddev).toFixed(2)}`,
+      `${item.successCount || 0}/${item.sampleCount || 0} 成功`,
+      formatScreeningRecommendation(item.recommendation),
+      item.latestReview ? formatAgentShadowReviewLabel(item.latestReview.label) : "待评审"
+    ].filter(Boolean).join(" · ")
+  }), active ? "正在等待首批结果" : "暂无可评审岗位");
+  populateAgentShadowReviewItems(active ? [] : items.filter((item) => item.successCount > 0));
+  if (active) {
+    state.agentShadowPollTimer = setTimeout(() => {
+      refreshAgentShadowDiagnostics({ silent: true });
+    }, 1500);
+  }
+}
+
+function populateAgentShadowReviewItems(items) {
+  const selected = Number(ui.agentShadowReviewItem.value || 0);
+  ui.agentShadowReviewItem.replaceChildren();
+  for (const item of items) {
+    const option = document.createElement("option");
+    option.value = String(item.id);
+    option.textContent = `${item.rank ? `#${item.rank} ` : ""}${item.job?.title || `岗位 ${item.applicationId}`}`;
+    ui.agentShadowReviewItem.appendChild(option);
+  }
+  if (items.some((item) => item.id === selected)) {
+    ui.agentShadowReviewItem.value = String(selected);
+  }
+  const disabled = items.length === 0;
+  ui.agentShadowReviewItem.disabled = disabled;
+  ui.saveAgentShadowReview.disabled = disabled;
+}
+
+function formatAgentShadowStatus(status) {
+  return ({
+    QUEUED: "排队中",
+    RUNNING: "运行中",
+    SUCCEEDED: "已完成",
+    PARTIAL: "部分完成",
+    FAILED: "失败"
+  })[status] || status || "未知";
+}
+
+function formatAgentShadowReviewLabel(label) {
+  return ({
+    CORRECT: "判断正确",
+    FALSE_POSITIVE: "误筛",
+    FALSE_NEGATIVE: "漏筛",
+    BAD_REASON: "理由错误",
+    RISK_MISSED: "遗漏风险"
+  })[label] || label || "待评审";
+}
+
+function formatScreeningRecommendation(value) {
+  return ({
+    auto_prepare: "可准备简历",
+    review_needed: "需复核",
+    skip: "跳过"
+  })[value] || value || "无推荐";
 }
 
 function formatAgentExecutionMode(mode) {

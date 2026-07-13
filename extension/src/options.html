@@ -547,6 +547,60 @@
           </div>
         </section>
 
+        <section id="agentShadowPanel" class="card wide">
+          <div class="card-title">
+            <h2>真实岗位 Shadow 评审</h2>
+            <span id="agentShadowRunBadge" class="badge">未运行</span>
+          </div>
+          <div class="button-row">
+            <button id="startAgentShadowRun" class="primary" type="button">运行 Shadow 评审</button>
+            <span class="status">20 岗位 · Top 5 × 3 · 上限 30</span>
+          </div>
+          <div class="metric-grid four">
+            <div><strong id="agentShadowProgress">0/0</strong><span>岗位进度</span></div>
+            <div><strong id="agentShadowSamples">0</strong><span>Screening</span></div>
+            <div><strong id="agentShadowTokens">0</strong><span>Token</span></div>
+            <div><strong id="agentShadowFailures">0</strong><span>失败样本</span></div>
+          </div>
+          <p id="agentShadowStatus" class="status">尚无 Shadow run</p>
+          <div class="shadow-review-layout">
+            <div>
+              <div class="list-heading">岗位排名</div>
+              <div id="agentShadowItems" class="list compact-list">暂无 Shadow 结果</div>
+            </div>
+            <form id="agentShadowReviewForm" class="shadow-review-form">
+              <label>
+                <span>岗位</span>
+                <select id="agentShadowReviewItem" disabled></select>
+              </label>
+              <label>
+                <span>评审结论</span>
+                <select id="agentShadowReviewLabel">
+                  <option value="CORRECT">判断正确</option>
+                  <option value="FALSE_POSITIVE">误筛为匹配</option>
+                  <option value="FALSE_NEGATIVE">漏筛</option>
+                  <option value="BAD_REASON">理由错误</option>
+                  <option value="RISK_MISSED">遗漏风险</option>
+                </select>
+              </label>
+              <label>
+                <span>修正推荐</span>
+                <select id="agentShadowCorrectedRecommendation">
+                  <option value="">不修改</option>
+                  <option value="auto_prepare">可进入简历准备</option>
+                  <option value="review_needed">需要人工复核</option>
+                  <option value="skip">跳过</option>
+                </select>
+              </label>
+              <label class="shadow-review-note">
+                <span>修正备注</span>
+                <input id="agentShadowReviewNote" type="text" autocomplete="off">
+              </label>
+              <button id="saveAgentShadowReview" class="secondary" type="submit" disabled>保存评审</button>
+            </form>
+          </div>
+        </section>
+
         <section class="card">
           <div class="card-title">
             <h2>最近异常</h2>

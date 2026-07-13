@@ -19,7 +19,7 @@ try {
   throw new Error("SQLite storage requires Node.js with node:sqlite support. Use Node.js 24 or newer for this project.");
 }
 
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 16;
 const DEFAULT_DB_NAME = "boss_find.sqlite3";
 
 function createJobStore(options = {}) {
@@ -194,6 +194,8 @@ class SqliteJobStore {
     const workflowRunCount = this.database.prepare("SELECT COUNT(*) AS count FROM workflow_runs").get().count;
     const workflowInputSnapshotCount = this.database.prepare("SELECT COUNT(*) AS count FROM workflow_input_snapshots").get().count;
     const agentEvaluationRunCount = this.database.prepare("SELECT COUNT(*) AS count FROM agent_evaluation_runs").get().count;
+    const agentShadowRunCount = this.database.prepare("SELECT COUNT(*) AS count FROM agent_shadow_runs").get().count;
+    const agentShadowReviewCount = this.database.prepare("SELECT COUNT(*) AS count FROM agent_shadow_reviews").get().count;
     const openWorkflowErrorCount = this.database.prepare(`
       SELECT COUNT(*) AS count
       FROM workflow_events
@@ -243,6 +245,8 @@ class SqliteJobStore {
       workflowRunCount: Number(workflowRunCount || 0),
       workflowInputSnapshotCount: Number(workflowInputSnapshotCount || 0),
       agentEvaluationRunCount: Number(agentEvaluationRunCount || 0),
+      agentShadowRunCount: Number(agentShadowRunCount || 0),
+      agentShadowReviewCount: Number(agentShadowReviewCount || 0),
       openWorkflowErrorCount: Number(openWorkflowErrorCount || 0),
       latestQuality: this.getLatestQuality(),
       lastBatch: this.getLastBatch()

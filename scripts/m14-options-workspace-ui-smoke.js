@@ -192,6 +192,27 @@ async function installChromeMock(page) {
       riskGateEnabled: true,
       excludedDirections: ["销售", "直播"]
     };
+    const shadowRun = {
+      id: 8,
+      status: "SUCCEEDED",
+      mode: "hybrid",
+      selectedCount: 3,
+      completedCount: 3,
+      failedCount: 0,
+      sampleCount: 7,
+      modelInvocationCount: 7,
+      telemetry: {
+        usage: { totalTokens: 4200 },
+        failedSampleCount: 0
+      },
+      options: { limit: 20, topK: 2, samplesPerTopJob: 3, plannedSampleCount: 7 }
+    };
+    const shadowItems = [
+      shadowItem(801, 1, 92, 1.25, "auto_prepare", applications[3]),
+      shadowItem(802, 2, 86, 2.5, "review_needed", applications[1]),
+      shadowItem(803, 3, 72, 0, "review_needed", applications[0])
+    ];
+    let shadowReviewId = 900;
 
     function responseFor(message) {
       calls.push(message);
@@ -243,6 +264,32 @@ async function installChromeMock(page) {
               }]
             }
           };
+        case "GET_AGENT_SHADOW_RUNS":
+          return { response: { totalRuns: 1, runs: [structuredClone(shadowRun)] } };
+        case "GET_AGENT_SHADOW_RUN":
+          return { response: { run: structuredClone(shadowRun), items: structuredClone(shadowItems) } };
+        case "START_AGENT_SHADOW_RUN":
+          shadowRun.status = "SUCCEEDED";
+          return { response: { accepted: true, run: structuredClone(shadowRun) } };
+        case "REVIEW_AGENT_SHADOW_ITEM": {
+          const item = shadowItems.find((candidate) => candidate.id === Number(message.itemId));
+          const review = {
+            id: ++shadowReviewId,
+            shadowItemId: Number(message.itemId),
+            label: message.review?.label || "CORRECT",
+            correctedRecommendation: message.review?.correctedRecommendation || "",
+            reviewer: message.review?.reviewer || "local-user",
+            note: message.review?.note || "",
+            createdAt: "2026-07-13T10:00:00.000Z"
+          };
+          if (item) {
+            item.reviews.unshift(review);
+            item.latestReview = review;
+          }
+          return { response: { review: structuredClone(review) } };
+        }
+        case "GET_AGENT_SHADOW_FAILURES":
+          return { response: { failureCandidates: [] } };
         case "GET_CAREER_CONTEXT":
           return { response: { ok: true, careerContext: null, freshness: { status: "MISSING", isFresh: false }, missingQuestions: [] } };
         case "GET_PROFILE_FACT_DRAFTS":
@@ -305,6 +352,28 @@ async function installChromeMock(page) {
         company,
         provider: "rules",
         createdAt: "2026-07-11T10:00:00.000Z"
+      };
+    }
+
+    function shadowItem(id, rank, averageMatchScore, screeningScoreStddev, recommendation, sourceApplication) {
+      return {
+        id,
+        rank,
+        applicationId: sourceApplication.id,
+        status: "SUCCEEDED",
+        sampleCount: rank <= 2 ? 3 : 1,
+        successCount: rank <= 2 ? 3 : 1,
+        averageMatchScore,
+        screeningScoreStddev,
+        maxRiskScore: 100 - averageMatchScore,
+        recommendation,
+        job: {
+          title: sourceApplication.title,
+          company: sourceApplication.company,
+          location: sourceApplication.location
+        },
+        reviews: [],
+        latestReview: null
       };
     }
 

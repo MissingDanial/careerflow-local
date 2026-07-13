@@ -344,6 +344,32 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
+.shadow-review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.shadow-review-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfdff;
+}
+
+.shadow-review-form .shadow-review-note,
+.shadow-review-form button {
+  grid-column: 1 / -1;
+}
+
+.shadow-review-form button {
+  justify-self: start;
+}
+
 .list-heading {
   margin-bottom: 8px;
   color: var(--muted);
@@ -785,6 +811,8 @@ button:disabled {
   .screening-grid,
   .diagnostic-grid,
   .workflow-grid,
+  .shadow-review-layout,
+  .shadow-review-form,
   .detail-grid,
   .editor-grid,
   .fact-draft-editor,

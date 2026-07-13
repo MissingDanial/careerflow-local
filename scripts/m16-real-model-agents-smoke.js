@@ -61,7 +61,7 @@ async function main() {
     const calibratedScreening = assertHybridRecommendationCalibration();
     const noSummaryAudit = assertNoSummaryResumeIsValid();
     const checks = {
-      schemaMigratedToM16: SCHEMA_VERSION === 15 && store.getStats().schemaVersion === 15,
+      schemaMigratedToM16: SCHEMA_VERSION >= 15 && store.getStats().schemaVersion === SCHEMA_VERSION,
       hybridGraphCompletes: result.ok === true && result.resumeAudit?.recommendation === "approve",
       hybridGraphUsesExpectedModelAgents: modelRuns.length === 4
         && modelRuns.every((run) => run.provider === "hybrid"),

@@ -103,6 +103,9 @@ SQLite schema 管理：
 - schema v11 的 `011_workflow_input_snapshots.sql` 新增业务级不可变运行输入，不依赖 LangGraph checkpoint 表。
 - schema v12 的 `012_application_transition_invariants.sql` 新增 application transition 幂等键和 browser task 过期、尝试次数、claim token 字段。
 - schema v15 的 `015_agent_model_quality.sql` 为 `agent_runs` 增加模型遥测，并新增 `agent_evaluation_runs` 保存真实模型评测状态、指标、报告和错误。
+- schema v16 的 `016_agent_shadow_review.sql` 新增 `agent_shadow_runs/items/samples/reviews`，保存真实岗位 Shadow 的冻结输入引用、重复采样、排名、遥测和追加式人工纠正。
+- `AgentShadowService` 以异步后台 run 执行 Screening，启动请求立即返回并由设置页轮询；进程重启后未完成 run 会标记为 `AGENT_SHADOW_RUN_INTERRUPTED`，不会静默续跑。
+- Shadow 使用独立表，不调用正式 screening 持久化和 application transition，也不写 `browser_tasks`。
 
 不可变工作流输入：
 

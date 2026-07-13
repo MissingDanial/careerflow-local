@@ -85,6 +85,16 @@ async function handleMessage(message, sender) {
       return fetchAgentRuns(message.options || message.limit || 8);
     case "GET_AGENT_QUALITY":
       return fetchAgentQuality(message.options || {});
+    case "GET_AGENT_SHADOW_RUNS":
+      return fetchAgentShadowRuns(message.options || {});
+    case "GET_AGENT_SHADOW_RUN":
+      return fetchAgentShadowRun(message.runId || message.id);
+    case "START_AGENT_SHADOW_RUN":
+      return startAgentShadowRun(message.options || {});
+    case "REVIEW_AGENT_SHADOW_ITEM":
+      return reviewAgentShadowItem(message.itemId || message.id, message.review || message.options || {});
+    case "GET_AGENT_SHADOW_FAILURES":
+      return fetchAgentShadowFailures(message.options || {});
     case "GET_CAREER_CONTEXT":
       return fetchCareerContext();
     case "GENERATE_CAREER_CONTEXT":
@@ -1259,6 +1269,83 @@ async function fetchAgentQuality(options = {}) {
       method: "GET",
       token: settings.token,
       errorPrefix: "Agent 质量读取失败"
+    })
+  };
+}
+
+async function fetchAgentShadowRuns(options = {}) {
+  const settings = await getSettings();
+  const runsUrl = new URL("/api/agent-shadow-runs", ensureTrailingSlash(settings.backendUrl));
+  runsUrl.searchParams.set("limit", String(clampNumber(options.limit, 1, 100, 20)));
+  return {
+    endpoint: runsUrl.toString(),
+    response: await backendJson(runsUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "Shadow 评审读取失败"
+    })
+  };
+}
+
+async function fetchAgentShadowRun(runId) {
+  const id = Number(runId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("缺少有效的 Shadow run ID");
+  }
+  const settings = await getSettings();
+  const runUrl = new URL(`/api/agent-shadow-runs/${id}`, ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: runUrl,
+    response: await backendJson(runUrl, {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "Shadow 评审详情读取失败"
+    })
+  };
+}
+
+async function startAgentShadowRun(options = {}) {
+  const settings = await getSettings();
+  const runUrl = new URL("/api/agent-shadow-runs", ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: runUrl,
+    response: await backendJson(runUrl, {
+      method: "POST",
+      token: settings.token,
+      body: options,
+      errorPrefix: "Shadow 评审启动失败"
+    })
+  };
+}
+
+async function reviewAgentShadowItem(itemId, review = {}) {
+  const id = Number(itemId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("缺少有效的 Shadow item ID");
+  }
+  const settings = await getSettings();
+  const reviewUrl = new URL(`/api/agent-shadow-items/${id}/reviews`, ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: reviewUrl,
+    response: await backendJson(reviewUrl, {
+      method: "POST",
+      token: settings.token,
+      body: review,
+      errorPrefix: "Shadow 人工评审保存失败"
+    })
+  };
+}
+
+async function fetchAgentShadowFailures(options = {}) {
+  const settings = await getSettings();
+  const failuresUrl = new URL("/api/agent-shadow-failures", ensureTrailingSlash(settings.backendUrl));
+  failuresUrl.searchParams.set("limit", String(clampNumber(options.limit, 1, 200, 50)));
+  return {
+    endpoint: failuresUrl.toString(),
+    response: await backendJson(failuresUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "Shadow 失败样本读取失败"
     })
   };
 }
