@@ -77,9 +77,27 @@ async function main() {
               maxCachedJobs: 500,
               crawlMaxJobs: 30,
               crawlDelayMs: 1600,
+              activeApplicationQueueId: 1,
               riskGateEnabled: false,
               excludedDirections: []
             };
+          case "GET_APPLICATION_QUEUES":
+            return {
+              response: {
+                queues: [{
+                  id: 1,
+                  name: "默认意向",
+                  isDefault: true,
+                  totalApplications: 0,
+                  completeApplicationCount: 0,
+                  pendingApplications: 0,
+                  attentionApplications: 0,
+                  missingDescriptionCount: 0
+                }]
+              }
+            };
+          case "GET_APPLICATIONS":
+            return { response: { queueId: 1, applications: [], totalApplications: 0 } };
           case "GET_CACHE":
             return { jobs: [], pages: {}, stats: {} };
           case "GET_QUALITY":

@@ -62,7 +62,8 @@ function main() {
     backgroundHandlesJobKeysMessage: backgroundJs.includes('case "GET_JOB_KEYS"') && backgroundJs.includes("/api/jobs/keys?described="),
     backgroundCallsQualityEndpoint: backgroundJs.includes("/api/quality?limit=1"),
     backgroundCallsEventsEndpoint: backgroundJs.includes("/api/events?limit="),
-    backgroundCallsMissingEndpoint: backgroundJs.includes("/api/jobs/missing-descriptions?limit="),
+    backgroundCallsMissingEndpoint: backgroundJs.includes('new URL("/api/jobs/missing-descriptions"')
+      && backgroundJs.includes('missingUrl.searchParams.set("limit"'),
     popupSeedsAutoCrawlProgress: popupJs.includes("completedJobKeys: mergeUniqueStrings(getDescribedJobKeys(cache), backendKeys)"),
     cssHasSimplifiedPopup: popupCss.includes(".summary-grid") && popupCss.includes(".visually-hidden"),
     optionsHasDiagnosticsLayout: optionsCss.includes(".metric-grid") && optionsCss.includes(".list-item") && optionsCss.includes(".preview"),

@@ -377,10 +377,8 @@ function main() {
 
     const sqliteStoreSource = read("server/src/sqlite-store.js");
     const transitionServiceSource = read("server/src/services/application-transition-service.js");
-    const updateApplicationMatches = [
-      ...sqliteStoreSource.matchAll(/UPDATE\s+applications/gi),
-      ...transitionServiceSource.matchAll(/UPDATE\s+applications/gi)
-    ];
+    const sqliteApplicationUpdates = [...sqliteStoreSource.matchAll(/UPDATE\s+applications/gi)];
+    const transitionApplicationUpdates = [...transitionServiceSource.matchAll(/UPDATE\s+applications/gi)];
     const checks = {
       schemaVersionIsCurrent: SCHEMA_VERSION >= 16
         && Number(store.database.prepare("PRAGMA user_version").get().user_version) === SCHEMA_VERSION,
@@ -422,9 +420,11 @@ function main() {
         && expiredClaim.expiredCount === 1
         && expiredAfterClaim.status === "FAILED"
         && expiredAfterClaim.errorMessage === "TASK_EXPIRED",
-      singleApplicationUpdateOwner: updateApplicationMatches.length === 1
-        && transitionServiceSource.includes("UPDATE applications")
-        && !sqliteStoreSource.match(/UPDATE\s+applications/i)
+      singleApplicationStatusUpdateOwner: transitionApplicationUpdates.length === 1
+        && /UPDATE\s+applications\s+SET\s+status\s*=/i.test(transitionServiceSource)
+        && !/UPDATE\s+applications\s+SET\s+status\s*=/i.test(sqliteStoreSource),
+      manualApplicationProgressIsNarrowUpdate: sqliteApplicationUpdates.length === 1
+        && /UPDATE\s+applications\s+SET\s+manual_status\s*=/i.test(sqliteStoreSource)
     };
 
     console.log(JSON.stringify({

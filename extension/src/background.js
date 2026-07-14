@@ -1,6 +1,7 @@
 const SETTINGS_KEY = "bossFindSettings";
 const CACHE_KEY = "bossFindCaptureCache";
 const LAST_BOSS_PAGE_KEY = "bossFindLastBossPage";
+const NATIVE_HOST_NAME = "com.careerflow.local";
 
 const DEFAULT_SETTINGS = {
   backendUrl: "http://127.0.0.1:8787",
@@ -12,7 +13,9 @@ const DEFAULT_SETTINGS = {
   crawlDelayMs: 1600,
   crawlMaxJobs: 30,
   resumeTemplateName: "resume-to-word-campus-product-v1",
+  resumeOutputDir: "",
   agentExecutionMode: "hybrid",
+  activeApplicationQueueId: null,
   riskGateEnabled: false,
   excludedDirections: []
 };
@@ -50,6 +53,10 @@ async function handleMessage(message, sender) {
       return getSettings();
     case "SAVE_SETTINGS":
       return saveSettings(message.settings || {});
+    case "GET_BACKEND_STATUS":
+      return getBackendRuntimeStatus();
+    case "START_BACKEND":
+      return startBackendRuntime();
     case "CACHE_CAPTURE":
       return mergeCapture(message.capture, sender.tab);
     case "GET_CACHE":
@@ -74,17 +81,43 @@ async function handleMessage(message, sender) {
     case "REQUEUE_BROWSER_TASKS":
       return requeueBrowserTasks(message.options || {});
     case "GET_MISSING_DESCRIPTIONS":
-      return fetchMissingDescriptions(message.limit || 5);
+      return fetchMissingDescriptions(message.options || message.limit || 5);
+    case "GET_APPLICATION_QUEUES":
+      return fetchApplicationQueues(message.options || {});
+    case "CREATE_APPLICATION_QUEUE":
+      return createApplicationQueue(message.queue || message.options || {});
+    case "ARCHIVE_APPLICATION_QUEUE":
+      return archiveApplicationQueue(message.queueId);
+    case "REMOVE_APPLICATION_QUEUE_ITEMS":
+      return removeApplicationQueueItems(message.queueId, message.options || {});
+    case "TRUST_APPLICATION_QUEUE_ITEM":
+      return trustApplicationQueueItem(message.queueId, message.applicationId, message.options || {});
+    case "REMOVE_MISSING_DESCRIPTION_ITEMS":
+      return removeMissingDescriptionItems(message.queueId, message.options || {});
     case "GET_APPLICATIONS":
       return fetchApplications(message.options || message.limit || 50);
+    case "UPDATE_MANUAL_APPLICATION_STATUS":
+      return updateManualApplicationStatus(message.applicationId, message.options || {});
     case "GET_SCREENING_CANDIDATES":
       return fetchScreeningCandidates(message.options || message.limit || 8);
     case "GET_SCREENINGS":
       return fetchScreenings(message.options || message.limit || 8);
     case "GET_AGENT_RUNS":
       return fetchAgentRuns(message.options || message.limit || 8);
+    case "GET_PROFILE_RESUME_SOURCES":
+      return fetchProfileResumeSources(message.options || message.limit || 20);
+    case "IMPORT_PROFILE_RESUME":
+      return importProfileResume(message.resume || message.options || {});
+    case "CREATE_PROFILE_RESUME_DRAFTS":
+      return createProfileResumeDrafts(message.resumeSourceId || message.id);
     case "GET_AGENT_QUALITY":
       return fetchAgentQuality(message.options || {});
+    case "GET_MODEL_CONFIG":
+      return fetchModelConfig();
+    case "SAVE_MODEL_CONFIG":
+      return saveModelConfig(message.config || message.options || {});
+    case "TEST_MODEL_CONFIG":
+      return testModelConfig();
     case "GET_AGENT_SHADOW_RUNS":
       return fetchAgentShadowRuns(message.options || {});
     case "GET_AGENT_SHADOW_RUN":
@@ -232,7 +265,11 @@ async function saveSettings(settings) {
     crawlDelayMs: clampNumber(settings.crawlDelayMs, 800, 8000, current.crawlDelayMs),
     crawlMaxJobs: clampNumber(settings.crawlMaxJobs, 1, 100, current.crawlMaxJobs),
     resumeTemplateName: normalizeResumeTemplateName(settings.resumeTemplateName ?? current.resumeTemplateName),
+    resumeOutputDir: String(settings.resumeOutputDir ?? current.resumeOutputDir ?? "").trim().slice(0, 1000),
     agentExecutionMode: normalizeAgentExecutionMode(settings.agentExecutionMode ?? current.agentExecutionMode),
+    activeApplicationQueueId: positiveInteger(
+      settings.activeApplicationQueueId ?? current.activeApplicationQueueId
+    ) || null,
     riskGateEnabled: parseBoolean(settings.riskGateEnabled, current.riskGateEnabled),
     excludedDirections: normalizeDelimitedStringArray(settings.excludedDirections ?? current.excludedDirections)
   };
@@ -261,6 +298,7 @@ async function syncCache(optionalCapture) {
   const syncUrl = new URL(settings.syncPath, ensureTrailingSlash(settings.backendUrl)).toString();
   const payload = {
     source: "boss-find-extension",
+    queueId: positiveInteger(settings.activeApplicationQueueId) || null,
     exportedAt: new Date().toISOString(),
     stats: {
       jobCount: jobs.length,
@@ -445,38 +483,327 @@ async function setLastBossPage(page = {}) {
   return next;
 }
 
-async function fetchMissingDescriptions(limit = 5) {
+async function fetchMissingDescriptions(options = 5) {
   const settings = await getSettings();
-  const jobLimit = clampNumber(limit, 1, 20, 5);
-  const missingUrl = new URL(`/api/jobs/missing-descriptions?limit=${jobLimit}`, ensureTrailingSlash(settings.backendUrl)).toString();
-  const headers = {};
-  if (settings.token) {
-    headers.Authorization = `Bearer ${settings.token}`;
+  const normalizedOptions = typeof options === "object" && options !== null
+    ? options
+    : { limit: options };
+  const jobLimit = clampNumber(normalizedOptions.limit, 1, 200, 5);
+  const queueId = positiveInteger(
+    normalizedOptions.queueId || settings.activeApplicationQueueId
+  );
+  const missingUrl = new URL("/api/jobs/missing-descriptions", ensureTrailingSlash(settings.backendUrl));
+  missingUrl.searchParams.set("limit", String(jobLimit));
+  if (queueId) {
+    missingUrl.searchParams.set("queueId", String(queueId));
   }
-
-  const response = await fetch(missingUrl, {
+  const data = await backendJson(missingUrl.toString(), {
     method: "GET",
-    headers
+    token: settings.token,
+    errorPrefix: "待补 JD 队列读取失败"
   });
-  const text = await response.text();
-  let data = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { raw: text };
-    }
-  }
-
-  if (!response.ok) {
-    const message = data?.error || data?.message || `待补 JD 队列读取失败：HTTP ${response.status}`;
-    throw new Error(message);
-  }
 
   return {
-    endpoint: missingUrl,
+    endpoint: missingUrl.toString(),
+    queueId: Number(data?.queueId || queueId || 0) || null,
     totalMissingDescriptions: Number(data?.totalMissingDescriptions || 0),
     jobs: Array.isArray(data?.jobs) ? data.jobs : []
+  };
+}
+
+async function getBackendRuntimeStatus() {
+  const settings = await getSettings();
+  const backendUrl = ensureTrailingSlash(settings.backendUrl).replace(/\/$/, "");
+  try {
+    const health = await fetchWithTimeout(`${backendUrl}/health`, {
+      method: "GET",
+      headers: settings.token ? { Authorization: `Bearer ${settings.token}` } : {}
+    }, 1000);
+    if (health.ok) {
+      const model = await backendJson(`${backendUrl}/api/model-config`, {
+        method: "GET",
+        token: settings.token,
+        errorPrefix: "模型配置读取失败"
+      }).catch(() => null);
+      return {
+        ok: true,
+        running: true,
+        backendUrl,
+        nativeHostAvailable: null,
+        modelConfig: model?.config || null
+      };
+    }
+  } catch {
+    // Fall through to Native Messaging status so the UI can distinguish installation errors.
+  }
+  try {
+    const native = await sendNativeHostMessage({ command: "STATUS" });
+    return {
+      ...native,
+      nativeHostAvailable: true
+    };
+  } catch (error) {
+    return {
+      ok: true,
+      running: false,
+      backendUrl,
+      nativeHostAvailable: false,
+      errorCode: error.code || "NATIVE_HOST_UNAVAILABLE",
+      error: error.message || String(error)
+    };
+  }
+}
+
+async function startBackendRuntime() {
+  let response;
+  try {
+    response = await sendNativeHostMessage({ command: "START_BACKEND" });
+  } catch (error) {
+    const wrapped = new Error(
+      `${error.message || "本地启动器不可用"}。请在项目目录运行 npm run native:install 后重新加载扩展。`
+    );
+    wrapped.code = error.code || "NATIVE_HOST_UNAVAILABLE";
+    throw wrapped;
+  }
+  if (!response?.ok || !response.running) {
+    const error = new Error(response?.error || "后端启动失败");
+    error.code = response?.errorCode || "BACKEND_START_FAILED";
+    throw error;
+  }
+  const settings = await getSettings();
+  const saved = await saveSettings({
+    backendUrl: response.backendUrl || settings.backendUrl,
+    token: response.token || settings.token
+  });
+  return {
+    ...response,
+    backendUrl: saved.backendUrl,
+    nativeHostAvailable: true
+  };
+}
+
+function sendNativeHostMessage(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, message, (response) => {
+      const runtimeError = chrome.runtime.lastError;
+      if (runtimeError) {
+        const error = new Error(runtimeError.message || "Native Messaging Host is unavailable");
+        error.code = "NATIVE_HOST_UNAVAILABLE";
+        reject(error);
+        return;
+      }
+      if (!response) {
+        const error = new Error("Native Messaging Host returned no response");
+        error.code = "NATIVE_HOST_EMPTY_RESPONSE";
+        reject(error);
+        return;
+      }
+      if (response.ok === false) {
+        const error = new Error(response.error || "Native Messaging Host failed");
+        error.code = response.errorCode || "NATIVE_HOST_FAILED";
+        reject(error);
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchApplicationQueues(options = {}) {
+  const settings = await getSettings();
+  const queuesUrl = new URL("/api/application-queues", ensureTrailingSlash(settings.backendUrl));
+  if (options.includeArchived) {
+    queuesUrl.searchParams.set("includeArchived", "1");
+  }
+  return {
+    endpoint: queuesUrl.toString(),
+    response: await backendJson(queuesUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "岗位队列读取失败"
+    })
+  };
+}
+
+async function createApplicationQueue(queue = {}) {
+  const settings = await getSettings();
+  const queuesUrl = new URL("/api/application-queues", ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: queuesUrl,
+    response: await backendJson(queuesUrl, {
+      method: "POST",
+      token: settings.token,
+      body: queue,
+      errorPrefix: "岗位队列创建失败"
+    })
+  };
+}
+
+async function archiveApplicationQueue(queueId) {
+  const id = positiveInteger(queueId);
+  if (!id) {
+    throw new Error("缺少有效的岗位队列 ID");
+  }
+  const settings = await getSettings();
+  const queueUrl = new URL(`/api/application-queues/${id}`, ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: queueUrl,
+    response: await backendJson(queueUrl, {
+      method: "DELETE",
+      token: settings.token,
+      errorPrefix: "岗位队列删除失败"
+    })
+  };
+}
+
+async function removeApplicationQueueItems(queueId, options = {}) {
+  const id = positiveInteger(queueId);
+  if (!id) {
+    throw new Error("缺少有效的岗位队列 ID");
+  }
+  const settings = await getSettings();
+  const removeUrl = new URL(
+    `/api/application-queues/${id}/remove-applications`,
+    ensureTrailingSlash(settings.backendUrl)
+  ).toString();
+  return {
+    endpoint: removeUrl,
+    response: await backendJson(removeUrl, {
+      method: "POST",
+      token: settings.token,
+      body: options,
+      errorPrefix: "岗位批量移除失败"
+    })
+  };
+}
+
+async function removeMissingDescriptionItems(queueId, options = {}) {
+  const id = positiveInteger(queueId);
+  if (!id) {
+    throw new Error("缺少有效的岗位队列 ID");
+  }
+  const settings = await getSettings();
+  const removeUrl = new URL(
+    `/api/application-queues/${id}/remove-missing-descriptions`,
+    ensureTrailingSlash(settings.backendUrl)
+  ).toString();
+  return {
+    endpoint: removeUrl,
+    response: await backendJson(removeUrl, {
+      method: "POST",
+      token: settings.token,
+      body: options,
+      errorPrefix: "待补 JD 清理失败"
+    })
+  };
+}
+
+async function trustApplicationQueueItem(queueId, applicationId, options = {}) {
+  const resolvedQueueId = positiveInteger(queueId);
+  const resolvedApplicationId = positiveInteger(applicationId);
+  if (!resolvedQueueId || !resolvedApplicationId) {
+    throw new Error("缺少有效的岗位队列或岗位 ID");
+  }
+  const settings = await getSettings();
+  const trustUrl = new URL(
+    `/api/application-queues/${resolvedQueueId}/applications/${resolvedApplicationId}/trust`,
+    ensureTrailingSlash(settings.backendUrl)
+  ).toString();
+  return {
+    endpoint: trustUrl,
+    response: await backendJson(trustUrl, {
+      method: "POST",
+      token: settings.token,
+      body: options,
+      errorPrefix: "岗位信任设置失败"
+    })
+  };
+}
+
+async function updateManualApplicationStatus(applicationId, options = {}) {
+  const id = positiveInteger(applicationId);
+  if (!id) {
+    throw new Error("缺少有效的岗位 ID");
+  }
+  const settings = await getSettings();
+  const statusUrl = new URL(
+    `/api/applications/${id}/manual-status`,
+    ensureTrailingSlash(settings.backendUrl)
+  ).toString();
+  return {
+    endpoint: statusUrl,
+    response: await backendJson(statusUrl, {
+      method: "POST",
+      token: settings.token,
+      body: options,
+      errorPrefix: "人工投递状态保存失败"
+    })
+  };
+}
+
+async function fetchProfileResumeSources(options = 20) {
+  const settings = await getSettings();
+  const normalizedOptions = typeof options === "object" && options !== null
+    ? options
+    : { limit: options };
+  const limit = clampNumber(normalizedOptions.limit, 1, 100, 20);
+  const sourcesUrl = new URL("/api/profile/resume-sources", ensureTrailingSlash(settings.backendUrl));
+  sourcesUrl.searchParams.set("limit", String(limit));
+  return {
+    endpoint: sourcesUrl.toString(),
+    response: await backendJson(sourcesUrl.toString(), {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "简历来源读取失败"
+    })
+  };
+}
+
+async function importProfileResume(resume = {}) {
+  const settings = await getSettings();
+  const extractUrl = new URL(
+    "/api/profile/resume-sources/extract",
+    ensureTrailingSlash(settings.backendUrl)
+  ).toString();
+  return {
+    endpoint: extractUrl,
+    response: await backendJson(extractUrl, {
+      method: "POST",
+      token: settings.token,
+      body: resume,
+      errorPrefix: "简历识别失败"
+    })
+  };
+}
+
+async function createProfileResumeDrafts(resumeSourceId) {
+  const id = positiveInteger(resumeSourceId);
+  if (!id) {
+    throw new Error("缺少有效的简历来源 ID");
+  }
+  const settings = await getSettings();
+  const draftsUrl = new URL(
+    `/api/profile/resume-sources/${id}/drafts`,
+    ensureTrailingSlash(settings.backendUrl)
+  ).toString();
+  return {
+    endpoint: draftsUrl,
+    response: await backendJson(draftsUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {},
+      errorPrefix: "简历事实草稿生成失败"
+    })
   };
 }
 
@@ -492,6 +819,10 @@ async function fetchScreeningCandidates(options = 8) {
   candidatesUrl.searchParams.set("minDescriptionLength", String(minDescriptionLength));
   if (normalizedOptions.includeAlreadyScreened) {
     candidatesUrl.searchParams.set("includeAlreadyScreened", "1");
+  }
+  const queueId = positiveInteger(normalizedOptions.queueId || settings.activeApplicationQueueId);
+  if (queueId) {
+    candidatesUrl.searchParams.set("queueId", String(queueId));
   }
   const statuses = Array.isArray(normalizedOptions.statuses)
     ? normalizedOptions.statuses
@@ -516,8 +847,20 @@ async function fetchApplications(options = 50) {
     ? options
     : { limit: options };
   const applicationLimit = clampNumber(normalizedOptions.limit, 1, 500, 50);
+  const queueId = positiveInteger(
+    normalizedOptions.queueId || settings.activeApplicationQueueId
+  );
   const applicationsUrl = new URL("/api/applications", ensureTrailingSlash(settings.backendUrl));
   applicationsUrl.searchParams.set("limit", String(applicationLimit));
+  if (queueId) {
+    applicationsUrl.searchParams.set("queueId", String(queueId));
+  }
+  if (normalizedOptions.completeDescriptionOnly) {
+    applicationsUrl.searchParams.set("completeDescriptionOnly", "1");
+  }
+  if (normalizedOptions.manualStatus) {
+    applicationsUrl.searchParams.set("manualStatus", String(normalizedOptions.manualStatus));
+  }
   return {
     endpoint: applicationsUrl.toString(),
     response: await backendJson(applicationsUrl.toString(), {
@@ -1269,6 +1612,47 @@ async function fetchAgentQuality(options = {}) {
       method: "GET",
       token: settings.token,
       errorPrefix: "Agent 质量读取失败"
+    })
+  };
+}
+
+async function fetchModelConfig() {
+  const settings = await getSettings();
+  const configUrl = new URL("/api/model-config", ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: configUrl,
+    response: await backendJson(configUrl, {
+      method: "GET",
+      token: settings.token,
+      errorPrefix: "模型配置读取失败"
+    })
+  };
+}
+
+async function saveModelConfig(config = {}) {
+  const settings = await getSettings();
+  const configUrl = new URL("/api/model-config", ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: configUrl,
+    response: await backendJson(configUrl, {
+      method: "PUT",
+      token: settings.token,
+      body: config,
+      errorPrefix: "模型配置保存失败"
+    })
+  };
+}
+
+async function testModelConfig() {
+  const settings = await getSettings();
+  const testUrl = new URL("/api/model-config/test", ensureTrailingSlash(settings.backendUrl)).toString();
+  return {
+    endpoint: testUrl,
+    response: await backendJson(testUrl, {
+      method: "POST",
+      token: settings.token,
+      body: {},
+      errorPrefix: "模型连接测试失败"
     })
   };
 }
@@ -2183,6 +2567,11 @@ function clampNumber(value, min, max, fallback) {
     return fallback;
   }
   return Math.min(max, Math.max(min, Math.round(parsed)));
+}
+
+function positiveInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : 0;
 }
 
 function parseBoolean(value, fallback) {

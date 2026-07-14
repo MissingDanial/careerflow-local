@@ -37,19 +37,6 @@ async function main() {
       fullPage: true
     });
 
-    await page.locator("#startAgentShadowRun").click();
-    await page.waitForFunction(() => window.__bossFindWorkspaceSmoke.calls.some((call) => call.type === "START_AGENT_SHADOW_RUN"));
-    await page.locator("#agentShadowReviewItem").selectOption("802");
-    await page.locator("#agentShadowReviewLabel").selectOption("BAD_REASON");
-    await page.locator("#agentShadowCorrectedRecommendation").selectOption("review_needed");
-    await page.locator("#agentShadowReviewNote").fill("模型理由遗漏了关键用户研究证据。");
-    await page.locator("#saveAgentShadowReview").click();
-    await page.waitForFunction(() => window.__bossFindWorkspaceSmoke.calls.some((call) => (
-      call.type === "REVIEW_AGENT_SHADOW_ITEM" && call.review?.label === "BAD_REASON"
-    )));
-    await page.waitForFunction(() => document.querySelector("#agentShadowItems")?.textContent.includes("理由错误"));
-    const reviewed = await inspectShadowPanel(page);
-
     await page.setViewportSize({ width: 390, height: 844 });
     const mobile = await inspectShadowPanel(page);
     await page.screenshot({
@@ -58,22 +45,20 @@ async function main() {
     });
     const calls = await page.evaluate(() => window.__bossFindWorkspaceSmoke.calls);
     const checks = {
-      shadowPanelLivesInAdvancedDiagnostics: desktop.settingsVisible && desktop.advancedOpen && desktop.panelVisible,
+      shadowPanelIsRetainedButHiddenFromUsers: desktop.settingsVisible
+        && desktop.advancedOpen
+        && desktop.panelRetained
+        && !desktop.panelVisible,
       defaultBudgetIsVisible: desktop.budget.includes("20 岗位") && desktop.budget.includes("上限 30"),
-      persistedRunMetricsRender: desktop.progress === "3/3"
+      persistedRunMetricsStillLoad: desktop.progress === "3/3"
         && desktop.samples === "7"
         && desktop.tokens.includes("4")
         && desktop.failures === "0",
       rankingAndReviewSelectorRender: desktop.itemCount === 3 && desktop.reviewOptionCount === 3,
-      startUsesBoundedShadowDefaults: calls.some((call) => call.type === "START_AGENT_SHADOW_RUN"
-        && call.options?.limit === 20
-        && call.options?.topK === 5
-        && call.options?.samplesPerTopJob === 3),
-      reviewIsSubmittedAppendOnly: calls.some((call) => call.type === "REVIEW_AGENT_SHADOW_ITEM"
-        && call.itemId === 802
-        && call.review?.label === "BAD_REASON"
-        && call.review?.note.includes("用户研究")),
-      savedReviewIsRendered: reviewed.listText.includes("理由错误"),
+      hiddenCompatibilityPanelDoesNotMutateData: !calls.some((call) => new Set([
+        "START_AGENT_SHADOW_RUN",
+        "REVIEW_AGENT_SHADOW_ITEM"
+      ]).has(call.type)),
       desktopHasNoOverflow: desktop.noDocumentOverflow && desktop.controlsInsideViewport && desktop.textFits,
       mobileHasNoOverflow: mobile.noDocumentOverflow && mobile.controlsInsideViewport && mobile.textFits,
       noBossActionTriggered: !calls.some((call) => new Set([
@@ -108,10 +93,12 @@ function inspectShadowPanel(page) {
     const form = document.querySelector("#agentShadowReviewForm")?.getBoundingClientRect();
     const start = document.querySelector("#startAgentShadowRun")?.getBoundingClientRect();
     const inside = (rect) => !rect || (rect.left >= -1 && rect.right <= viewportWidth + 1);
-    const controls = Array.from(document.querySelectorAll("#agentShadowPanel button, #agentShadowPanel select, #agentShadowPanel input"));
+    const controls = Array.from(document.querySelectorAll("#agentShadowPanel button, #agentShadowPanel select, #agentShadowPanel input"))
+      .filter((control) => control.getClientRects().length > 0);
     return {
       settingsVisible: !document.querySelector("#settingsPanel")?.hidden,
       advancedOpen: Boolean(document.querySelector("#advancedDiagnostics")?.open),
+      panelRetained: Boolean(document.querySelector("#retainedCompatibilityPanels")?.contains(document.querySelector("#agentShadowPanel"))),
       panelVisible: Boolean(panel && panel.width > 0 && panel.height > 0),
       budget: document.querySelector("#startAgentShadowRun")?.nextElementSibling?.textContent || "",
       progress: document.querySelector("#agentShadowProgress")?.textContent || "",

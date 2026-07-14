@@ -63,7 +63,7 @@ function main() {
       && optionsJs.includes("careerContextPreview")
       && optionsJs.includes("truncateText(context.markdown"),
     optionsSupportsQuestionAnswers: optionsHtml.includes("ProfileAgent 追问回答")
-      && optionsHtml.includes("带回答重新生成")
+      && optionsHtml.includes("根据回答重新整理")
       && optionsJs.includes("readCareerContextAnswers")
       && optionsJs.includes("renderCareerContextAnswerForm")
       && optionsJs.includes("includeAnswers")

@@ -23,6 +23,13 @@ async function main() {
   fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
   const browser = await chromium.launch({ headless: true, executablePath });
   const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
+  const runtimeErrors = [];
+  page.on("pageerror", (error) => runtimeErrors.push(`pageerror: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      runtimeErrors.push(`console: ${message.text()}`);
+    }
+  });
   try {
     await installChromeMock(page);
     await page.goto(pathToFileURL(path.join(ROOT, "extension", "src", "options.html")).toString(), {
@@ -38,6 +45,17 @@ async function main() {
     await page.waitForFunction(() => document.querySelectorAll(".profile-dialog-message").length === 4);
     await page.waitForFunction(() => document.querySelectorAll("#profileFactDrafts > .list-item[data-draft-id]").length === 1);
     const afterTurn = await inspectProfile(page);
+
+    await page.locator("#profileResumeFile").setInputFiles({
+      name: "career-profile-smoke.md",
+      mimeType: "text/markdown",
+      buffer: Buffer.from("# Candidate\n\nAI product manager with Agent workflow experience.", "utf8")
+    });
+    await page.locator("#importProfileResume").click();
+    await page.waitForFunction(() => document.querySelector("#profileResumeImportStatus")?.textContent.includes("新增 1 条待确认草稿")
+      && document.querySelectorAll("#profileResumeSources > .list-item").length === 1
+      && document.querySelectorAll("#profileFactDrafts > .list-item[data-draft-id]").length === 2);
+    const afterResumeImport = await inspectProfile(page);
 
     await page.screenshot({
       path: path.join(ARTIFACT_DIR, "m15-profile-dialog-desktop.png"),
@@ -64,13 +82,23 @@ async function main() {
         && afterTurn.draftCount === 1,
       updateDraftIsClearlyLabeled: afterTurn.draftText.includes("更新 experience #7")
         && afterTurn.draftText.includes("Boss Find 职责"),
+      resumeUploadPersistsSourceAndCreatesDraft: afterResumeImport.resumeSourceCount === 1
+        && afterResumeImport.draftCount === 2
+        && afterResumeImport.resumeImportStatus.includes("新增 1 条待确认草稿")
+        && calls.some((call) => call.type === "IMPORT_PROFILE_RESUME"
+          && call.resume?.fileName === "career-profile-smoke.md"
+          && Boolean(call.resume?.contentBase64))
+        && calls.some((call) => call.type === "CREATE_PROFILE_RESUME_DRAFTS"
+          && call.resumeSourceId === 21),
       desktopHasNoOverflow: initial.noDocumentOverflow && afterTurn.noDocumentOverflow,
       mobileHasNoOverflow: mobile.noDocumentOverflow
         && mobile.messagesInsideViewport
         && mobile.controlsInsideViewport,
-      uiUsesConversationApiOnly: calls.some((call) => call.type === "GET_PROFILE_DIALOG_SESSIONS")
+      uiUsesProfileApis: calls.some((call) => call.type === "GET_PROFILE_DIALOG_SESSIONS")
         && calls.some((call) => call.type === "GET_PROFILE_DIALOG_SESSION")
-        && calls.some((call) => call.type === "SEND_PROFILE_DIALOG_MESSAGE"),
+        && calls.some((call) => call.type === "SEND_PROFILE_DIALOG_MESSAGE")
+        && calls.some((call) => call.type === "GET_PROFILE_RESUME_SOURCES"),
+      renderedInteractionsHaveNoRuntimeErrors: runtimeErrors.length === 0,
       noBossActionTriggered: !calls.some((call) => new Set([
         "CREATE_BROWSER_TASK",
         "CLAIM_BROWSER_TASK",
@@ -85,8 +113,10 @@ async function main() {
       checks,
       initial,
       afterTurn,
+      afterResumeImport,
       mobile,
       messageTypes: calls.map((call) => call.type),
+      runtimeErrors,
       screenshots: [
         path.join(ARTIFACT_DIR, "m15-profile-dialog-desktop.png"),
         path.join(ARTIFACT_DIR, "m15-profile-dialog-mobile.png")
@@ -113,6 +143,8 @@ async function inspectProfile(page) {
       questionText: document.querySelector("#profileDialogOpenQuestions")?.textContent || "",
       draftCount: document.querySelectorAll("#profileFactDrafts > .list-item[data-draft-id]").length,
       draftText: document.querySelector("#profileFactDrafts")?.textContent || "",
+      resumeSourceCount: document.querySelectorAll("#profileResumeSources > .list-item").length,
+      resumeImportStatus: document.querySelector("#profileResumeImportStatus")?.textContent || "",
       ruleFallbackClosed: !document.querySelector(".profile-rule-fallback")?.hasAttribute("open"),
       noDocumentOverflow: document.documentElement.scrollWidth <= viewportWidth + 1,
       messagesInsideViewport: rectInside("#profileDialogMessages"),
@@ -155,6 +187,7 @@ async function installChromeMock(page) {
       }
     ];
     const drafts = [];
+    const resumeSources = [];
 
     function resultFor(message) {
       calls.push(structuredClone(message));
@@ -169,9 +202,78 @@ async function installChromeMock(page) {
             crawlMaxJobs: 30,
             crawlDelayMs: 1600,
             resumeTemplateName: "resume-to-word-campus-product-v1",
+            activeApplicationQueueId: 1,
             riskGateEnabled: true,
             excludedDirections: ["销售", "直播"]
           };
+        case "GET_APPLICATION_QUEUES":
+          return {
+            response: {
+              queues: [{
+                id: 1,
+                name: "默认意向",
+                description: "",
+                isDefault: true,
+                totalApplications: 0,
+                completeApplicationCount: 0,
+                pendingApplications: 0,
+                attentionApplications: 0,
+                missingDescriptionCount: 0
+              }]
+            }
+          };
+        case "GET_PROFILE_RESUME_SOURCES":
+          return {
+            response: {
+              resumeSources: structuredClone(resumeSources),
+              totalResumeSources: resumeSources.length
+            }
+          };
+        case "IMPORT_PROFILE_RESUME": {
+          if (!message.resume?.fileName || !message.resume?.contentBase64) {
+            throw new Error("Resume upload payload is incomplete");
+          }
+          const resumeSource = {
+            id: 21,
+            sourceType: "markdown",
+            fileName: message.resume.fileName,
+            textLength: 62,
+            createdAt: "2026-07-14T09:00:00.000Z"
+          };
+          resumeSources.splice(0, resumeSources.length, resumeSource);
+          return { response: { ok: true, resumeSource: structuredClone(resumeSource) } };
+        }
+        case "CREATE_PROFILE_RESUME_DRAFTS": {
+          const alreadyCreated = drafts.some((draft) => draft.id === 12);
+          if (!alreadyCreated) {
+            drafts.push({
+              id: 12,
+              draftType: "experience",
+              status: "PENDING",
+              operation: "CREATE",
+              targetEntityType: "experience",
+              targetEntityId: null,
+              title: "简历导入项目经历",
+              content: {
+                title: "Agent 求职工作流",
+                role: "AI 产品经理",
+                facts: ["负责 Agent 工作流设计与本地数据闭环"],
+                skills: ["LangGraph"]
+              },
+              confidence: "source_extracted",
+              evidenceText: "Imported from career-profile-smoke.md",
+              createdAt: "2026-07-14T09:00:01.000Z"
+            });
+          }
+          return {
+            response: {
+              ok: true,
+              resumeSourceId: Number(message.resumeSourceId),
+              created: alreadyCreated ? 0 : 1,
+              skipped: alreadyCreated ? 1 : 0
+            }
+          };
+        }
         case "GET_PROFILE_DIALOG_SESSIONS":
           session.messageCount = messages.length;
           session.pendingDraftCount = drafts.length;
@@ -247,6 +349,29 @@ async function installChromeMock(page) {
               templates: [{ key: "resume-to-word-campus-product-v1", label: "教育优先模板" }]
             }
           };
+        case "GET_MODEL_CONFIG":
+          return {
+            response: {
+              ok: true,
+              config: {
+                configured: true,
+                hasApiKey: true,
+                baseUrl: "https://model.example.test/v1",
+                model: "profile-ui-smoke",
+                wireApi: "responses",
+                reasoningEffort: "",
+                timeoutMs: 45000,
+                maxRetries: 1,
+                source: "test"
+              }
+            }
+          };
+        case "GET_AGENT_QUALITY":
+          return { response: { invocationCount: 0, totals: {}, latencyMs: {}, evaluations: [] } };
+        case "GET_AGENT_SHADOW_RUNS":
+          return { response: { runs: [], totalRuns: 0 } };
+        case "GET_AGENT_SHADOW_FAILURES":
+          return { response: { failureCandidates: [] } };
         case "GET_APPLICATIONS":
           return { response: { applications: [], totalApplications: 0 } };
         case "GET_CACHE":

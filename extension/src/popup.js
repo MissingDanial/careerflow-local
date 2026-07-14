@@ -20,6 +20,13 @@ const ui = {
   clearCache: document.getElementById("clearCache"),
   openOptions: document.getElementById("openOptions"),
   openOptionsSecondary: document.getElementById("openOptionsSecondary"),
+  clearMissingDescriptions: document.getElementById("clearMissingDescriptions"),
+  backendStateDot: document.getElementById("backendStateDot"),
+  backendStateText: document.getElementById("backendStateText"),
+  backendModelText: document.getElementById("backendModelText"),
+  startBackend: document.getElementById("startBackend"),
+  openModelConfig: document.getElementById("openModelConfig"),
+  activeApplicationQueue: document.getElementById("activeApplicationQueue"),
   jobCount: document.getElementById("jobCount"),
   descCount: document.getElementById("descCount"),
   pageCount: document.getElementById("pageCount"),
@@ -56,6 +63,7 @@ const ui = {
 
 let progressTimer = null;
 let collectionStopRequested = false;
+let backendRuntimeStatus = null;
 
 document.addEventListener("DOMContentLoaded", init);
 window.addEventListener("unload", () => clearInterval(progressTimer));
@@ -63,6 +71,16 @@ window.addEventListener("unload", () => clearInterval(progressTimer));
 async function init() {
   bindEvents();
   await loadSettings();
+  await refreshBackendRuntimeStatus();
+  if (backendRuntimeStatus?.running) {
+    await loadApplicationQueues();
+  } else {
+    const option = document.createElement("option");
+    option.textContent = "启动后端后加载队列";
+    option.value = "";
+    ui.activeApplicationQueue.replaceChildren(option);
+    ui.activeApplicationQueue.disabled = true;
+  }
   await refreshCache();
   await refreshQuality({ silent: true });
   await refreshPageStatus();
@@ -73,6 +91,9 @@ function bindEvents() {
   ui.startCollection.addEventListener("click", () => runWithStatus("正在开始岗位信息采集", startJobCollection));
   ui.pauseCollection.addEventListener("click", () => runWithStatus("正在暂停采集", pauseJobCollection));
   ui.retryCollection.addEventListener("click", () => runWithStatus("正在重试采集", retryJobCollection));
+  ui.startBackend.addEventListener("click", () => runWithStatus("正在启动本地后端", startLocalBackend));
+  ui.openModelConfig.addEventListener("click", openModelConfiguration);
+  ui.activeApplicationQueue.addEventListener("change", saveActiveApplicationQueue);
   ui.capture.addEventListener("click", () => runWithStatus("正在采集当前页", captureCurrentPage));
   ui.sync.addEventListener("click", () => runWithStatus("正在同步到后端", syncCache));
   ui.autoCrawl.addEventListener("click", () => runWithStatus("正在启动自动补齐", startAutoCrawl));
@@ -85,6 +106,7 @@ function bindEvents() {
   ui.refreshQuality.addEventListener("click", () => runWithStatus("正在读取质量报告", refreshQuality));
   ui.openOptions.addEventListener("click", () => chrome.runtime.openOptionsPage());
   ui.openOptionsSecondary.addEventListener("click", () => chrome.runtime.openOptionsPage());
+  ui.clearMissingDescriptions.addEventListener("click", () => runWithStatus("正在清理待补 JD", clearActiveQueueMissingDescriptions));
 
   for (const input of [ui.autoSync, ui.backendUrl, ui.syncPath, ui.token, ui.crawlDelayMs, ui.crawlMaxJobs]) {
     input.addEventListener("change", () => runWithStatus("正在保存设置", saveSettings));
@@ -93,6 +115,7 @@ function bindEvents() {
 
 async function startJobCollection() {
   collectionStopRequested = false;
+  await ensureBackendRunning();
   ui.autoSync.checked = true;
   await saveSettings();
   return processVisibleDetailQueue();
@@ -128,6 +151,7 @@ async function loadSettings() {
   ui.token.value = settings.token || "";
   ui.crawlDelayMs.value = settings.crawlDelayMs || 1600;
   ui.crawlMaxJobs.value = settings.crawlMaxJobs || 30;
+  ui.activeApplicationQueue.dataset.pendingValue = String(settings.activeApplicationQueueId || "");
 }
 
 async function saveSettings() {
@@ -151,8 +175,125 @@ function readSettingsFromUi() {
     syncPath: ui.syncPath.value,
     token: ui.token.value,
     crawlDelayMs: ui.crawlDelayMs.value,
-    crawlMaxJobs: ui.crawlMaxJobs.value
+    crawlMaxJobs: ui.crawlMaxJobs.value,
+    activeApplicationQueueId: Number(ui.activeApplicationQueue.value || 0) || null
   };
+}
+
+async function refreshBackendRuntimeStatus() {
+  const status = await runtimeMessage({ type: "GET_BACKEND_STATUS" });
+  backendRuntimeStatus = status;
+  renderBackendRuntimeStatus(status);
+  return status;
+}
+
+function renderBackendRuntimeStatus(status = {}) {
+  const running = Boolean(status.running);
+  const modelConfigured = Boolean(status.modelConfig?.configured);
+  ui.backendStateDot.dataset.state = running ? "running" : "error";
+  ui.backendStateText.textContent = running ? "本地后端运行中" : "本地后端未启动";
+  ui.backendModelText.textContent = running
+    ? modelConfigured
+      ? `${status.modelConfig.model || "模型"} 已配置`
+      : "模型服务待配置"
+    : status.nativeHostAvailable === false
+      ? "启动器未安装"
+      : "等待启动";
+  ui.startBackend.hidden = running;
+  ui.startBackend.disabled = false;
+  ui.openModelConfig.hidden = !running || modelConfigured;
+}
+
+async function startLocalBackend() {
+  ui.startBackend.disabled = true;
+  const status = await runtimeMessage({ type: "START_BACKEND" });
+  backendRuntimeStatus = status;
+  await loadSettings();
+  renderBackendRuntimeStatus(status);
+  await loadApplicationQueues();
+  return status.modelConfig?.configured
+    ? "本地后端已启动"
+    : "本地后端已启动，请在设置页配置模型服务";
+}
+
+async function ensureBackendRunning() {
+  const status = backendRuntimeStatus || await refreshBackendRuntimeStatus();
+  if (status.running) {
+    return status;
+  }
+  return startLocalBackend();
+}
+
+async function loadApplicationQueues() {
+  const settings = await runtimeMessage({ type: "GET_SETTINGS" });
+  const result = await runtimeMessage({ type: "GET_APPLICATION_QUEUES" });
+  const queues = Array.isArray(result.response?.queues) ? result.response.queues : [];
+  const requestedId = Number(
+    ui.activeApplicationQueue.dataset.pendingValue
+      || settings.activeApplicationQueueId
+      || 0
+  );
+  const active = queues.find((queue) => Number(queue.id) === requestedId)
+    || queues.find((queue) => queue.isDefault)
+    || queues[0]
+    || null;
+  ui.activeApplicationQueue.replaceChildren();
+  for (const queue of queues) {
+    const option = document.createElement("option");
+    option.value = String(queue.id);
+    option.textContent = `${queue.name} (${queue.completeApplicationCount || 0})`;
+    ui.activeApplicationQueue.appendChild(option);
+  }
+  ui.activeApplicationQueue.value = active ? String(active.id) : "";
+  ui.activeApplicationQueue.disabled = !active;
+  ui.activeApplicationQueue.dataset.pendingValue = "";
+  if (active && Number(settings.activeApplicationQueueId || 0) !== Number(active.id)) {
+    await runtimeMessage({
+      type: "SAVE_SETTINGS",
+      settings: { activeApplicationQueueId: active.id }
+    });
+  }
+  return queues;
+}
+
+async function saveActiveApplicationQueue() {
+  const queueId = Number(ui.activeApplicationQueue.value || 0);
+  if (!queueId) {
+    return;
+  }
+  await runtimeMessage({
+    type: "SAVE_SETTINGS",
+    settings: { activeApplicationQueueId: queueId }
+  });
+  await refreshMissingDescriptions();
+  ui.status.textContent = "采集目标队列已切换";
+}
+
+async function clearActiveQueueMissingDescriptions() {
+  const queueId = Number(ui.activeApplicationQueue.value || 0);
+  const total = Number(ui.missingDescriptionCount.textContent || 0);
+  if (!queueId || total <= 0) {
+    return "当前队列没有待补 JD";
+  }
+  if (!window.confirm(`从当前队列移出全部 ${total} 个待补 JD 岗位？`)) {
+    return "已取消清理";
+  }
+  const result = await runtimeMessage({
+    type: "REMOVE_MISSING_DESCRIPTION_ITEMS",
+    queueId,
+    options: {
+      minDescriptionLength: 80,
+      removedBy: "popup-missing-jd",
+      reason: "popup_bulk_remove_missing_jd"
+    }
+  });
+  await Promise.all([refreshMissingDescriptions(), loadApplicationQueues()]);
+  return `已移出 ${result.response?.removed || 0} 个待补 JD 岗位`;
+}
+
+function openModelConfiguration() {
+  chrome.tabs.create({ url: chrome.runtime.getURL("src/options.html#settings") });
+  window.close();
 }
 
 async function captureCurrentPage() {
@@ -172,7 +313,14 @@ async function syncCache() {
   const result = await runtimeMessage({ type: "SYNC_CACHE" });
   await refreshCache();
   await refreshQuality({ silent: true });
-  return `同步完成：已发送 ${result.sent} 个岗位`;
+  const response = result.response || {};
+  const duplicateCount = Number(response.duplicatesSkipped || 0) + Number(response.queueDuplicatesSkipped || 0);
+  const removedSkipped = Number(response.queueRemovedSkipped || 0);
+  return [
+    `同步完成：新增 ${response.queueItemsAdded || 0}`,
+    duplicateCount ? `重复跳过 ${duplicateCount}` : "",
+    removedSkipped ? `已移除跳过 ${removedSkipped}` : ""
+  ].filter(Boolean).join("，");
 }
 
 async function startAutoCrawl() {
@@ -637,7 +785,7 @@ function renderCapture(capture, summary = null) {
 function renderCache(cache) {
   const jobs = cache.jobs || [];
   ui.jobCount.textContent = String(jobs.length);
-  ui.descCount.textContent = String(jobs.filter((job) => Boolean(job.description)).length);
+  ui.descCount.textContent = String(jobs.filter((job) => String(job.description || "").trim().length >= 80).length);
   ui.pageCount.textContent = String(Object.keys(cache.pages || {}).length);
   ui.preview.textContent = jobs.length
     ? JSON.stringify(jobs.slice(0, 5).map(pickJobPreview), null, 2)
@@ -736,11 +884,13 @@ function renderMissingDescriptions(jobs, total, error = null) {
     ui.missingDescriptionCount.textContent = "--";
     ui.missingDescriptions.textContent = error.message || "待补 JD 队列不可用";
     ui.missingDescriptions.classList.add("warn");
+    ui.clearMissingDescriptions.disabled = true;
     return;
   }
 
   ui.missingDescriptions.classList.remove("warn");
   ui.missingDescriptionCount.textContent = String(total || jobs.length);
+  ui.clearMissingDescriptions.disabled = Number(total || jobs.length) <= 0;
   ui.missingDescriptions.replaceChildren();
   if (!jobs.length) {
     ui.missingDescriptions.textContent = "暂无待补岗位";

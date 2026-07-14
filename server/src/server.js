@@ -20,6 +20,7 @@ const { createResumeWorkflowService } = require("./services/resume-workflow-serv
 const { createExecutionPackageService } = require("./services/execution-package-service");
 const { createSubmissionResultService } = require("./services/submission-result-service");
 const { createAgentShadowService } = require("./services/agent-shadow-service");
+const { createModelConfigService } = require("./services/model-config-service");
 const {
   httpError,
   structuredError,
@@ -37,6 +38,7 @@ const resumeWorkflowService = createResumeWorkflowService({ store, dataDir: DATA
 const executionPackageService = createExecutionPackageService({ store, dataDir: DATA_DIR });
 const submissionResultService = createSubmissionResultService({ store, dataDir: DATA_DIR });
 const agentShadowService = createAgentShadowService({ store });
+const modelConfigService = createModelConfigService({ dataDir: DATA_DIR });
 agentShadowService.recoverInterruptedRuns();
 
 const server = http.createServer(async (request, response) => {
@@ -53,6 +55,24 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/health") {
       sendJson(response, 200, { ok: true, service: "boss-find-backend" });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/model-config") {
+      sendJson(response, 200, modelConfigService.getStatus());
+      return;
+    }
+
+    if (request.method === "PUT" && url.pathname === "/api/model-config") {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, modelConfigService.save(payload));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/model-config/test") {
+      assertAuthorized(request);
+      sendJson(response, 200, await modelConfigService.testConnection());
       return;
     }
 
@@ -274,10 +294,90 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/application-queues") {
+      sendJson(response, 200, store.getApplicationQueues({
+        includeArchived: parseBoolean(url.searchParams.get("includeArchived"), false)
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/application-queues") {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 201, store.createApplicationQueue(payload));
+      return;
+    }
+
+    const archiveApplicationQueueMatch = url.pathname.match(/^\/api\/application-queues\/([0-9]+)$/);
+    if (request.method === "DELETE" && archiveApplicationQueueMatch) {
+      assertAuthorized(request);
+      sendJson(response, 200, store.archiveApplicationQueue(
+        Number(archiveApplicationQueueMatch[1]),
+        { actor: "local-user", reason: "workbench_queue_delete" }
+      ));
+      return;
+    }
+
+    const trustQueueApplicationMatch = url.pathname.match(
+      /^\/api\/application-queues\/([0-9]+)\/applications\/([0-9]+)\/trust$/
+    );
+    if (request.method === "POST" && trustQueueApplicationMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, store.trustApplicationInQueue(
+        Number(trustQueueApplicationMatch[1]),
+        Number(trustQueueApplicationMatch[2]),
+        payload
+      ));
+      return;
+    }
+
+    const removeQueueApplicationsMatch = url.pathname.match(
+      /^\/api\/application-queues\/([0-9]+)\/remove-applications$/
+    );
+    if (request.method === "POST" && removeQueueApplicationsMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, store.removeApplicationsFromQueue(
+        Number(removeQueueApplicationsMatch[1]),
+        payload
+      ));
+      return;
+    }
+
+    const removeQueueMissingMatch = url.pathname.match(
+      /^\/api\/application-queues\/([0-9]+)\/remove-missing-descriptions$/
+    );
+    if (request.method === "POST" && removeQueueMissingMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, store.removeMissingDescriptionsFromQueue(
+        Number(removeQueueMissingMatch[1]),
+        payload
+      ));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/applications") {
       sendJson(response, 200, store.getApplications({
-        limit: Number(url.searchParams.get("limit") || 100)
+        limit: Number(url.searchParams.get("limit") || 100),
+        queueId: url.searchParams.get("queueId") || "",
+        completeDescriptionOnly: parseBoolean(url.searchParams.get("completeDescriptionOnly"), false),
+        manualStatus: url.searchParams.get("manualStatus") || ""
       }));
+      return;
+    }
+
+    const manualApplicationStatusMatch = url.pathname.match(
+      /^\/api\/applications\/([0-9]+)\/manual-status$/
+    );
+    if (request.method === "POST" && manualApplicationStatusMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, store.updateManualApplicationStatus(
+        Number(manualApplicationStatusMatch[1]),
+        payload
+      ));
       return;
     }
 
@@ -470,6 +570,7 @@ const server = http.createServer(async (request, response) => {
         status: url.searchParams.getAll("status").length ? url.searchParams.getAll("status") : (url.searchParams.get("statuses") || "DETAIL_CAPTURED"),
         minDescriptionLength: Number(url.searchParams.get("minDescriptionLength") || 80),
         includeAlreadyScreened: parseBoolean(url.searchParams.get("includeAlreadyScreened"), false),
+        queueId: url.searchParams.get("queueId") || "",
         limit: Number(url.searchParams.get("limit") || 10)
       }));
       return;
@@ -822,7 +923,8 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/api/jobs/missing-descriptions") {
       sendJson(response, 200, store.getMissingDescriptions({
         limit: Number(url.searchParams.get("limit") || 50),
-        minDescriptionLength: Number(url.searchParams.get("minDescriptionLength") || 80)
+        minDescriptionLength: Number(url.searchParams.get("minDescriptionLength") || 80),
+        queueId: url.searchParams.get("queueId") || ""
       }));
       return;
     }
@@ -986,17 +1088,23 @@ function normalizeBatchScreeningResult(applicationId, result = {}) {
 }
 
 async function screenApplicationsBatch(payload = {}) {
+  const queueId = Number(payload.queueId || 0);
   const explicitApplicationIds = Array.isArray(payload.applicationIds)
     ? payload.applicationIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)
     : [];
+  const scopedExplicitIds = queueId
+    ? explicitApplicationIds.filter((id) => store.isApplicationActiveInQueue(queueId, id))
+    : explicitApplicationIds;
   const candidates = explicitApplicationIds.length
-    ? explicitApplicationIds.map((id) => ({ id }))
+    ? scopedExplicitIds.map((id) => ({ id }))
     : store.getScreeningCandidates({
       status: payload.statuses || payload.status || ["DETAIL_CAPTURED"],
       minDescriptionLength: Number(payload.minDescriptionLength || 80),
       includeAlreadyScreened: Boolean(payload.includeAlreadyScreened),
+      queueId,
       limit: Number(payload.limit || 10)
     }).candidates;
+  const requested = explicitApplicationIds.length ? scopedExplicitIds.length : candidates.length;
   const limit = Math.max(1, Math.min(50, Number(payload.limit || candidates.length || 10)));
   const selected = candidates.slice(0, limit);
   const results = [];
@@ -1012,8 +1120,9 @@ async function screenApplicationsBatch(payload = {}) {
     message: `Screening batch started for ${selected.length} application(s).`,
     metadata: {
       batchId,
-      requested: explicitApplicationIds.length || candidates.length,
+      requested,
       selected: selected.length,
+      queueId: queueId || null,
       mode: payload.mode || "rules",
       continueOnError: Boolean(payload.continueOnError),
       riskGateOnly: Boolean(payload.riskGateOnly)
@@ -1021,13 +1130,17 @@ async function screenApplicationsBatch(payload = {}) {
   });
   for (const candidate of selected) {
     try {
+      const trusted = queueId ? store.isApplicationTrustedInQueue(queueId, candidate.id) : false;
+      const userRules = trusted
+        ? { ...(payload.userRules || {}), excludedDirections: [] }
+        : (payload.userRules || {});
       const result = payload.riskGateOnly
         ? await screenApplicationRiskGateOnly(candidate.id, {
-          userRules: payload.userRules || {}
+          userRules
         })
         : await screenApplication(candidate.id, {
           mode: payload.mode || "rules",
-          userRules: payload.userRules || {},
+          userRules,
           modelConfig: payload.modelConfig || {}
         });
       const batchResult = normalizeBatchScreeningResult(candidate.id, result);
@@ -1047,6 +1160,8 @@ async function screenApplicationsBatch(payload = {}) {
         metadata: {
           batchId,
           riskGateOnly: Boolean(payload.riskGateOnly),
+          queueId: queueId || null,
+          trusted,
           screeningId: batchResult.screeningId || null,
           agentRunId: batchResult.agentRunId || null,
           recommendation: batchResult.recommendation || "",
@@ -1099,8 +1214,9 @@ async function screenApplicationsBatch(payload = {}) {
     errorMessage: failed ? `${failed} application(s) failed in screening batch.` : "",
     metadata: {
       batchId,
-      requested: explicitApplicationIds.length || candidates.length,
+      requested,
       selected: selected.length,
+      queueId: queueId || null,
       succeeded,
       failed
     }
@@ -1109,7 +1225,8 @@ async function screenApplicationsBatch(payload = {}) {
     ok: failed === 0,
     storage: "sqlite",
     mode: payload.mode || "rules",
-    requested: explicitApplicationIds.length || candidates.length,
+    queueId: queueId || null,
+    requested,
     selected: selected.length,
     succeeded,
     failed,

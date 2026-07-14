@@ -115,7 +115,9 @@ function runWiringChecks() {
   return {
     checks: {
       serverExposesMissingEndpoint: serverJs.includes('url.pathname === "/api/jobs/missing-descriptions"'),
-      backgroundHandlesMissingMessage: backgroundJs.includes('case "GET_MISSING_DESCRIPTIONS"') && backgroundJs.includes("/api/jobs/missing-descriptions?limit="),
+      backgroundHandlesMissingMessage: backgroundJs.includes('case "GET_MISSING_DESCRIPTIONS"')
+        && backgroundJs.includes('new URL("/api/jobs/missing-descriptions"')
+        && backgroundJs.includes('missingUrl.searchParams.set("limit"'),
       popupHasMissingIds: ["missingDescriptionCount", "missingDescriptions"].every((id) => popupHtml.includes(`id="${id}"`)),
       popupRequestsMissingDescriptions: popupJs.includes('type: "GET_MISSING_DESCRIPTIONS"') && popupJs.includes("renderMissingDescriptions"),
       optionsHasMissingIds: ["missingDescriptionCount", "missingDescriptions"].every((id) => optionsHtml.includes(`id="${id}"`)),

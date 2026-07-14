@@ -27,27 +27,93 @@
 
       <section id="workspacePanel" class="tab-panel workspace-panel" role="tabpanel" aria-labelledby="workspaceTab" data-view-panel="workspace">
         <div class="workspace-summary" aria-label="岗位流程概览">
-          <div><strong id="workspaceApplicationCount">--</strong><span>全部岗位</span></div>
-          <div><strong id="workspaceActionCount">--</strong><span>待处理</span></div>
-          <div><strong id="workspaceReadyCount">--</strong><span>可推进</span></div>
-          <div><strong id="workspaceErrorCount">--</strong><span>需关注</span></div>
+          <button class="pipeline-stat is-active" type="button" data-workbench-stage="collected">
+            <strong id="workspaceApplicationCount">--</strong><span>完整 JD</span>
+          </button>
+          <button class="pipeline-stat" type="button" data-workbench-stage="screened">
+            <strong id="workspaceActionCount">--</strong><span>筛选通过</span>
+          </button>
+          <button class="pipeline-stat" type="button" data-workbench-stage="resume">
+            <strong id="workspaceReadyCount">--</strong><span>简历成功</span>
+          </button>
+          <button class="pipeline-stat" type="button" data-workbench-stage="manual">
+            <strong id="workspaceErrorCount">--</strong><span>已投递</span>
+          </button>
         </div>
+
+        <section class="intent-queue-bar" aria-labelledby="intentQueueTitle">
+          <div>
+            <span class="field-label" id="intentQueueTitle">当前意向岗位</span>
+            <strong id="queueTitle">岗位队列</strong>
+          </div>
+          <div class="queue-controls">
+            <label class="queue-selector">
+              <span class="visually-hidden">当前岗位队列</span>
+              <select id="workspaceQueueSelect" aria-label="当前岗位队列"></select>
+            </label>
+            <button id="openCreateQueueDialog" class="secondary compact-command" type="button">新建意向</button>
+            <button id="deleteApplicationQueue" class="danger compact-command" type="button">删除意向</button>
+          </div>
+        </section>
+
+        <section class="pipeline-controls" aria-label="当前阶段操作">
+          <div class="pipeline-control" data-stage-control="collected">
+            <div>
+              <strong>岗位采集结果</strong>
+              <span>主列表只保留已获取完整职位描述的岗位。</span>
+            </div>
+          </div>
+          <div class="pipeline-control" data-stage-control="screened" hidden>
+            <div id="workspaceRiskMount" class="workspace-risk-mount"></div>
+            <button id="runQueueScreening" class="primary" type="button">开始筛选</button>
+          </div>
+          <div class="pipeline-control" data-stage-control="resume" hidden>
+            <div id="workspaceResumeMount" class="workspace-resume-settings"></div>
+            <label>
+              <span>DOCX 保存目录</span>
+              <input id="resumeOutputDir" type="text" spellcheck="false" placeholder="留空使用后端默认目录">
+            </label>
+            <button id="runQueueResumeWorkflow" class="primary" type="button">生成待处理简历</button>
+            <span id="queueResumeBatchStatus" class="status">尚未运行</span>
+          </div>
+          <div class="pipeline-control" data-stage-control="manual" hidden>
+            <label>
+              <span>人工状态</span>
+              <select id="workspaceManualFilter">
+                <option value="all">全部状态</option>
+                <option value="NOT_CONTACTED">未联系</option>
+                <option value="GREETED">已打招呼</option>
+                <option value="APPLIED">已投递</option>
+              </select>
+            </label>
+            <span class="status">系统只打开岗位页面，打招呼与投递由用户完成。</span>
+          </div>
+        </section>
 
         <div class="workspace-grid">
           <section class="queue-section" aria-labelledby="queueTitle">
             <div class="section-heading">
               <div>
-                <p class="eyebrow">APPLICATIONS</p>
-                <h2 id="queueTitle">岗位队列</h2>
+                <p class="eyebrow">JOB PIPELINE</p>
+                <h2 id="workspaceListTitle">完整 JD 岗位</h2>
               </div>
-              <label class="queue-filter">
-                <span class="visually-hidden">筛选岗位</span>
-                <select id="workspaceFilter" aria-label="筛选岗位">
-                  <option value="active">当前流程</option>
-                  <option value="attention">需要处理</option>
-                  <option value="all">全部岗位</option>
-                </select>
+              <div class="queue-controls">
+                <label class="queue-filter">
+                  <span class="visually-hidden">筛选岗位</span>
+                  <select id="workspaceFilter" aria-label="筛选岗位">
+                    <option value="all">全部岗位</option>
+                    <option value="attention">需要处理</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div class="queue-bulk-toolbar">
+              <label class="checkbox-row compact-check">
+                <input id="workspaceSelectVisible" type="checkbox">
+                <span>全选当前</span>
               </label>
+              <span id="workspaceSelectionCount" class="selection-count">已选 0</span>
+              <button id="removeSelectedApplications" class="danger compact-command" type="button" disabled>移出队列</button>
             </div>
             <div class="table-scroll">
               <table class="application-table">
@@ -56,7 +122,8 @@
                     <th scope="col">岗位</th>
                     <th scope="col">状态</th>
                     <th scope="col">匹配</th>
-                    <th scope="col">更新</th>
+                    <th scope="col">人工进度</th>
+                    <th scope="col">操作</th>
                   </tr>
                 </thead>
                 <tbody id="workspaceApplications"></tbody>
@@ -68,14 +135,15 @@
           <aside class="next-action-panel" aria-labelledby="nextActionTitle">
             <p class="eyebrow">NEXT ACTION</p>
             <h2 id="nextActionTitle">选择一个岗位</h2>
-            <p id="workspaceSelectedCompany" class="selected-company">岗位状态会决定下一步操作</p>
+            <p id="workspaceSelectedCompany" class="selected-company">查看岗位、筛选和简历信息</p>
             <div id="workspaceStageTrack" class="stage-track" aria-label="岗位进度"></div>
             <div class="selected-meta">
               <span id="workspaceSelectedStatus" class="status-chip">未选择</span>
               <span id="workspaceSelectedMeta">--</span>
             </div>
-            <p id="workspaceActionHint" class="action-hint">从左侧岗位队列选择一项。</p>
+            <p id="workspaceActionHint" class="action-hint">从左侧岗位列表选择一项。</p>
             <button id="workspaceNextAction" class="primary next-action-button" type="button" disabled>选择一个岗位</button>
+            <button id="workspaceViewDetail" class="secondary next-action-button" type="button" disabled>查看完整信息</button>
           </aside>
         </div>
       </section>
@@ -84,7 +152,61 @@
 
       <section id="settingsPanel" class="tab-panel settings-panel" role="tabpanel" aria-labelledby="settingsTab" data-view-panel="settings" hidden>
         <div id="settingsCoreMount" class="settings-grid"></div>
-        <section class="settings-section">
+        <section id="modelProviderSettings" class="settings-section model-provider-settings">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">MODEL PROVIDER</p>
+              <h2>基础模型服务</h2>
+            </div>
+            <span id="modelConfigBadge" class="status-chip" data-tone="attention">未配置</span>
+          </div>
+          <form id="modelConfigForm" class="model-config-form">
+            <label class="model-base-url">
+              <span>Base URL</span>
+              <input id="modelBaseUrl" type="url" spellcheck="false" placeholder="https://api.openai.com/v1">
+            </label>
+            <label>
+              <span>模型</span>
+              <input id="modelName" type="text" spellcheck="false" placeholder="gpt-5.4-mini">
+            </label>
+            <label>
+              <span>API 协议</span>
+              <select id="modelWireApi">
+                <option value="responses">Responses API</option>
+                <option value="chat">Chat Completions</option>
+              </select>
+            </label>
+            <label>
+              <span>API Key</span>
+              <input id="modelApiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="留空表示保留现有 Key">
+            </label>
+            <label>
+              <span>推理强度</span>
+              <select id="modelReasoningEffort">
+                <option value="">供应商默认</option>
+                <option value="minimal">minimal</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+              </select>
+            </label>
+            <label>
+              <span>超时（毫秒）</span>
+              <input id="modelTimeoutMs" type="number" min="1000" max="300000" step="1000">
+            </label>
+            <label>
+              <span>失败重试</span>
+              <input id="modelMaxRetries" type="number" min="0" max="3" step="1">
+            </label>
+            <div class="model-config-actions">
+              <button id="saveModelConfig" class="primary" type="submit">保存配置</button>
+              <button id="testModelConfig" class="secondary" type="button">测试连接</button>
+              <button id="clearModelApiKey" class="danger" type="button">清除 API Key</button>
+            </div>
+          </form>
+          <p id="modelConfigStatus" class="status">正在读取后端模型配置</p>
+        </section>
+        <section id="settingsRiskSection" class="settings-section" hidden>
           <div class="section-heading">
             <div>
               <p class="eyebrow">PREFERENCES</p>
@@ -93,7 +215,7 @@
           </div>
           <div id="settingsRiskMount"></div>
         </section>
-        <section class="settings-section agent-quality-settings">
+        <section id="agentQualitySettings" class="settings-section agent-quality-settings" hidden>
           <div class="section-heading">
             <div>
               <p class="eyebrow">AGENT QUALITY</p>
@@ -120,7 +242,7 @@
           </div>
           <p id="agentQualityStatus" class="status">尚未读取质量数据</p>
         </section>
-        <section class="settings-section">
+        <section id="settingsTemplateSection" class="settings-section" hidden>
           <div class="section-heading">
             <div>
               <p class="eyebrow">DOCUMENT</p>
@@ -131,17 +253,18 @@
         </section>
         <details id="advancedDiagnostics" class="advanced-diagnostics">
           <summary>
-            <span>高级诊断</span>
-            <small>任务、采集质量、Agent 节点与错误日志</small>
+            <span>异常与执行日志</span>
+            <small>最近异常、Agent 与 workflow 执行记录</small>
           </summary>
           <div id="advancedDiagnosticsMount" class="layout diagnostics-layout"></div>
         </details>
+        <div id="retainedCompatibilityPanels" hidden></div>
       </section>
 
       <section id="legacyPanels" class="layout" hidden>
         <section class="card">
           <div class="card-title">
-            <h2>同步配置</h2>
+            <h2>后端与同步</h2>
           </div>
           <label class="checkbox-row">
             <input id="autoSync" type="checkbox">
@@ -159,7 +282,7 @@
             <span>Bearer Token</span>
             <input id="token" type="password" spellcheck="false">
           </label>
-          <div class="grid">
+          <div class="grid collection-tuning-fields" hidden>
             <label>
               <span>最大本地缓存岗位数</span>
               <input id="maxCachedJobs" type="number" min="50" max="2000" step="50">
@@ -272,7 +395,21 @@
             <span id="careerContextStatus" class="status">尚未读取职业经历上下文</span>
           </div>
           <p class="note">专门用于首次画像沉淀、补充经历、修改目标方向和风险约束；生成待确认草稿后由用户确认入库，单岗位简历闭环不会重跑 ProfileAgent。</p>
+          <section class="profile-source-import" aria-labelledby="profileSourceTitle">
+            <div>
+              <div id="profileSourceTitle" class="list-heading">1. 上传初始简历</div>
+              <p class="note">支持 DOCX、PDF、TXT 和 MD。抽取内容只生成待确认草稿，不会直接写入正式画像。</p>
+            </div>
+            <label class="file-picker">
+              <span>选择简历文件</span>
+              <input id="profileResumeFile" type="file" accept=".docx,.pdf,.txt,.md">
+            </label>
+            <button id="importProfileResume" class="primary" type="button">识别简历</button>
+            <span id="profileResumeImportStatus" class="status">尚未上传</span>
+            <div id="profileResumeSources" class="list compact-list">暂无简历来源</div>
+          </section>
           <div class="profile-dialog-panel">
+            <div class="list-heading">2. 与 ProfileAgent 完善经历</div>
             <div class="profile-dialog-toolbar">
               <label class="profile-dialog-session-field">
                 <span>对话记录</span>
@@ -318,8 +455,9 @@
           </div>
           <div class="button-row">
             <button id="refreshCareerContext" class="secondary" type="button">刷新上下文</button>
-            <button id="generateCareerContext" class="primary" type="button">生成 career_agent_context.md</button>
-            <button id="generateCareerContextWithAnswers" class="secondary" type="button">带回答重新生成</button>
+            <button id="generateCareerContext" class="primary" type="button">整理并保存个人画像</button>
+            <button id="generateCareerContextWithAnswers" class="secondary" type="button">根据回答重新整理</button>
+            <button id="viewCareerContext" class="secondary" type="button">查看个人画像</button>
           </div>
           <div class="detail-grid career-context-grid">
             <section>
@@ -368,7 +506,10 @@
             <p id="careerContextFreshnessStatus" class="note">确认或拒绝事实草稿后，建议重新生成职业上下文。</p>
             <div id="profileFactDrafts" class="list compact-list">暂无待确认事实草稿</div>
           </div>
-          <pre id="careerContextPreview" class="preview career-context-preview">暂无 career_agent_context.md</pre>
+          <details id="careerContextViewer" class="career-context-viewer">
+            <summary>个人画像内容</summary>
+            <pre id="careerContextPreview" class="preview career-context-preview">暂无 career_agent_context.md</pre>
+          </details>
         </section>
 
         <section class="card wide">
@@ -612,7 +753,10 @@
         <section class="card">
           <div class="card-title">
             <h2>待补 JD</h2>
-            <span id="missingDescriptionCount" class="badge">0</span>
+            <div class="card-title-actions">
+              <span id="missingDescriptionCount" class="badge">0</span>
+              <button id="removeMissingDescriptions" class="danger compact-command" type="button" disabled>全部移出当前队列</button>
+            </div>
           </div>
           <p class="note">这里是数据库缺 JD 提示；BOSS 页面实际加载到对应岗位后才可自动补齐。</p>
           <div id="missingDescriptions" class="list">暂无待补岗位</div>
@@ -658,6 +802,63 @@
           <pre id="preview" class="preview">暂无数据</pre>
         </section>
       </section>
+
+      <dialog id="jobDetailDialog" class="workflow-dialog job-detail-dialog" aria-labelledby="jobDetailDialogTitle">
+        <div class="dialog-header">
+          <div>
+            <p class="eyebrow">JOB DETAIL</p>
+            <h2 id="jobDetailDialogTitle">岗位完整信息</h2>
+          </div>
+          <button id="closeJobDetailDialog" class="icon-close" type="button" aria-label="关闭岗位详情">×</button>
+        </div>
+        <div class="dialog-body job-detail-dialog-body">
+          <div id="jobDetailMeta" class="detail-section">请选择岗位</div>
+          <section>
+            <div class="list-heading">职位描述</div>
+            <pre id="jobDetailDescription" class="preview job-description-preview">暂无职位描述</pre>
+          </section>
+          <div class="detail-grid">
+            <section>
+              <div class="list-heading">筛选结果</div>
+              <div id="jobDetailScreening" class="detail-section">尚未筛选</div>
+            </section>
+            <section>
+              <div class="list-heading">定制简历</div>
+              <div id="jobDetailResume" class="detail-section">尚未生成</div>
+            </section>
+          </div>
+          <div class="dialog-actions split">
+            <a id="jobDetailBossLink" class="button-link" href="#" target="_blank" rel="noreferrer">打开 BOSS 岗位</a>
+            <button id="closeJobDetailDialogSecondary" class="secondary" type="button">关闭</button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog id="createQueueDialog" class="workflow-dialog compact-dialog" aria-labelledby="createQueueDialogTitle">
+        <form id="createQueueForm">
+          <div class="dialog-header">
+            <div>
+              <p class="eyebrow">NEW QUEUE</p>
+              <h2 id="createQueueDialogTitle">新建岗位队列</h2>
+            </div>
+            <button id="closeCreateQueueDialog" class="icon-close" type="button" aria-label="关闭新建队列">×</button>
+          </div>
+          <div class="dialog-body queue-dialog-body">
+            <label>
+              <span>队列名称</span>
+              <input id="createQueueName" type="text" maxlength="50" autocomplete="off" placeholder="例如：产品、算法">
+            </label>
+            <label>
+              <span>备注</span>
+              <input id="createQueueDescription" type="text" maxlength="500" autocomplete="off" placeholder="可选">
+            </label>
+            <div class="dialog-actions split">
+              <button id="cancelCreateQueue" class="secondary" type="button">取消</button>
+              <button id="confirmCreateQueue" class="primary" type="submit">创建并切换</button>
+            </div>
+          </div>
+        </form>
+      </dialog>
 
       <dialog id="resumeReviewDialog" class="workflow-dialog" aria-labelledby="resumeReviewDialogTitle">
         <div class="dialog-header">

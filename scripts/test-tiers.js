@@ -39,6 +39,8 @@ const TEST_TIERS = Object.freeze({
     "m15:options-profile-conversation:smoke",
     "m16:options-agent-quality:smoke",
     "m16:options-shadow-review:smoke",
+    "m17:popup-runtime:smoke",
+    "m17:options-queues-runtime:smoke",
     "m10:options-profile-agent:smoke",
     "m10:options-profile-facts:smoke",
     "m10:options-profile-facts-ui:smoke",
@@ -76,7 +78,10 @@ const TEST_TIERS = Object.freeze({
     "m13:sqlite-migrations:smoke",
     "m13:workflow-inputs:smoke",
     "m13:application-transitions:smoke",
-    "m14:real-action:smoke"
+    "m14:real-action:smoke",
+    "m17:application-queues:smoke",
+    "m17:model-config:smoke",
+    "m17:native-host:smoke"
   ])
 });
 

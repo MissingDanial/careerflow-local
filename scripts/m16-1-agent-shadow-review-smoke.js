@@ -147,7 +147,8 @@ async function runDirectChecks() {
 
     return {
       checks: {
-        schemaMigratedToShadowReview: SCHEMA_VERSION === 16 && store.getStats().schemaVersion === 16,
+        schemaMigratedToShadowReview: SCHEMA_VERSION >= 16
+          && store.getStats().schemaVersion === SCHEMA_VERSION,
         initialPassCoversEverySelectedJob: calls.size === 4,
         onlyTopKReceivesExtraSamples: strong.sampleCount === 3
           && medium.sampleCount === 3

@@ -19,6 +19,7 @@ function main() {
   const handlerFunction = sliceFunction(backgroundJs, "async function runResumeWorkflowGraph", "async function fetchMessages");
   const optionsFunction = sliceFunction(optionsJs, "async function runResumeWorkflowForSelectedApplication", "async function evaluateSelectedResumeFit");
   const prepareFunction = sliceFunction(optionsJs, "async function prepareRulesResume", "async function runResumeWorkflowForSelectedApplication");
+  const renderOptionsFunction = sliceFunction(optionsJs, "function getResumeRenderOptions", "async function saveResumeTemplateSelection");
   const detailFunction = sliceFunction(optionsJs, "function renderResumeDetail", "function clearResumeDetail");
 
   const checks = {
@@ -41,12 +42,14 @@ function main() {
       && optionsJs.includes("dataset.pendingValue"),
     optionsPrepareResumeUsesTemplate: prepareFunction.includes('type: "PREPARE_RESUME"')
       && prepareFunction.includes("renderOptions")
-      && prepareFunction.includes("templateName: getSelectedResumeTemplateName()"),
+      && prepareFunction.includes("getResumeRenderOptions()")
+      && renderOptionsFunction.includes("templateName: getSelectedResumeTemplateName()"),
     optionsCallsGraphMessage: optionsJs.includes('type: "RUN_RESUME_WORKFLOW_GRAPH"')
       && optionsJs.includes("renderDocx: true")
       && optionsJs.includes("maxRevisions: 1")
       && optionsFunction.includes("renderOptions")
-      && optionsFunction.includes("templateName: getSelectedResumeTemplateName()"),
+      && optionsFunction.includes("getResumeRenderOptions()")
+      && renderOptionsFunction.includes("templateName: getSelectedResumeTemplateName()"),
     optionsDisplaysTemplateMetadata: detailFunction.includes("version.renderMetadata")
       && detailFunction.includes("appendTemplateMetadata")
       && detailFunction.includes("appendRenderQuality")

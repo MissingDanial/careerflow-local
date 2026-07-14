@@ -7,6 +7,7 @@
   --line: #dbe3ee;
   --accent: #1677ff;
   --accent-strong: #0f5ed7;
+  --success: #08775f;
   --danger: #c2410c;
   --soft: #eef4ff;
   --shadow: 0 12px 30px rgba(22, 35, 58, 0.12);
@@ -63,6 +64,107 @@ p {
   background: #fff;
   color: var(--text);
   cursor: pointer;
+}
+
+.runtime-strip {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.runtime-state {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.runtime-state > div {
+  min-width: 0;
+}
+
+.runtime-state strong,
+.runtime-state span {
+  display: block;
+}
+
+.runtime-state strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-state div > span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.state-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  border-radius: 50%;
+  background: #9aa6b5;
+}
+
+.state-dot[data-state="running"] {
+  background: var(--success);
+}
+
+.state-dot[data-state="error"] {
+  background: var(--danger);
+}
+
+.runtime-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.runtime-actions button {
+  min-width: auto;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.runtime-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.queue-target {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.queue-target select {
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: #fff;
+  font: inherit;
 }
 
 .actions {
@@ -201,13 +303,26 @@ p {
 }
 
 .detail-link {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
   margin-bottom: 10px;
 }
 
 .link-button {
   width: 100%;
+  min-width: 0;
+  padding-right: 8px;
+  padding-left: 8px;
   color: var(--accent);
   background: transparent;
+  white-space: normal;
+}
+
+.danger-link {
+  border-color: #f3b7b1;
+  color: var(--danger);
+  background: #fff4f2;
 }
 
 .status {

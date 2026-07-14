@@ -55,7 +55,11 @@ function main() {
         && upgrade.hasAgentShadowRuns
         && upgrade.hasAgentShadowItems
         && upgrade.hasAgentShadowSamples
-        && upgrade.hasAgentShadowReviews,
+        && upgrade.hasAgentShadowReviews
+        && upgrade.hasApplicationQueues
+        && upgrade.hasApplicationQueueItems
+        && upgrade.hasManualApplicationStatus
+        && upgrade.hasQueueTrustMarker,
       bootstrapsHistoryForCurrentLegacyDatabase: bootstrap.currentVersion === SCHEMA_VERSION
         && bootstrap.finalVersion === SCHEMA_VERSION
         && bootstrap.appliedCount === 0
@@ -137,7 +141,11 @@ function runUpgradeScenario(dataDir) {
       hasAgentShadowRuns: tableExists(store.database, "agent_shadow_runs"),
       hasAgentShadowItems: tableExists(store.database, "agent_shadow_items"),
       hasAgentShadowSamples: tableExists(store.database, "agent_shadow_samples"),
-      hasAgentShadowReviews: tableExists(store.database, "agent_shadow_reviews")
+      hasAgentShadowReviews: tableExists(store.database, "agent_shadow_reviews"),
+      hasApplicationQueues: tableExists(store.database, "application_queues"),
+      hasApplicationQueueItems: tableExists(store.database, "application_queue_items"),
+      hasManualApplicationStatus: columnExists(store.database, "applications", "manual_status"),
+      hasQueueTrustMarker: columnExists(store.database, "application_queue_items", "trusted_at")
     };
   } finally {
     store.close();

@@ -2,43 +2,56 @@
 
 ## 1. Agent 数量与职责
 
-稳定版默认 6 个 Agent：
+当前 Agent 分为“持久化上游画像”和“单岗位质量闭环”两组。ProfileAgent 只在用户主动进入个人经历入口时运行，不会在每个岗位任务中重置或重复询问。
 
-| Agent | 职责 | 是否可自动执行 | 关键约束 |
+| Agent/节点 | 职责 | 当前主流程 | 关键约束 |
 |---|---|---:|---|
-| ProfileAgent | 与用户对话，补全真实经历库 | 否 | 只记录用户确认过的事实 |
-| DiscoveryAgent | 根据目标岗位扩展搜索方向 | 是 | 扩展必须可解释、可关闭 |
-| ScreeningAgent | 岗位筛选、匹配评分、风险评分 | 是 | 不能直接决定投递 |
-| ResumeAgent | 根据 JD 定制简历 | 是 | 只能使用真实经历库 |
-| AuditAgent | 独立审核简历真实性和风险 | 是 | 必须独立于 ResumeAgent |
-| MessageAgent | 生成 BOSS 打招呼草稿 | 是 | 只能生成文本和 dry-run 任务 |
-| ApprovalAgent | 综合结果决定自动投递、人工确认或跳过 | 是 | 受用户配置和审核结果约束 |
+| ProfileAgent | 多轮对话、事实草稿、结构化画像沉淀 | 独立入口 | 只有用户确认的事实进入正式画像 |
+| JobRiskGate | 排斥方向和硬门禁 | 是 | 高风险命中先停止，不浪费匹配调用 |
+| ScreeningAgent | 岗位匹配、风险评分和推荐 | 是 | 不能决定或执行投递 |
+| ResumeAgent | 根据完整 JD 定制简历 | 是 | 只能引用冻结的确认事实 |
+| ResumeFitEvaluator | 检查 JD 必要项和证据覆盖 | 是 | covered/weak 必须有简历原文证据 |
+| ClaimVerifier | 校验简历 claim 的事实支撑 | 是 | unsupported claim 必须修订或阻断 |
+| ResumeRevisionAgent | 在门禁失败时生成新版本 | 按需 | 不覆盖旧版本，不引入新事实 |
+| AuditAgent | 独立综合真实性、格式和风险 | 是 | 模型不能削弱确定性阻断 |
+| DiscoveryAgent | 扩展相邻求职方向 | 可选 | 结果可解释、可关闭，不执行页面动作 |
+
+历史 MessageAgent、ApprovalAgent 和真实动作 canary 仅保留为隐藏兼容实验，不属于 M17/M17.1 普通用户主流程。
 
 非 Agent 执行模块：
 
 | 模块 | 职责 |
 |---|---|
-| BrowserExecutor | DOM 读取、上传、点击、异常上报 |
-| DocumentRenderer | DOCX/PDF 生成、页数检查、差异文件保存 |
-| ApplicationLogger | 数据库记录、事件日志、导出 |
+| Chrome Extension | 读取岗位 DOM、逐项加载详情、同步后端、打开岗位 URL |
+| DocumentRenderer | DOCX 生成、两页约束、渲染 QA 和差异记录 |
+| WorkflowOrchestrator | 汇总本地证据、给出下一安全步骤，不操作 BOSS |
+| ApplicationTransitionService | 按合法边、证据和幂等键更新本地 workflow 状态 |
+| ApplicationLogger | SQLite、Agent run、workflow event、错误和导出 |
 
 ## 2. 总体工作流
 
 ```text
-User Setup
+Profile entry (only when the user needs it)
   -> ProfileAgent
-  -> Job Collection
-  -> DiscoveryAgent
+  -> confirmed persistent career profile
+
+Selected job-intent queue
+  -> complete JD collection
+  -> JobRiskGate
   -> ScreeningAgent
-  -> ResumeAgent
-  -> DocumentRenderer
-  -> AuditAgent
-  -> ApprovalAgent
-  -> BrowserExecutor
-  -> ApplicationLogger
+  -> ResumeWorkflowGraph
+     -> ResumeAgent
+     -> ResumeFitEvaluator
+     -> ClaimVerifier
+     -> optional ResumeRevisionAgent loop
+     -> AuditAgent
+     -> DocumentRenderer
+  -> open BOSS job URL
+  -> user greets/uploads/applies manually
+  -> record manual status
 ```
 
-Agent 层不得直接操作 BOSS 页面。所有 BOSS 页面读取、点击、打招呼、上传或投递动作都必须通过 BrowserExecutor 的结构化任务执行，并把结果写回状态机。BOSS 平台层的已知约束见 [06_BOSS_PLATFORM_LOGIC.md](06_BOSS_PLATFORM_LOGIC.md)。
+Agent 层不得直接操作 BOSS 页面。当前 Chrome Extension 只读取岗位页面、在采集时加载详情并打开用户选择的岗位 URL；打招呼、简历上传和投递由用户完成。人工状态与本地 workflow 状态分离，BOSS 平台层约束见 [06_BOSS_PLATFORM_LOGIC.md](06_BOSS_PLATFORM_LOGIC.md)。
 
 ## 3. ProfileAgent
 
@@ -432,7 +445,7 @@ M7.1 先实现规则版 ResumeAgent：
 ### 7.4 规则
 
 - 必须逐条检查 `source_mapping`。
-- 发现 unsupported claim 必须阻断自动投递。
+- 发现 unsupported claim 必须阻断审核通过和人工投递交接。
 - 页数超过 2 页必须退回 ResumeAgent 压缩。
 - 中等及以上真实性风险必须要求用户确认。
 
@@ -448,11 +461,13 @@ M7.1 先实现规则版 AuditAgent：
 - M7.3 已在扩展设置详细页接入只读审核详情，展示真实性、格式、页数、夸大风险、证据问题和阻断原因；审批动作仍未开放。
 - M7.4 已开放本地审批：只有 `APPROVED` 简历版本可以写入 `metadata.localApproval`，并将 application 最多推进到 `GREETING_READY`；该动作只表示“用户认可此简历可进入打招呼准备”，不会创建真实 BOSS 页面任务。
 
-## 8. ApprovalAgent
+## 8. ApprovalAgent 与 MessageAgent（历史兼容层）
+
+> 本节记录 M7-M9 的历史本地审批和 dry-run 设计，便于理解旧表和测试。M17/M17.1 工作台不调用 auto_apply，不暴露真实打招呼、上传或投递入口。
 
 ### 8.1 目标
 
-根据用户配置、筛选结果、审核结果和投递状态，决定下一步动作。
+历史目标是根据用户配置、筛选结果和审核结果给出本地建议。任何建议都不是 BOSS 外部动作授权。
 
 ### 8.2 输入
 
@@ -490,14 +505,14 @@ M7.1 先实现规则版 AuditAgent：
 
 ### 8.5 规则
 
-- 默认不自动投递。
-- 用户未开启自动投递时，只能进入人工确认。
-- AuditAgent 未通过时不得自动投递。
-- 已沟通 HR 不得重复投递。
-- 遇到异常必须进入 `needs_manual_action`。
-- 当前 M7.4 的 Approval 仍是确定性本地规则：`APPROVED` 简历版本 + 用户点击本地审批，才允许进入 `GREETING_READY`。真实 `SEND_GREETING`、`UPLOAD_RESUME`、`SUBMIT_APPLICATION` 仍属于后续 BrowserExecutor 任务，不由 Agent 直接触发。
+- 当前普通用户流程始终人工联系和投递。
+- AuditAgent 未通过时不能进入人工交接阶段。
+- 已沟通或已投递由 manual_status 明确记录，不由 Agent 猜测。
+- 遇到异常必须进入 needs_manual_action 或错误队列。
+- 历史 M7.4 本地审批最多推进本地 GREETING_READY；它不会创建或授权真实 BOSS 动作。
+- 8.2-8.4 中保留的 auto_apply 枚举只用于旧数据兼容，当前主流程不得产生该结果。
 
-### 8.6 当前 MessageAgent 实现
+### 8.6 历史 MessageAgent / dry-run 实现
 
 M8.1 先实现规则版 MessageAgent：
 
@@ -506,8 +521,8 @@ M8.1 先实现规则版 MessageAgent：
 - 同步创建一个 `SEND_GREETING` browser task，但 payload 固定 `dryRun:true` 和 `requiresUserConfirmation:true`。
 - application 不会从 `GREETING_READY` 推进到 `GREETING_SENT`。
 - MessageAgent 不读取 BOSS 页面、不填输入框、不点击发送。
-- 当前扩展设置详细页可以生成草稿、查看 dry-run 任务，并触发 `SEND_GREETING` 页面侧 dry-run：BrowserExecutor 只做岗位匹配、输入框定位、文本填入和发送按钮可见性诊断，不点击发送。
-- dry-run 成功不会把 application 推进到 `GREETING_SENT`；真实发送仍需要后续 BrowserExecutor 切片和明确授权。
+- 旧扩展设置详细页曾支持生成草稿和 SEND_GREETING 页面侧 dry-run；M17 普通界面已隐藏这些入口。
+- dry-run 成功不会把 application 推进到 GREETING_SENT，也不在当前路线图中解锁真实发送。
 
 M8.3 增加只读状态刷新：
 
@@ -602,7 +617,7 @@ M9.5 增加本地复核决策：
 | `LLM_REQUEST_FAILED` | 模型请求失败 | 重试或进入人工处理 |
 | `AGENT_OUTPUT_SCHEMA_INVALID` | Agent 输出不符合 Schema | 自动重试一次，仍失败则记录 |
 | `PROFILE_EVIDENCE_MISSING` | 经历库证据不足 | 要求用户补充 |
-| `UNSUPPORTED_RESUME_CLAIM` | 简历出现无证据内容 | 阻断自动投递 |
+| `UNSUPPORTED_RESUME_CLAIM` | 简历出现无证据内容 | 阻断审核通过和人工投递交接 |
 | `RESUME_PAGE_LIMIT_EXCEEDED` | 简历超过 2 页 | 回到 ResumeAgent 压缩 |
 | `BROWSER_CAPTCHA_REQUIRED` | 出现验证码 | 暂停，用户处理 |
 | `BROWSER_LOGIN_REQUIRED` | 登录失效 | 暂停，用户处理 |
@@ -627,37 +642,34 @@ M9.5 增加本地复核决策：
 
 ## 11. MVP Agent 配置
 
-第一版可先实现 4 个 Agent：
-
-```text
-ProfileAgent
-ScreeningAgent
-ResumeAgent
-AuditAgent
-```
-
-ApprovalAgent 可先用确定性规则实现，后续升级为 Agent。DiscoveryAgent 可先使用配置关键词和简单规则，稳定后再启用 LLM。
+离线、测试或模型不可用时使用 rules 模式。最小闭环保留确定性 JobRiskGate、Screening、Resume、Fit、Claim、Revision 和 Audit 实现，并完整写入相同的 Schema、Agent run 和 workflow event。
 
 ## 12. 稳定版 Agent 配置
 
-稳定版启用 6 个 Agent：
+稳定版使用 hybrid 模式：
 
-```text
-ProfileAgent
-DiscoveryAgent
-ScreeningAgent
-ResumeAgent
-AuditAgent
-ApprovalAgent
-```
+~~~text
+Persistent ProfileAgent entry
+
+JobRiskGate
+-> ScreeningAgent
+-> ResumeAgent
+-> ResumeFitEvaluator
+-> ClaimVerifier
+-> optional ResumeRevisionAgent
+-> AuditAgent
+~~~
+
+模型负责语义判断和内容组织，确定性规则拥有风险门禁、事实所有权、Claim、渲染 QA 和审核单调性。ProfileAgent 独立持久化，不进入每岗位图。
 
 ## 13. 高级版可选 Agent
 
-后续可以新增：
+可选能力：
 
-- MessageAgent：生成 BOSS 打招呼语。
+- DiscoveryAgent：扩展相邻求职方向。
 - ReviewAgent：复盘投递效果，优化岗位筛选规则。
-- TemplateAgent：根据用户经历建议不同简历模板，但 MVP 不启用。
+- TemplateAgent：根据用户经历建议不同模板，但不能破坏固定 DOCX Schema。
+- MessageAgent：历史草稿能力，只能在单独产品立项后重新评估，不进入当前工作台。
 
 ## 14. M10.1 WorkflowOrchestrator
 
@@ -1404,3 +1416,44 @@ The HTTP start call returns a `QUEUED` run and the backend executes it asynchron
 Review labels are append-only: `CORRECT`, `FALSE_POSITIVE`, `FALSE_NEGATIVE`, `BAD_REASON`, and `RISK_MISSED`. The latest label drives the failure-candidate view, while earlier corrections remain auditable. `BAD_REASON` and `RISK_MISSED` require a note.
 
 Shadow is isolated from the application workflow. It does not call `createScreening`, does not transition applications, does not create workflow or browser tasks, and does not open BOSS pages. A Shadow rank is evidence for user review, not authorization to greet, upload, or apply.
+
+## 30. M17/M17.1 Queue-scoped Agent workflow
+
+M17 does not change the quality graph topology. It adds a queue scope and a user-facing batch runner around it:
+
+~~~text
+active application queue
+-> complete-JD applications in that queue
+-> deterministic risk gate
+-> ScreeningAgent
+-> shortlist
+-> ResumeWorkflowGraph per selected/eligible application
+-> DOCX success or structured failure
+-> manual handoff
+~~~
+
+Queue ownership:
+
+- jobs and applications remain globally deduplicated.
+- application_queue_items determines whether an application is active in the selected job-intent queue.
+- Batch Screening and Resume requests carry queueId and ignore applications that are not active in that queue.
+- A queue-level trust marker bypasses only the configured direction gate for that queue; it does not force a passing match score.
+- Removing a job or archiving a queue preserves screenings, resume versions, Agent runs, and workflow events.
+
+Progress and failures:
+
+- Batch actions expose current/total counts and per-application outcomes.
+- Every graph node keeps its existing Agent run and workflow event hooks.
+- UI failures refresh the error queue and application timeline instead of collapsing into one generic message.
+- Model mode and sanitized model configuration are frozen with each graph run.
+- ProfileAgent remains outside the batch graph and reads the latest confirmed persistent profile when a run snapshot is created.
+
+Manual handoff:
+
+- A successful DOCX and Audit result may make a job ready for user action, but it does not authorize a BOSS write action.
+- The workbench can open the normalized job URL and show the DOCX path.
+- The user performs greeting, upload, and application in BOSS.
+- manual_status records NOT_CONTACTED, GREETED, or APPLIED independently from applications.status.
+- Updating manual_status creates an audit event but no browser task and no workflow transition.
+
+M16.1 Shadow review remains a hidden, default-off evaluation tool. It can identify model ranking failures, but it cannot modify formal Screening, resume, application, queue, or manual status records.

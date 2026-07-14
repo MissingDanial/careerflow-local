@@ -14,6 +14,8 @@
     "test:ci": "node scripts/run-test-tier.js ci",
     "agent:evaluate": "node scripts/run-agent-evaluation.js",
     "agent:evaluate:real": "node scripts/run-real-model-evaluation.js",
+    "native:build": "node scripts/build-native-host.js",
+    "native:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-native-host.ps1",
     "poc:firecrawl": "node scripts/m1-firecrawl-poc.js",
     "poc:firecrawl:report": "node scripts/m1-firecrawl-report.js",
     "poc:local": "node scripts/m1-local-playwright-poc.js",
@@ -86,12 +88,18 @@
     "m16:agent-quality-evaluation:smoke": "node scripts/m16-agent-quality-evaluation-smoke.js",
     "m16:options-agent-quality:smoke": "node scripts/m16-options-agent-quality-smoke.js",
     "m16:shadow-review:smoke": "node scripts/m16-1-agent-shadow-review-smoke.js",
-    "m16:options-shadow-review:smoke": "node scripts/m16-1-options-shadow-review-smoke.js"
+    "m16:options-shadow-review:smoke": "node scripts/m16-1-options-shadow-review-smoke.js",
+    "m17:application-queues:smoke": "node scripts/m17-application-queues-smoke.js",
+    "m17:model-config:smoke": "node scripts/m17-model-config-smoke.js",
+    "m17:native-host:smoke": "node scripts/m17-native-host-smoke.js",
+    "m17:popup-runtime:smoke": "node scripts/m17-popup-runtime-smoke.js",
+    "m17:options-queues-runtime:smoke": "node scripts/m17-options-queues-runtime-smoke.js"
   },
   "engines": {
     "node": ">=24"
   },
   "devDependencies": {
+    "@yao-pkg/pkg": "^6.21.0",
     "docx": "^9.7.1",
     "playwright": "^1.61.1"
   },

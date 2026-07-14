@@ -6,7 +6,7 @@
 - 开源友好：MIT 许可证，避免引入许可证冲突。
 - 复用优先：优先使用成熟库完成 Web 后端、Agent 编排、DOCX、PDF、数据库和浏览器自动化。
 - Agent 职责隔离：写简历的 Agent 不能审核自己的输出。
-- 自动化和授权分离：Agent 做判断和准备，执行器做点击、上传和记录。
+- 本地准备和外部动作分离：Agent 做判断与 DOCX，扩展只读取/导航，打招呼、上传和投递由用户完成。
 - 错误透明：每一步失败都要抛出结构化错误，便于用户和开发者调试。
 
 ## 2. 推荐技术栈
@@ -18,42 +18,39 @@
 | LLM 调用 | `openai@6.46.0` + `zod@4.4.3` | 官方 SDK transport、严格输出 Schema、token/延迟/重试遥测 |
 | 数据库 | SQLite | 单用户本地部署足够稳定 |
 | ORM/迁移 | `node:sqlite` + ordered SQL migrations | 当前使用 `DatabaseSync`，按版本迁移并在升级前备份 |
-| 简历 DOCX | python-docx/docxtpl | 固定模板填充 |
-| PDF 导出 | LibreOffice headless | 本地 DOCX 转 PDF |
-| 浏览器接入 | Tampermonkey MVP | 快速验证 BOSS 网页流程 |
-| 后续扩展 | Chrome Extension | 更适合产品化 |
-| 控制台前端 | React + Vite | 配置、审批、记录、调试视图 |
-| 导出 | CSV + openpyxl | 投递记录复盘 |
-| 测试 | pytest + Playwright | 后端和浏览器流程测试 |
+| 简历 DOCX | `docx@9.7.1` + `mammoth@1.12.0` | 固定模板渲染与生成后文本/章节 QA |
+| 简历输入 | `mammoth` + `unpdf@1.6.2` | DOCX/PDF/TXT/MD 文本抽取 |
+| 浏览器接入 | Chrome/Edge MV3 Extension | 复用用户登录态，采集当前渲染 DOM，不依赖 DevTools |
+| 本地启动 | Native Messaging + `@yao-pkg/pkg@6.21.0` | popup 一键检查/启动固定 Node 后端 |
+| 扩展前端 | 原生 HTML/CSS/JS | popup、四阶段工作台、个人经历、设置 |
+| 测试 | Node smoke + Playwright | API、SQLite、Agent、扩展渲染和桌面/移动视口 |
 
 ## 3. 总体架构
 
 ```text
-BOSS Zhipin Web
+BOSS Zhipin Web (user login session)
   |
-  | DOM read / user-authorized actions
+  | rendered DOM read / job-page navigation
   v
-Tampermonkey / Chrome Extension
+Chrome/Edge MV3 Extension
+  |                         \
+  | localhost HTTP          \ Native Messaging: STATUS / START_BACKEND
+  v                           v
+Node.js 24 Local Backend    Fixed Native Host
   |
-  | localhost HTTP/WebSocket
-  v
-FastAPI Local Backend
-  |
-  |-- Agent Orchestrator
-  |     |-- ProfileAgent
-  |     |-- DiscoveryAgent
-  |     |-- ScreeningAgent
-  |     |-- ResumeAgent
-  |     |-- AuditAgent
-  |     `-- ApprovalAgent
-  |
-  |-- DocumentRenderer
-  |-- Browser Task API
-  |-- ApplicationLogger
-  |-- ExportService
+  |-- Application queues + global job/application dedup
+  |-- ProfileAgent persistent conversation and confirmed fact library
+  |-- ResumeWorkflowGraph
+  |     |-- ScreeningAgent + deterministic risk gate
+  |     |-- ResumeAgent -> DOCX renderer
+  |     |-- ResumeFitEvaluator + ClaimVerifier
+  |     |-- ResumeRevisionAgent
+  |     `-- AuditAgent
+  |-- Workflow/application logs
+  `-- Sanitized model-provider configuration
   |
   v
-SQLite + Local Files
+SQLite schema v18 + local DOCX/context/log files
 ```
 
 ## 4. 模块职责
@@ -63,10 +60,8 @@ SQLite + Local Files
 职责：
 
 - 读取 BOSS 直聘网页岗位列表和详情。
-- 判断是否已沟通过 HR。
 - 将岗位数据发送给本地后端。
-- 接收投递任务。
-- 执行上传简历、填写打招呼语、点击投递。
+- 打开用户选择的 BOSS 岗位页面。
 - 遇到验证码、登录异常、页面变化时停止并上报。
 
 限制：
@@ -74,12 +69,12 @@ SQLite + Local Files
 - 不保存 API Key。
 - 不绕过验证码。
 - 不规避平台风控。
-- 不在用户未授权时执行投递。
+- 普通用户流程不点击打招呼、不选择/上传文件、不点击投递。
 
 补充说明：
 
-- BOSS 层应被实现为 `BossAdapter / BrowserExecutor`，只负责读取页面事实和执行被授权动作。
-- 完整投递链路必须建模打招呼、沟通状态、投递解锁、简历选择/上传等中间状态。
+- BOSS 层实现为 `ChromeExtensionAdapter / BrowserExecutor`，当前只负责读取页面事实和导航。
+- 打招呼、沟通、简历上传和投递作为人工状态记录，不进入普通用户自动执行链路；历史 canary 代码保持默认关闭且隐藏。
 - 当前已知 BOSS 平台层问题见 [06_BOSS_PLATFORM_LOGIC.md](06_BOSS_PLATFORM_LOGIC.md)。
 
 ### 4.2 Local Backend
@@ -104,6 +99,8 @@ SQLite schema 管理：
 - schema v12 的 `012_application_transition_invariants.sql` 新增 application transition 幂等键和 browser task 过期、尝试次数、claim token 字段。
 - schema v15 的 `015_agent_model_quality.sql` 为 `agent_runs` 增加模型遥测，并新增 `agent_evaluation_runs` 保存真实模型评测状态、指标、报告和错误。
 - schema v16 的 `016_agent_shadow_review.sql` 新增 `agent_shadow_runs/items/samples/reviews`，保存真实岗位 Shadow 的冻结输入引用、重复采样、排名、遥测和追加式人工纠正。
+- schema v17 的 `017_application_queues.sql` 新增意向岗位队列与 application 多对多成员；全局岗位/application 不因队列重复。
+- schema v18 的 `018_manual_application_tracking.sql` 新增队列信任标记和独立的 `NOT_CONTACTED/GREETED/APPLIED` 人工状态。
 - `AgentShadowService` 以异步后台 run 执行 Screening，启动请求立即返回并由设置页轮询；进程重启后未完成 run 会标记为 `AGENT_SHADOW_RUN_INTERRUPTED`，不会静默续跑。
 - Shadow 使用独立表，不调用正式 screening 持久化和 application transition，也不写 `browser_tasks`。
 
@@ -130,7 +127,7 @@ Profile Conversation & Memory v2：
 
 Application 状态迁移：
 
-- `ApplicationTransitionService` 是唯一允许执行 `UPDATE applications` 的模块。
+- `ApplicationTransitionService` 是唯一允许更新 `applications.status` 的模块；store 只允许窄更新独立的 `manual_status*` 字段，不得借此推进 Agent 状态机。
 - 状态边由显式 transition map 校验，禁止服务自行拼接或跳过中间状态。
 - Screening、Resume、Audit、job sync、local approval 和 read-only browser result 先写事实，再把事实 ID 作为 typed evidence 请求迁移。
 - typed evidence 不只检查记录存在：job sync 必须引用包含当前岗位快照的 capture batch，screening recommendation 必须与目标状态一致，failure source 必须属于当前 application 且确实处于失败状态。
