@@ -69,7 +69,16 @@ async function runDirectChecks() {
       wireApi: "chat",
       reasoningEffort: "medium",
       timeoutMs: 30000,
-      maxRetries: 2
+      maxRetries: 2,
+      modelRoutes: {
+        ScreeningAgent: { mode: "rules" },
+        ResumeAgent: {
+          model: "gpt-5.5",
+          wireApi: "responses",
+          reasoningEffort: "low",
+          maxRetries: 0
+        }
+      }
     });
     const storedAfterSave = JSON.parse(fs.readFileSync(configPath, "utf8"));
     const updated = service.save({
@@ -101,6 +110,10 @@ async function runDirectChecks() {
           && !JSON.stringify(saved).includes("fixture-local-model-secret-value"),
         blankApiKeyPreservesExistingSecret: storedAfterBlank.apiKey === "fixture-local-model-secret-value"
           && updated.config.model === "fixture-model-v2",
+        modelRoutesPersistAcrossUpdates: storedAfterSave.modelRoutes.ScreeningAgent.mode === "rules"
+          && storedAfterBlank.modelRoutes.ResumeAgent.model === "gpt-5.5"
+          && storedAfterBlank.modelRoutes.ResumeAgent.maxRetries === 0
+          && updated.config.modelRoutes.ResumeAgent.wireApi === "responses",
         testUsesSavedConfigAndSanitizesTelemetry: probedApiKey === "fixture-local-model-secret-value"
           && probe.probe.ok === true
           && probe.telemetry.usage.totalTokens === 3
@@ -158,7 +171,14 @@ async function runApiChecks() {
       baseUrl: "https://api.example.test/v1",
       model: "api-model",
       wireApi: "chat",
-      maxRetries: 2
+      maxRetries: 2,
+      modelRoutes: {
+        ResumeAgent: {
+          model: "gpt-5.5",
+          wireApi: "responses",
+          maxRetries: 0
+        }
+      }
     }, TOKEN);
     const loaded = await requestJson(port, "GET", "/api/model-config");
     const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "model-provider.local.json"), "utf8"));
@@ -172,9 +192,11 @@ async function runApiChecks() {
           && !JSON.stringify(saved).includes("api-route-secret-value"),
         apiGetLoadsSavedConfigImmediately: loaded.config.model === "api-model"
           && loaded.config.wireApi === "chat"
-          && loaded.config.hasApiKey === true,
+          && loaded.config.hasApiKey === true
+          && loaded.config.modelRoutes.ResumeAgent.model === "gpt-5.5",
         apiPersistsOnlyInIgnoredDataDir: stored.apiKey === "api-route-secret-value"
           && stored.model === "api-model"
+          && stored.modelRoutes.ResumeAgent.maxRetries === 0
       },
       summary: {
         unauthorizedStatus: unauthorized.status,

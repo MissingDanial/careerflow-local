@@ -14,8 +14,11 @@ function createResumeWorkflowService({ store, dataDir }) {
         applicationId,
         mode: payload.mode || "rules",
         modelConfig: payload.modelConfig || {},
+        modelRoutes: payload.modelRoutes || {},
         userRules: payload.userRules || {},
         maxRevisions: payload.maxRevisions ?? 1,
+        reuseCompletedRun: payload.reuseCompletedRun !== false,
+        fastAudit: payload.fastAudit !== false,
         renderDocx: payload.renderDocx !== false,
         renderOptions: {
           outputDir: path.join(dataDir, "generated_resumes"),

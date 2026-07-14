@@ -5,5 +5,30 @@
   "timeoutMs": 45000,
   "maxRetries": 3,
   "inputCostPerMillion": 0,
-  "outputCostPerMillion": 0
+  "outputCostPerMillion": 0,
+  "modelRoutes": {
+    "ScreeningAgent": {
+      "mode": "rules"
+    },
+    "ResumeAgent": {
+      "model": "gpt-5.5",
+      "wireApi": "responses",
+      "reasoningEffort": "low",
+      "timeoutMs": 90000,
+      "maxRetries": 0
+    },
+    "ResumeFitEvaluator": {
+      "mode": "rules"
+    },
+    "ResumeRevisionAgent": {
+      "model": "gpt-5.5",
+      "wireApi": "responses",
+      "reasoningEffort": "low",
+      "timeoutMs": 90000,
+      "maxRetries": 0
+    },
+    "AuditAgent": {
+      "mode": "rules"
+    }
+  }
 }

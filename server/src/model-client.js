@@ -55,6 +55,12 @@ function loadModelConfig(options = {}) {
     fileConfig.reasoningEffort,
     ""
   );
+  const modelRoutes = firstObject(
+    options.modelRoutes,
+    secretConfig.modelRoutes,
+    localConfig.modelRoutes,
+    fileConfig.modelRoutes
+  );
 
   const source = options.source
     || (options.apiKey || options.baseUrl || options.model ? "explicit" : "")
@@ -103,6 +109,7 @@ function loadModelConfig(options = {}) {
         ?? localConfig.outputCostPerMillion
         ?? fileConfig.outputCostPerMillion
     ),
+    modelRoutes,
     source
   };
 }
@@ -476,7 +483,8 @@ function readLocalModelConfig(configPath) {
       timeoutMs: parsed.timeoutMs,
       maxRetries: parsed.maxRetries,
       inputCostPerMillion: parsed.inputCostPerMillion,
-      outputCostPerMillion: parsed.outputCostPerMillion
+      outputCostPerMillion: parsed.outputCostPerMillion,
+      modelRoutes: normalizeObject(parsed.modelRoutes)
     };
   } catch {
     throw agentClientError("LLM_CONFIG_INVALID", "boss-model.local.json must contain a valid JSON object");
@@ -504,7 +512,8 @@ function readSecretModelConfig(configPath) {
       timeoutMs: parsed.timeoutMs,
       maxRetries: parsed.maxRetries,
       inputCostPerMillion: parsed.inputCostPerMillion,
-      outputCostPerMillion: parsed.outputCostPerMillion
+      outputCostPerMillion: parsed.outputCostPerMillion,
+      modelRoutes: normalizeObject(parsed.modelRoutes)
     };
   } catch {
     throw agentClientError(
@@ -523,6 +532,14 @@ function resolveModelSecretConfigPath(options = {}) {
       || process.env.BOSS_MODEL_SECRET_CONFIG_PATH
       || path.join(dataDir, "model-provider.local.json")
   );
+}
+
+function firstObject(...values) {
+  return values.find((value) => value && typeof value === "object" && !Array.isArray(value)) || {};
+}
+
+function normalizeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
 function matchAssignment(text, key) {

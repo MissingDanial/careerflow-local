@@ -36,7 +36,8 @@ async function main() {
       model: "m16-fixture-model",
       wireApi: "responses",
       timeoutMs: 5000,
-      maxRetries: 1
+      maxRetries: 1,
+      modelRoutes: {}
     };
     const result = await runResumeWorkflowGraph({
       store,
@@ -49,11 +50,11 @@ async function main() {
     const runs = store.getAgentRuns({ applicationId: application.id, limit: 30 }).runs;
     const quality = store.getAgentModelQualitySummary({ limit: 100 });
     const screeningRun = runs.find((run) => run.agentName === "ScreeningAgent");
+    const auditRun = runs.find((run) => run.agentName === "AuditAgent");
     const modelRuns = runs.filter((run) => [
       "ScreeningAgent",
       "ResumeAgent",
-      "ResumeFitEvaluator",
-      "AuditAgent"
+      "ResumeFitEvaluator"
     ].includes(run.agentName));
     const evidenceError = await assertEvidenceGate(modelConfig);
     const auditResult = await assertAuditCannotWeaken(modelConfig);
@@ -63,17 +64,18 @@ async function main() {
     const checks = {
       schemaMigratedToM16: SCHEMA_VERSION >= 15 && store.getStats().schemaVersion === SCHEMA_VERSION,
       hybridGraphCompletes: result.ok === true && result.resumeAudit?.recommendation === "approve",
-      hybridGraphUsesExpectedModelAgents: modelRuns.length === 4
-        && modelRuns.every((run) => run.provider === "hybrid"),
+      hybridGraphUsesExpectedModelAgents: modelRuns.length === 3
+        && modelRuns.every((run) => run.provider === "hybrid")
+        && auditRun?.provider === "rules",
       claimVerifierRemainsDeterministic: runs.some((run) => run.agentName === "ClaimVerifier" && run.provider === "rules"),
       schemaFailureRetriesOnce: screeningRun?.modelTelemetry?.attemptCount === 2
         && screeningRun.modelTelemetry.attempts?.[0]?.errorCode === "AGENT_OUTPUT_SCHEMA_INVALID"
         && screeningRun.modelTelemetry.attempts?.[0]?.usage?.totalTokens === 150
         && screeningRun.modelTelemetry.usage?.totalTokens === 300,
-      usageTelemetryPersists: quality.invocationCount === 4
-        && quality.totals.totalTokens === 750
-        && quality.totals.attempts === 5
-        && quality.modelCounts["m16-fixture-model"] === 4,
+      usageTelemetryPersists: quality.invocationCount === 3
+        && quality.totals.totalTokens === 600
+        && quality.totals.attempts === 4
+        && quality.modelCounts["m16-fixture-model"] === 3,
       qualitySummaryHasLatency: quality.latencyMs.p50 > 0 && quality.latencyMs.p95 >= quality.latencyMs.p50,
       invalidEvidenceIsRejected: evidenceError === "AGENT_OUTPUT_EVIDENCE_INVALID",
       modelCannotRelaxAuditBlock: auditResult.result.recommendation === "block"
@@ -89,7 +91,7 @@ async function main() {
       noSummaryResumePassesFormatGate: noSummaryAudit.result.formatPassed === true
         && noSummaryAudit.result.recommendation === "approve",
       graphCreatesNoBrowserTasks: store.getStats().browserTaskCount === 0,
-      fixtureUsesOfficialSdkTransport: modelServer.calls() === 6
+      fixtureUsesOfficialSdkTransport: modelServer.calls() === 5
     };
     const ok = Object.values(checks).every(Boolean);
     console.log(JSON.stringify({

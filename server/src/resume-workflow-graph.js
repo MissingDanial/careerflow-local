@@ -1,17 +1,29 @@
+const fs = require("fs");
 const path = require("path");
 const { Annotation, END, START, StateGraph } = require("@langchain/langgraph");
-const { runScreeningAgent } = require("./screening-agent");
+const {
+  AGENT_VERSION: SCREENING_AGENT_VERSION,
+  PROMPT_VERSION: SCREENING_PROMPT_VERSION,
+  runScreeningAgent
+} = require("./screening-agent");
 const { runResumeAgent } = require("./resume-agent");
 const { runResumeFitEvaluator } = require("./resume-fit-evaluator");
 const { runClaimVerifier } = require("./claim-verifier");
-const { runResumeRevisionAgent } = require("./resume-revision-agent");
+const { findActionableRevisionEvidence, runResumeRevisionAgent } = require("./resume-revision-agent");
 const { runAuditAgent } = require("./audit-agent");
 const { renderResumeDocx } = require("./document-renderer");
-const { DEFAULT_RESUME_TEMPLATE } = require("./resume-template-registry");
+const { DEFAULT_RESUME_TEMPLATE, resolveResumeTemplate } = require("./resume-template-registry");
+const {
+  publicModelIdentity,
+  resolveAgentRuntime,
+  resolveAuditRuntime,
+  resolveWorkflowRuntime
+} = require("./agent-runtime-policy");
+const { buildScreeningCacheKey, SCREENING_CACHE_VERSION } = require("./workflow-cache");
 
-const GRAPH_VERSION = "m16.resume-workflow-graph.v3";
-const PROMPT_VERSION = "m16.resume-workflow.prompts.v1";
-const AGENT_VERSION = "m16.resume-workflow.agents.v1";
+const GRAPH_VERSION = "m18.resume-workflow-graph.v2";
+const PROMPT_VERSION = "m18.resume-workflow.prompts.v1";
+const AGENT_VERSION = "m18.resume-workflow.agents.v2";
 const GRAPH_AGENT_NAME = "ResumeWorkflowGraph";
 const DEFAULT_MAX_REVISIONS = 1;
 
@@ -23,6 +35,8 @@ const ResumeWorkflowState = Annotation.Root({
   inputManifest: Annotation({ reducer: (_left, right) => right, default: () => ({}) }),
   mode: Annotation({ reducer: (_left, right) => right, default: () => "rules" }),
   modelConfig: Annotation({ reducer: (_left, right) => right, default: () => ({}) }),
+  modelRoutes: Annotation({ reducer: (_left, right) => right, default: () => ({}) }),
+  fastAudit: Annotation({ reducer: (_left, right) => Boolean(right), default: () => true }),
   renderDocx: Annotation({ reducer: (_left, right) => right, default: () => true }),
   renderOptions: Annotation({ reducer: (_left, right) => right, default: () => ({}) }),
   userRules: Annotation({ reducer: (_left, right) => right, default: () => ({}) }),
@@ -37,6 +51,11 @@ const ResumeWorkflowState = Annotation.Root({
   resumeClaimVerification: Annotation({ reducer: (_left, right) => right, default: () => null }),
   resumeAudit: Annotation({ reducer: (_left, right) => right, default: () => null }),
   rendered: Annotation({ reducer: (_left, right) => right, default: () => null }),
+  revisionBaseResumeVersion: Annotation({ reducer: (_left, right) => right, default: () => null }),
+  revisionBaseFitEvaluation: Annotation({ reducer: (_left, right) => right, default: () => null }),
+  revisionBaseClaimVerification: Annotation({ reducer: (_left, right) => right, default: () => null }),
+  revisionDecision: Annotation({ reducer: (_left, right) => right, default: () => ({}) }),
+  revisionChanged: Annotation({ reducer: (_left, right) => Boolean(right), default: () => false }),
   shouldRevise: Annotation({ reducer: (_left, right) => Boolean(right), default: () => false }),
   stopReason: Annotation({ reducer: (_left, right) => right, default: () => "" }),
   nodeEvents: Annotation({ reducer: (left, right) => left.concat(right), default: () => [] }),
@@ -52,8 +71,14 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
   if (!applicationId) {
     throw workflowError("RESUME_WORKFLOW_APPLICATION_REQUIRED", "A valid application id is required.");
   }
-  const mode = normalizeMode(input.mode || options.mode || "rules");
-  const modelConfig = input.modelConfig || options.modelConfig || {};
+  const runtime = resolveWorkflowRuntime({
+    mode: input.mode || options.mode || "rules",
+    modelConfig: input.modelConfig || options.modelConfig || {},
+    modelRoutes: input.modelRoutes || options.modelRoutes || {}
+  });
+  const mode = runtime.mode;
+  const modelConfig = runtime.modelConfig;
+  const modelRoutes = runtime.modelRoutes;
   const userRules = input.userRules || options.userRules || {};
   const maxRevisions = Math.max(
     0,
@@ -61,6 +86,8 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
   );
   const renderDocx = input.renderDocx ?? options.renderDocx ?? true;
   const renderOptions = input.renderOptions || options.renderOptions || {};
+  const reuseCompletedRun = input.reuseCompletedRun ?? options.reuseCompletedRun ?? true;
+  const fastAudit = input.fastAudit ?? options.fastAudit ?? true;
   const workflowRunSnapshot = store.startWorkflowRun({
     applicationId,
     workflowName: GRAPH_AGENT_NAME,
@@ -72,7 +99,9 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
     userRules,
     executionOptions: {
       maxRevisions,
-      renderDocx
+      renderDocx,
+      modelRoutes,
+      fastAudit: Boolean(fastAudit)
     },
     renderOptions
   });
@@ -86,7 +115,7 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
     severity: "info",
     status: "RUNNING",
     progressCurrent: 0,
-    progressTotal: 7,
+    progressTotal: 8,
     message: `ResumeWorkflowGraph started for application ${applicationId}.`,
     metadata: {
       graphVersion: GRAPH_VERSION,
@@ -95,6 +124,48 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
       noBrowserTaskCreated: true
     }
   });
+
+  if (reuseCompletedRun) {
+    const reused = loadReusableWorkflowResult(store, {
+      applicationId,
+      workflowRunId,
+      inputManifest,
+      renderDocx: Boolean(workflowInput.executionOptions.renderDocx)
+    });
+    if (reused) {
+      recordWorkflowEvent(store, {
+        applicationId,
+        eventType: "RESUME_WORKFLOW_CACHE_HIT",
+        severity: "info",
+        status: "SUCCEEDED",
+        progressCurrent: 8,
+        progressTotal: 8,
+        message: `Reused completed resume workflow ${reused.reusedFromWorkflowRunId} for application ${applicationId}.`,
+        metadata: {
+          graphVersion: GRAPH_VERSION,
+          ...inputManifest,
+          reusedFromWorkflowRunId: reused.reusedFromWorkflowRunId,
+          noRealBossAction: true,
+          noBrowserTaskCreated: true
+        }
+      });
+      recordWorkflowEvent(store, {
+        applicationId,
+        eventType: "RESUME_WORKFLOW_GRAPH_COMPLETED",
+        severity: "info",
+        status: "SUCCEEDED",
+        progressCurrent: 8,
+        progressTotal: 8,
+        message: `ResumeWorkflowGraph completed from cache for application ${applicationId}.`,
+        metadata: summarizeGraphState(reused)
+      });
+      store.finishWorkflowRun(workflowRunId, {
+        status: "SUCCEEDED",
+        output: summarizeWorkflowOutput(reused)
+      });
+      return reused;
+    }
+  }
 
   const graph = buildResumeWorkflowGraph();
   try {
@@ -106,6 +177,8 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
       inputManifest,
       mode,
       modelConfig,
+      modelRoutes: workflowInput.executionOptions.modelRoutes || {},
+      fastAudit: workflowInput.executionOptions.fastAudit !== false,
       renderDocx: Boolean(workflowInput.executionOptions.renderDocx),
       renderOptions: workflowInput.renderOptions,
       userRules: workflowInput.userRules,
@@ -119,8 +192,8 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
       eventType: "RESUME_WORKFLOW_GRAPH_COMPLETED",
       severity: ok ? "info" : "warning",
       status: ok ? "SUCCEEDED" : "FAILED",
-      progressCurrent: 7,
-      progressTotal: 7,
+      progressCurrent: 8,
+      progressTotal: 8,
       message: ok
         ? `ResumeWorkflowGraph completed for application ${applicationId}.`
         : `ResumeWorkflowGraph stopped for application ${applicationId}: ${state.stopReason || "unknown"}.`,
@@ -130,6 +203,8 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
     });
     const result = {
       ok,
+      reused: false,
+      reusedFromWorkflowRunId: null,
       storage: "sqlite",
       graphVersion: GRAPH_VERSION,
       promptVersion: PROMPT_VERSION,
@@ -146,7 +221,9 @@ async function runResumeWorkflowGraph(input = {}, options = {}) {
       resumeFitEvaluation: state.resumeFitEvaluation || null,
       resumeClaimVerification: state.resumeClaimVerification || null,
       resumeAudit: state.resumeAudit || null,
-      rendered: state.rendered || null
+      rendered: state.rendered || null,
+      noRealBossAction: true,
+      noBrowserTaskCreated: true
     };
     store.finishWorkflowRun(workflowRunId, {
       status: ok ? "SUCCEEDED" : "STOPPED",
@@ -193,6 +270,7 @@ function buildResumeWorkflowGraph() {
     .addNode("verify_claims", withNodeTelemetry("verify_claims", verifyClaimsNode))
     .addNode("decide_revision", withNodeTelemetry("decide_revision", decideRevisionNode))
     .addNode("revise_resume", withNodeTelemetry("revise_resume", reviseResumeNode))
+    .addNode("render_resume", withNodeTelemetry("render_resume", renderResumeNode))
     .addNode("audit_resume", withNodeTelemetry("audit_resume", auditResumeNode))
     .addEdge(START, "load_context")
     .addEdge("load_context", "screen_application")
@@ -205,10 +283,14 @@ function buildResumeWorkflowGraph() {
     .addEdge("verify_claims", "decide_revision")
     .addConditionalEdges("decide_revision", routeAfterRevisionDecision, {
       revise_resume: "revise_resume",
-      audit_resume: "audit_resume",
+      render_resume: "render_resume",
       [END]: END
     })
-    .addEdge("revise_resume", "evaluate_fit")
+    .addConditionalEdges("revise_resume", routeAfterRevision, {
+      evaluate_fit: "evaluate_fit",
+      decide_revision: "decide_revision"
+    })
+    .addEdge("render_resume", "audit_resume")
     .addEdge("audit_resume", END)
     .compile();
 }
@@ -296,12 +378,46 @@ async function loadContextNode(state) {
 
 async function screenApplicationNode(state) {
   const screeningInput = buildFrozenScreeningInput(state);
+  const runtime = resolveAgentRuntime(state, "ScreeningAgent");
+  const screeningCacheKey = buildScreeningCacheKey({
+    ...screeningInput,
+    mode: runtime.mode,
+    modelIdentity: publicModelIdentity(runtime.modelConfig, runtime.mode),
+    promptVersion: SCREENING_PROMPT_VERSION,
+    agentVersion: SCREENING_AGENT_VERSION
+  });
+  const reusableScreening = state.store.findReusableScreening(state.applicationId, screeningCacheKey);
+  if (reusableScreening) {
+    state.store.recordWorkflowEvent({
+      applicationId: state.applicationId,
+      sourceType: "workflow",
+      sourceId: null,
+      eventType: "SCREENING_CACHE_HIT",
+      severity: "info",
+      status: "SUCCEEDED",
+      progressCurrent: 1,
+      progressTotal: 1,
+      message: `Reused screening ${reusableScreening.id} for application ${state.applicationId}.`,
+      metadata: {
+        graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
+        screeningCacheKey,
+        screeningCacheVersion: SCREENING_CACHE_VERSION,
+        noRealBossAction: true,
+        noApplicationStatusChange: true
+      }
+    });
+    return {
+      screening: reusableScreening,
+      stopReason: reusableScreening.recommendation === "skip" ? "screening_recommendation_skip" : ""
+    };
+  }
   const agentRun = state.store.startAgentRun({
     agentName: "ScreeningAgent",
     applicationId: state.applicationId,
     workflowRunId: state.workflowRunId,
     step: "langgraph_score_job",
-    provider: state.mode,
+    provider: runtime.mode,
     input: {
       application: screeningInput.application,
       job: screeningInput.job,
@@ -312,8 +428,8 @@ async function screenApplicationNode(state) {
   });
   try {
     const agentResult = await runScreeningAgent(screeningInput, {
-      mode: state.mode,
-      modelConfig: state.modelConfig || {}
+      mode: runtime.mode,
+      modelConfig: runtime.modelConfig
     });
     const finishedRun = state.store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -343,7 +459,9 @@ async function screenApplicationNode(state) {
         fallbackUsed: agentResult.fallbackUsed,
         fallbackReason: agentResult.fallbackReason || "",
         fallbackMessage: agentResult.fallbackMessage || "",
-        modelConfig: agentResult.modelConfig || {}
+        modelConfig: agentResult.modelConfig || {},
+        screeningCacheKey,
+        screeningCacheVersion: SCREENING_CACHE_VERSION
       }
     });
     return {
@@ -353,7 +471,7 @@ async function screenApplicationNode(state) {
   } catch (error) {
     state.store.finishAgentRun(agentRun.id, {
       status: "FAILED",
-      provider: state.mode,
+      provider: runtime.mode,
       output: { error: structuredError(error) },
       errorCode: error.code || "SCREENING_AGENT_FAILED",
       errorMessage: error.message || String(error),
@@ -369,12 +487,13 @@ function routeAfterScreening(state) {
 
 async function prepareResumeNode(state) {
   const resumeInput = buildFrozenResumeInput(state, state.screening);
+  const runtime = resolveAgentRuntime(state, "ResumeAgent");
   const agentRun = state.store.startAgentRun({
     agentName: "ResumeAgent",
     applicationId: state.applicationId,
     workflowRunId: state.workflowRunId,
     step: "langgraph_prepare_resume",
-    provider: state.mode,
+    provider: runtime.mode,
     input: {
       application: resumeInput.application,
       job: resumeInput.job,
@@ -385,8 +504,8 @@ async function prepareResumeNode(state) {
   });
   try {
     const agentResult = await runResumeAgent(resumeInput, {
-      mode: state.mode,
-      modelConfig: state.modelConfig || {}
+      mode: runtime.mode,
+      modelConfig: runtime.modelConfig
     });
     const finishedRun = state.store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -412,13 +531,12 @@ async function prepareResumeNode(state) {
         graphVersion: GRAPH_VERSION,
         ...snapshotTrace(state),
         nodeName: "prepare_resume",
-        mode: state.mode
+        mode: runtime.mode
       }
     });
-    const rendered = await maybeRenderResume(state, saved.resumeVersion);
     return {
-      resumeVersion: rendered.resumeVersion,
-      rendered: rendered.rendered,
+      resumeVersion: saved.resumeVersion,
+      rendered: null,
       resumeFitEvaluation: null,
       resumeClaimVerification: null,
       resumeAudit: null,
@@ -428,7 +546,7 @@ async function prepareResumeNode(state) {
   } catch (error) {
     state.store.finishAgentRun(agentRun.id, {
       status: "FAILED",
-      provider: state.mode,
+      provider: runtime.mode,
       output: { error: structuredError(error) },
       errorCode: error.code || "RESUME_AGENT_FAILED",
       errorMessage: error.message || String(error),
@@ -441,12 +559,13 @@ async function prepareResumeNode(state) {
 async function evaluateFitNode(state) {
   const resumeVersion = assertResumeVersion(state.resumeVersion);
   const resumeInput = buildFrozenResumeInput(state, state.screening);
+  const runtime = resolveAgentRuntime(state, "ResumeFitEvaluator");
   const agentRun = state.store.startAgentRun({
     agentName: "ResumeFitEvaluator",
     applicationId: resumeVersion.applicationId,
     workflowRunId: state.workflowRunId,
     step: "langgraph_evaluate_resume_fit",
-    provider: state.mode,
+    provider: runtime.mode,
     input: {
       resumeVersionId: resumeVersion.id,
       application: resumeInput.application,
@@ -461,8 +580,8 @@ async function evaluateFitNode(state) {
       job: resumeInput.job,
       resumeVersion
     }, {
-      mode: state.mode,
-      modelConfig: state.modelConfig || {}
+      mode: runtime.mode,
+      modelConfig: runtime.modelConfig
     });
     const finishedRun = state.store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -486,7 +605,7 @@ async function evaluateFitNode(state) {
         evaluatedBy: GRAPH_AGENT_NAME,
         graphVersion: GRAPH_VERSION,
         ...snapshotTrace(state),
-        mode: state.mode,
+        mode: runtime.mode,
         revisionCount: state.revisionCount || 0
       }
     });
@@ -519,7 +638,7 @@ async function evaluateFitNode(state) {
   } catch (error) {
     state.store.finishAgentRun(agentRun.id, {
       status: "FAILED",
-      provider: state.mode,
+      provider: runtime.mode,
       output: { error: structuredError(error) },
       errorCode: error.code || "RESUME_FIT_EVALUATOR_FAILED",
       errorMessage: error.message || String(error),
@@ -619,25 +738,100 @@ async function verifyClaimsNode(state) {
 }
 
 async function decideRevisionNode(state) {
-  const fitPolicy = state.resumeFitEvaluation?.policy || {};
-  const claimPolicy = state.resumeClaimVerification?.policy || {};
-  const unsupportedCount = Number(state.resumeClaimVerification?.unsupportedCount || 0);
-  const needsRevision = Boolean(fitPolicy.requiresResumeRevision || unsupportedCount > 0);
-  const canRevise = needsRevision && (state.revisionCount || 0) < (state.maxRevisions || 0);
-  const canProceedToAudit = fitPolicy.canProceedToAudit !== false && unsupportedCount === 0;
-  if (canRevise) {
+  const selection = selectRevisionOutcome(state);
+  if (selection && !selection.accepted) {
+    const baseDecision = assessRevisionOpportunity({
+      ...state,
+      resumeVersion: state.revisionBaseResumeVersion,
+      resumeFitEvaluation: state.revisionBaseFitEvaluation,
+      resumeClaimVerification: state.revisionBaseClaimVerification
+    });
+    state.store.recordWorkflowEvent({
+      applicationId: state.applicationId,
+      sourceType: "workflow",
+      sourceId: null,
+      eventType: "RESUME_REVISION_REJECTED_NO_QUALITY_GAIN",
+      severity: "info",
+      status: "SUCCEEDED",
+      progressCurrent: 1,
+      progressTotal: 1,
+      message: `Kept resume version ${state.revisionBaseResumeVersion.id}; revision ${state.resumeVersion.id} did not improve verified quality.`,
+      metadata: {
+        graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
+        baseResumeVersionId: state.revisionBaseResumeVersion.id,
+        rejectedResumeVersionId: state.resumeVersion.id,
+        baseFitScore: selection.baseFitScore,
+        revisedFitScore: selection.revisedFitScore,
+        baseSafetyIssues: selection.baseSafetyIssues,
+        revisedSafetyIssues: selection.revisedSafetyIssues,
+        noRealBossAction: true,
+        noApplicationStatusChange: true
+      }
+    });
     return {
+      resumeVersion: state.revisionBaseResumeVersion,
+      resumeFitEvaluation: state.revisionBaseFitEvaluation,
+      resumeClaimVerification: state.revisionBaseClaimVerification,
+      revisionBaseResumeVersion: null,
+      revisionBaseFitEvaluation: null,
+      revisionBaseClaimVerification: null,
+      revisionDecision: { ...selection, ...baseDecision },
+      shouldRevise: false,
+      stopReason: baseDecision.canProceedToAudit
+        ? ""
+        : baseDecision.safetyIssueCount > 0
+          ? "resume_has_unsupported_claims"
+          : "resume_checks_block_audit",
+      rendered: null
+    };
+  }
+  const decision = assessRevisionOpportunity(state);
+  if (decision.shouldRevise) {
+    return {
+      revisionBaseResumeVersion: state.resumeVersion,
+      revisionBaseFitEvaluation: state.resumeFitEvaluation,
+      revisionBaseClaimVerification: state.resumeClaimVerification,
+      revisionDecision: decision,
       shouldRevise: true,
       stopReason: ""
     };
   }
-  if (!canProceedToAudit) {
+  if (decision.skippedNoActionableEvidence) {
+    state.store.recordWorkflowEvent({
+      applicationId: state.applicationId,
+      sourceType: "workflow",
+      sourceId: null,
+      eventType: "RESUME_REVISION_SKIPPED_NO_ACTIONABLE_EVIDENCE",
+      severity: "info",
+      status: "SUCCEEDED",
+      progressCurrent: 1,
+      progressTotal: 1,
+      message: `Skipped resume revision for version ${state.resumeVersion?.id || "-"}; open JD gaps have no confirmed resume evidence to rewrite.`,
+      metadata: {
+        graphVersion: GRAPH_VERSION,
+        ...snapshotTrace(state),
+        coverageScore: Number(state.resumeFitEvaluation?.coverageScore || 0),
+        weakCount: Number(state.resumeFitEvaluation?.weakCount || 0),
+        missingCount: Number(state.resumeFitEvaluation?.missingCount || 0),
+        actionableCoverageCount: decision.actionableCoverageCount,
+        noRealBossAction: true,
+        noApplicationStatusChange: true
+      }
+    });
+  }
+  if (!decision.canProceedToAudit) {
     return {
+      revisionDecision: decision,
       shouldRevise: false,
-      stopReason: unsupportedCount > 0 ? "resume_has_unsupported_claims" : "resume_checks_block_audit"
+      stopReason: decision.safetyIssueCount > 0 ? "resume_has_unsupported_claims" : "resume_checks_block_audit"
     };
   }
   return {
+    revisionBaseResumeVersion: null,
+    revisionBaseFitEvaluation: null,
+    revisionBaseClaimVerification: null,
+    revisionDecision: selection || decision,
     shouldRevise: false,
     stopReason: ""
   };
@@ -650,18 +844,23 @@ function routeAfterRevisionDecision(state) {
   if (state.stopReason) {
     return END;
   }
-  return "audit_resume";
+  return "render_resume";
+}
+
+function routeAfterRevision(state) {
+  return state.revisionChanged ? "evaluate_fit" : "decide_revision";
 }
 
 async function reviseResumeNode(state) {
   const resumeVersion = assertResumeVersion(state.resumeVersion);
   const resumeInput = buildFrozenResumeInput(state, state.screening);
+  const runtime = resolveAgentRuntime(state, "ResumeRevisionAgent");
   const agentRun = state.store.startAgentRun({
     agentName: "ResumeRevisionAgent",
     applicationId: resumeVersion.applicationId,
     workflowRunId: state.workflowRunId,
     step: "langgraph_revise_resume_from_checks",
-    provider: state.mode,
+    provider: runtime.mode,
     input: {
       resumeVersionId: resumeVersion.id,
       resumeFitEvaluationId: state.resumeFitEvaluation?.id || null,
@@ -682,8 +881,8 @@ async function reviseResumeNode(state) {
       resumeFitEvaluation: state.resumeFitEvaluation,
       resumeClaimVerification: state.resumeClaimVerification
     }, {
-      mode: state.mode,
-      modelConfig: state.modelConfig || {}
+      mode: runtime.mode,
+      modelConfig: runtime.modelConfig
     });
     const finishedRun = state.store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -698,12 +897,48 @@ async function reviseResumeNode(state) {
       modelConfig: agentResult.modelConfig,
       telemetry: agentResult.telemetry
     });
+    const persistedResult = withRenderMetadata(agentResult.result, state.renderOptions);
+    const changed = agentResult.result.metadata?.changed !== false
+      && (
+        JSON.stringify(persistedResult.resumeFields || {}) !== JSON.stringify(resumeVersion.resumeFields || {})
+        || JSON.stringify(persistedResult.sourceMapping || []) !== JSON.stringify(resumeVersion.sourceMapping || [])
+      );
+    const actionCount = Array.isArray(agentResult.result.metadata?.actions)
+      ? agentResult.result.metadata.actions.length
+      : 0;
+    if (!changed) {
+      state.store.recordWorkflowEvent({
+        applicationId: resumeVersion.applicationId,
+        sourceType: "agent_run",
+        sourceId: finishedRun.id,
+        eventType: "RESUME_REVISION_SKIPPED_NO_CHANGE",
+        severity: "info",
+        status: "SUCCEEDED",
+        progressCurrent: 1,
+        progressTotal: 1,
+        message: `Resume revision produced no content change for version ${resumeVersion.id}; re-evaluation was skipped.`,
+        metadata: {
+          graphVersion: GRAPH_VERSION,
+          ...snapshotTrace(state),
+          resumeVersionId: resumeVersion.id,
+          actionCount,
+          noRealBossAction: true,
+          noApplicationStatusChange: true
+        }
+      });
+      return {
+        revisionCount: (state.revisionCount || 0) + 1,
+        revisionChanged: false,
+        shouldRevise: false,
+        stopReason: ""
+      };
+    }
     const saved = state.store.createResumeVersion({
       applicationId: resumeVersion.applicationId,
       screeningId: resumeVersion.screeningId || "",
       agentRunId: finishedRun.id,
       provider: agentResult.provider,
-      result: withRenderMetadata(agentResult.result, state.renderOptions),
+      result: persistedResult,
       skipApplicationTransition: true,
       metadata: {
         generatedBy: GRAPH_AGENT_NAME,
@@ -713,13 +948,9 @@ async function reviseResumeNode(state) {
         resumeFitEvaluationId: state.resumeFitEvaluation?.id || null,
         resumeClaimVerificationId: state.resumeClaimVerification?.id || null,
         revisionSource: "langgraph_checks",
-        mode: state.mode
+        mode: runtime.mode
       }
     });
-    const rendered = await maybeRenderResume(state, saved.resumeVersion);
-    const actionCount = Array.isArray(agentResult.result.metadata?.actions)
-      ? agentResult.result.metadata.actions.length
-      : 0;
     state.store.recordWorkflowEvent({
       applicationId: resumeVersion.applicationId,
       sourceType: "agent_run",
@@ -729,14 +960,14 @@ async function reviseResumeNode(state) {
       status: "SUCCEEDED",
       progressCurrent: 1,
       progressTotal: 1,
-      message: `LangGraph prepared resume revision from version ${resumeVersion.id} into version ${rendered.resumeVersion.id}.`,
+      message: `LangGraph prepared resume revision from version ${resumeVersion.id} into version ${saved.resumeVersion.id}.`,
       errorCode: actionCount ? "" : "RESUME_REVISION_NO_SAFE_CHANGE",
       errorMessage: actionCount ? "" : "No safe evidence-bound revision was available.",
       metadata: {
         graphVersion: GRAPH_VERSION,
         ...snapshotTrace(state),
         baseResumeVersionId: resumeVersion.id,
-        resumeVersionId: rendered.resumeVersion.id,
+        resumeVersionId: saved.resumeVersion.id,
         actionCount,
         noRealBossAction: true,
         noApplicationStatusChange: true,
@@ -745,8 +976,9 @@ async function reviseResumeNode(state) {
     });
     return {
       revisionCount: (state.revisionCount || 0) + 1,
-      resumeVersion: rendered.resumeVersion,
-      rendered: rendered.rendered,
+      revisionChanged: true,
+      resumeVersion: saved.resumeVersion,
+      rendered: null,
       resumeFitEvaluation: null,
       resumeClaimVerification: null,
       resumeAudit: null,
@@ -756,7 +988,7 @@ async function reviseResumeNode(state) {
   } catch (error) {
     state.store.finishAgentRun(agentRun.id, {
       status: "FAILED",
-      provider: state.mode,
+      provider: runtime.mode,
       output: { error: structuredError(error) },
       errorCode: error.code || "RESUME_REVISION_AGENT_FAILED",
       errorMessage: error.message || String(error),
@@ -766,15 +998,47 @@ async function reviseResumeNode(state) {
   }
 }
 
+async function renderResumeNode(state) {
+  const resumeVersion = assertResumeVersion(state.resumeVersion);
+  const rendered = await maybeRenderResume(state, resumeVersion);
+  state.store.recordWorkflowEvent({
+    applicationId: resumeVersion.applicationId,
+    sourceType: "workflow",
+    sourceId: null,
+    eventType: state.renderDocx ? "RESUME_FINAL_RENDERED" : "RESUME_FINAL_RENDER_SKIPPED",
+    severity: "info",
+    status: "SUCCEEDED",
+    progressCurrent: 1,
+    progressTotal: 1,
+    message: state.renderDocx
+      ? `Rendered final resume version ${rendered.resumeVersion.id}.`
+      : `Skipped DOCX rendering for final resume version ${rendered.resumeVersion.id}.`,
+    metadata: {
+      graphVersion: GRAPH_VERSION,
+      ...snapshotTrace(state),
+      resumeVersionId: rendered.resumeVersion.id,
+      filePath: rendered.rendered?.filePath || "",
+      finalOnly: true,
+      noRealBossAction: true,
+      noApplicationStatusChange: true
+    }
+  });
+  return {
+    resumeVersion: rendered.resumeVersion,
+    rendered: rendered.rendered
+  };
+}
+
 async function auditResumeNode(state) {
   const resumeVersion = assertResumeVersion(state.resumeVersion);
   const resumeInput = buildFrozenResumeInput(state, state.screening);
+  const runtime = resolveAuditRuntime(state);
   const agentRun = state.store.startAgentRun({
     agentName: "AuditAgent",
     applicationId: resumeVersion.applicationId,
     workflowRunId: state.workflowRunId,
     step: "langgraph_audit_resume",
-    provider: state.mode,
+    provider: runtime.mode,
     input: {
       resumeVersionId: resumeVersion.id,
       application: resumeInput.application,
@@ -795,8 +1059,8 @@ async function auditResumeNode(state) {
       unsupportedClaims: resumeVersion.unsupportedClaims,
       renderMetadata: resumeVersion.renderMetadata
     }, {
-      mode: state.mode,
-      modelConfig: state.modelConfig || {}
+      mode: runtime.mode,
+      modelConfig: runtime.modelConfig
     });
     const finishedRun = state.store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -820,7 +1084,9 @@ async function auditResumeNode(state) {
         auditedBy: GRAPH_AGENT_NAME,
         graphVersion: GRAPH_VERSION,
         ...snapshotTrace(state),
-        mode: state.mode
+        mode: runtime.mode,
+        fastPath: Boolean(runtime.fastPath),
+        requestedMode: state.mode
       }
     });
     return {
@@ -831,7 +1097,7 @@ async function auditResumeNode(state) {
   } catch (error) {
     state.store.finishAgentRun(agentRun.id, {
       status: "FAILED",
-      provider: state.mode,
+      provider: runtime.mode,
       output: { error: structuredError(error) },
       errorCode: error.code || "AUDIT_AGENT_FAILED",
       errorMessage: error.message || String(error),
@@ -861,14 +1127,174 @@ async function maybeRenderResume(state, resumeVersion) {
   };
 }
 
+function loadReusableWorkflowResult(store, input = {}) {
+  const cached = store.findReusableWorkflowRun({
+    applicationId: input.applicationId,
+    workflowName: GRAPH_AGENT_NAME,
+    inputHash: input.inputManifest?.inputHash || "",
+    excludeWorkflowRunId: input.workflowRunId
+  });
+  const output = cached?.workflowRun?.output;
+  if (!cached || !output?.ok || !output.resumeVersion?.id || !output.resumeAudit?.id) {
+    return null;
+  }
+  try {
+    const resumeVersion = store.getResumeVersion(output.resumeVersion.id);
+    const resumeAudit = store.getLatestResumeAuditForResumeVersion(resumeVersion.id);
+    const resumeFitEvaluation = store.getLatestResumeFitEvaluationForResumeVersion(resumeVersion.id);
+    const resumeClaimVerification = store.getLatestResumeClaimVerificationForResumeVersion(resumeVersion.id);
+    const screening = output.screening?.id ? store.getScreening(output.screening.id) : null;
+    if (!resumeAudit || resumeAudit.recommendation !== "approve" || !resumeFitEvaluation || !resumeClaimVerification) {
+      return null;
+    }
+    if (input.renderDocx && (!resumeVersion.filePath || !fs.existsSync(resumeVersion.filePath))) {
+      return null;
+    }
+    return {
+      ok: true,
+      reused: true,
+      reusedFromWorkflowRunId: cached.workflowRun.id,
+      storage: "sqlite",
+      graphVersion: GRAPH_VERSION,
+      promptVersion: PROMPT_VERSION,
+      agentVersion: AGENT_VERSION,
+      applicationId: input.applicationId,
+      workflowRunId: input.workflowRunId,
+      inputSnapshot: input.inputManifest,
+      stopReason: "",
+      revisionCount: Number(output.revisionCount || 0),
+      nodeEvents: [],
+      errors: [],
+      screening,
+      resumeVersion,
+      resumeFitEvaluation,
+      resumeClaimVerification,
+      resumeAudit,
+      rendered: output.rendered || (resumeVersion.filePath ? {
+        filePath: resumeVersion.filePath,
+        fileFormat: resumeVersion.fileFormat || "docx"
+      } : null),
+      noRealBossAction: true,
+      noBrowserTaskCreated: true
+    };
+  } catch {
+    return null;
+  }
+}
+
+function assessRevisionOpportunity(state = {}) {
+  const fit = state.resumeFitEvaluation || {};
+  const claim = state.resumeClaimVerification || {};
+  const fitPolicy = fit.policy || {};
+  const claimPolicy = claim.policy || {};
+  const coverageItems = Array.isArray(fit.coverageItems)
+    ? fit.coverageItems.filter((item) => item && typeof item === "object")
+    : [];
+  const actionableCoverage = coverageItems.filter((item) => {
+    if (!new Set(["weak", "missing"]).has(String(item.status || "").toLowerCase())) {
+      return false;
+    }
+    if (String(item.evidenceField || "").trim() && String(item.evidenceText || "").trim()) {
+      return true;
+    }
+    return Boolean(findActionableRevisionEvidence(item, state.profile, state.resumeVersion));
+  });
+  const unsupportedCount = Number(claim.unsupportedCount || 0);
+  const needsUserConfirmationCount = Number(claim.needsUserConfirmationCount || 0);
+  const safetyIssueCount = unsupportedCount + needsUserConfirmationCount;
+  const policyRequestsRevision = Boolean(
+    fitPolicy.requiresResumeRevision
+    || claimPolicy.requiresResumeRevision
+    || safetyIssueCount > 0
+  );
+  const revisionBudgetAvailable = (state.revisionCount || 0) < (state.maxRevisions || 0);
+  const hasActionableWork = safetyIssueCount > 0 || actionableCoverage.length > 0;
+  return {
+    shouldRevise: policyRequestsRevision && revisionBudgetAvailable && hasActionableWork,
+    canProceedToAudit: fitPolicy.canProceedToAudit !== false && safetyIssueCount === 0,
+    skippedNoActionableEvidence: policyRequestsRevision && revisionBudgetAvailable && !hasActionableWork,
+    policyRequestsRevision,
+    revisionBudgetAvailable,
+    actionableCoverageCount: actionableCoverage.length,
+    safetyIssueCount,
+    unsupportedCount,
+    needsUserConfirmationCount
+  };
+}
+
+function selectRevisionOutcome(state = {}) {
+  const baseResume = state.revisionBaseResumeVersion;
+  const baseFit = state.revisionBaseFitEvaluation;
+  const baseClaim = state.revisionBaseClaimVerification;
+  const revisedResume = state.resumeVersion;
+  const revisedFit = state.resumeFitEvaluation;
+  const revisedClaim = state.resumeClaimVerification;
+  if (!baseResume?.id || !baseFit || !baseClaim || !revisedResume?.id || revisedResume.id === baseResume.id) {
+    return null;
+  }
+  const baseFitScore = Number(baseFit.coverageScore || 0);
+  const revisedFitScore = Number(revisedFit?.coverageScore || 0);
+  const baseSafetyIssues = claimSafetyIssueCount(baseClaim);
+  const revisedSafetyIssues = claimSafetyIssueCount(revisedClaim);
+  const baseBlockers = Array.isArray(baseFit.blockers) ? baseFit.blockers.length : 0;
+  const revisedBlockers = Array.isArray(revisedFit?.blockers) ? revisedFit.blockers.length : 0;
+  const safetyImproved = revisedSafetyIssues < baseSafetyIssues;
+  const blockersImproved = revisedSafetyIssues <= baseSafetyIssues && revisedBlockers < baseBlockers;
+  const fitImproved = revisedSafetyIssues === baseSafetyIssues
+    && revisedBlockers === baseBlockers
+    && revisedFitScore > baseFitScore;
+  return {
+    accepted: Boolean(safetyImproved || blockersImproved || fitImproved),
+    baseFitScore,
+    revisedFitScore,
+    baseSafetyIssues,
+    revisedSafetyIssues,
+    baseBlockers,
+    revisedBlockers
+  };
+}
+
+function claimSafetyIssueCount(claim = {}) {
+  return Number(claim?.unsupportedCount || 0) + Number(claim?.needsUserConfirmationCount || 0);
+}
+
 function withRenderMetadata(result = {}, renderOptions = {}) {
+  const template = resolveResumeTemplate(
+    renderOptions.templateName
+    || renderOptions.template
+    || result.renderHints?.template
+    || result.renderMetadata?.template
+    || DEFAULT_RESUME_TEMPLATE
+  );
+  const resumeFields = {
+    ...(result.resumeFields || result.resume_fields || {})
+  };
+  if (!template.showSummarySection) {
+    resumeFields.summary = "";
+  }
+  if (!template.showSkillsSection) {
+    resumeFields.skills = [];
+  }
+  const sourceMapping = Array.isArray(result.sourceMapping || result.source_mapping)
+    ? (result.sourceMapping || result.source_mapping).filter((mapping) => {
+      const field = String(mapping?.resumeField || mapping?.resume_field || "").trim();
+      if (!template.showSummarySection && field === "summary") {
+        return false;
+      }
+      return template.showSkillsSection || !/^skills\[[0-9]+\]$/.test(field);
+    })
+    : [];
   return {
     ...result,
+    resumeFields,
+    sourceMapping,
     renderMetadata: {
       ...(result.renderMetadata || {}),
       ...(result.renderHints || {}),
       maxPages: 2,
-      template: renderOptions.templateName || renderOptions.template || result.renderHints?.template || DEFAULT_RESUME_TEMPLATE,
+      template: template.key,
+      showSummarySection: template.showSummarySection,
+      showSkillsSection: template.showSkillsSection,
       referenceDocxPath: renderOptions.referenceDocxPath || "",
       photoPath: renderOptions.photoPath || "",
       graphVersion: GRAPH_VERSION
@@ -953,6 +1379,9 @@ function summarizeGraphState(state = {}) {
     resumeAuditId: state.resumeAudit?.id || null,
     revisionCount: state.revisionCount || 0,
     stopReason: state.stopReason || "",
+    reused: Boolean(state.reused),
+    reusedFromWorkflowRunId: state.reusedFromWorkflowRunId || null,
+    revisionDecision: state.revisionDecision || {},
     renderedFilePath: state.rendered?.filePath || state.resumeVersion?.filePath || "",
     noRealBossAction: true,
     noBrowserTaskCreated: true
@@ -962,6 +1391,8 @@ function summarizeGraphState(state = {}) {
 function summarizeWorkflowOutput(result = {}) {
   return {
     ok: Boolean(result.ok),
+    reused: Boolean(result.reused),
+    reusedFromWorkflowRunId: result.reusedFromWorkflowRunId || null,
     graphVersion: result.graphVersion || GRAPH_VERSION,
     promptVersion: result.promptVersion || PROMPT_VERSION,
     agentVersion: result.agentVersion || AGENT_VERSION,
@@ -989,6 +1420,8 @@ function summarizeNodeUpdate(update = {}) {
     resumeClaimVerificationId: update.resumeClaimVerification?.id || null,
     resumeAuditId: update.resumeAudit?.id || null,
     shouldRevise: Boolean(update.shouldRevise),
+    revisionChanged: Boolean(update.revisionChanged),
+    revisionDecision: update.revisionDecision || {},
     stopReason: update.stopReason || "",
     renderedFilePath: update.rendered?.filePath || ""
   };
@@ -1038,6 +1471,9 @@ module.exports = {
   AGENT_VERSION,
   GRAPH_VERSION,
   PROMPT_VERSION,
+  applyResumeRenderPolicy: withRenderMetadata,
+  assessRevisionOpportunity,
   buildResumeWorkflowGraph,
-  runResumeWorkflowGraph
+  runResumeWorkflowGraph,
+  selectRevisionOutcome
 };

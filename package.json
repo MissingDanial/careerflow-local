@@ -93,7 +93,8 @@
     "m17:model-config:smoke": "node scripts/m17-model-config-smoke.js",
     "m17:native-host:smoke": "node scripts/m17-native-host-smoke.js",
     "m17:popup-runtime:smoke": "node scripts/m17-popup-runtime-smoke.js",
-    "m17:options-queues-runtime:smoke": "node scripts/m17-options-queues-runtime-smoke.js"
+    "m17:options-queues-runtime:smoke": "node scripts/m17-options-queues-runtime-smoke.js",
+    "m18:agent-latency:smoke": "node scripts/m18-agent-latency-routing-smoke.js"
   },
   "engines": {
     "node": ">=24"

@@ -11,6 +11,7 @@ const {
   RealActionAuthorizationService,
   isRealActionType
 } = require("./services/real-action-authorization-service");
+const { buildWorkflowInputHash } = require("./workflow-cache");
 
 let DatabaseSync;
 try {
@@ -2191,7 +2192,7 @@ class SqliteJobStore {
       renderOptions = normalizeObject(input.renderOptions);
     }
 
-    const inputHash = stableJsonHash({
+    const inputHash = buildWorkflowInputHash({
       application,
       profile,
       job,
@@ -2400,6 +2401,30 @@ class SqliteJobStore {
       storage: "sqlite",
       workflowRuns: rows.map(rowToWorkflowRun)
     };
+  }
+
+  findReusableWorkflowRun(options = {}) {
+    const applicationId = normalizePositiveInteger(options.applicationId);
+    const inputHash = cleanText(options.inputHash || "");
+    const workflowName = cleanText(options.workflowName || "ResumeWorkflowGraph");
+    const excludeWorkflowRunId = normalizeOptionalPositiveInteger(options.excludeWorkflowRunId);
+    if (!applicationId || !inputHash || !workflowName) {
+      return null;
+    }
+    const row = this.database.prepare(`
+      SELECT workflow_runs.id
+      FROM workflow_runs
+      JOIN workflow_input_snapshots
+        ON workflow_input_snapshots.workflow_run_id = workflow_runs.id
+      WHERE workflow_runs.application_id = ?
+        AND workflow_runs.workflow_name = ?
+        AND workflow_runs.status = 'SUCCEEDED'
+        AND workflow_input_snapshots.input_hash = ?
+        AND workflow_runs.id <> ?
+      ORDER BY workflow_runs.id DESC
+      LIMIT 1
+    `).get(applicationId, workflowName, inputHash, excludeWorkflowRunId || 0);
+    return row ? this.getWorkflowRun(Number(row.id)) : null;
   }
 
   getWorkflowRunInput(workflowRunId) {
@@ -3383,6 +3408,34 @@ class SqliteJobStore {
       LIMIT 1
     `).get(id);
     return row ? rowToScreening(row) : null;
+  }
+
+  findReusableScreening(applicationId, cacheKey) {
+    const id = normalizePositiveInteger(applicationId);
+    const key = cleanText(cacheKey || "");
+    if (!id || !key) {
+      return null;
+    }
+    const rows = this.database.prepare(`
+      SELECT
+        screenings.*,
+        jobs.source_key,
+        jobs.title,
+        jobs.company_name
+      FROM screenings
+      JOIN applications ON applications.id = screenings.application_id
+      JOIN jobs ON jobs.id = applications.job_id
+      WHERE screenings.application_id = ?
+      ORDER BY screenings.id DESC
+      LIMIT 50
+    `).all(id);
+    for (const row of rows) {
+      const screening = rowToScreening(row);
+      if (cleanText(screening.metadata?.screeningCacheKey || "") === key) {
+        return screening;
+      }
+    }
+    return null;
   }
 
   getScreenings(options = {}) {
@@ -7018,9 +7071,9 @@ function rowToResumeFitEvaluation(row) {
     weakCount: Number(row.weak_count || 0),
     missingCount: Number(row.missing_count || 0),
     jdRequirements: parseJsonValue(row.jd_requirements_json, {}),
-    coverageItems: parseJsonArray(row.coverage_items_json),
+    coverageItems: parseJsonValue(row.coverage_items_json, []),
     blockers: parseJsonArray(row.blockers_json),
-    recommendations: parseJsonArray(row.recommendations_json),
+    recommendations: parseJsonValue(row.recommendations_json, []),
     policy: parseJsonValue(row.policy_json, {}),
     metadata: parseJsonValue(row.metadata_json, {}),
     createdAt: row.created_at || ""

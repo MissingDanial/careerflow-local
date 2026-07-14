@@ -4,6 +4,10 @@ const { z } = require("zod");
 
 const boundedText = (maximum = 4000) => z.string().trim().min(1).max(maximum);
 const optionalText = (maximum = 4000) => z.string().trim().max(maximum).default("");
+const positiveIntegerId = z.preprocess(
+  (value) => typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value.trim()) : value,
+  z.number().int().positive()
+);
 const textList = (maximumItems = 30, maximumLength = 1500) => z.array(
   boundedText(maximumLength)
 ).max(maximumItems);
@@ -25,7 +29,7 @@ const ScreeningOutputSchema = z.object({
 }).strict();
 
 const ResumeProjectPlanSchema = z.object({
-  sourceExperienceId: z.number().int().positive(),
+  sourceExperienceId: positiveIntegerId,
   skills: textList(12, 120),
   bullets: z.array(z.object({
     text: boundedText(500),
@@ -36,7 +40,7 @@ const ResumeProjectPlanSchema = z.object({
 const ResumePlanOutputSchema = z.object({
   headline: optionalText(180),
   summary: optionalText(1200),
-  selectedSkillIds: z.array(z.number().int().positive()).max(18),
+  selectedSkillIds: z.array(positiveIntegerId).max(18),
   projects: z.array(ResumeProjectPlanSchema).max(4),
   diffSummary: textList(12, 500),
   compressionNotes: textList(12, 500)

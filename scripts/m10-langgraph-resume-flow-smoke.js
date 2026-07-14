@@ -82,6 +82,15 @@ async function main() {
         && graphResult.resumeVersion?.renderMetadata?.templateSkill === "resume-to-word",
       graphPersistsRenderQuality: graphResult.resumeVersion?.renderMetadata?.renderQuality?.ok === true
         && graphResult.resumeAudit?.renderMetadata?.renderQualityPassed === true,
+      graphSurfacesMustHaveSkillInVisibleProject: Array.isArray(graphResult.resumeFitEvaluation?.blockers)
+        && graphResult.resumeFitEvaluation.blockers.length === 0
+        && (graphResult.resumeVersion?.resumeFields?.projects || []).some((project) => (
+          (project.skills || []).some((skill) => String(skill).toLowerCase() === "prd")
+        ))
+        && (graphResult.resumeVersion?.sourceMapping || []).some((mapping) => (
+          /^projects\[[0-9]+\]\.skills\[[0-9]+\]$/.test(mapping.resumeField || "")
+          && String(mapping.sourceFact || "").toLowerCase() === "prd"
+        )),
       generatedDocxHasExpectedText: outputText.includes(SAMPLE_OWNER.displayName)
         && outputText.includes("AI")
         && outputText.length > 200,

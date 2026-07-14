@@ -3,7 +3,11 @@ const path = require("path");
 const { createJobStore } = require("./sqlite-store");
 const { extractResumeSource } = require("./resume-extractor");
 const { generateProfileFactDrafts } = require("./profile-draft-generator");
-const { runScreeningAgent } = require("./screening-agent");
+const {
+  AGENT_VERSION: SCREENING_AGENT_VERSION,
+  PROMPT_VERSION: SCREENING_PROMPT_VERSION,
+  runScreeningAgent
+} = require("./screening-agent");
 const { evaluateJobRiskGate } = require("./job-risk-gate");
 const { runResumeAgent } = require("./resume-agent");
 const { runAuditAgent } = require("./audit-agent");
@@ -21,6 +25,12 @@ const { createExecutionPackageService } = require("./services/execution-package-
 const { createSubmissionResultService } = require("./services/submission-result-service");
 const { createAgentShadowService } = require("./services/agent-shadow-service");
 const { createModelConfigService } = require("./services/model-config-service");
+const {
+  publicModelIdentity,
+  resolveAgentRuntime,
+  resolveWorkflowRuntime
+} = require("./agent-runtime-policy");
+const { buildScreeningCacheKey, SCREENING_CACHE_VERSION } = require("./workflow-cache");
 const {
   httpError,
   structuredError,
@@ -957,11 +967,24 @@ async function screenApplication(applicationId, payload = {}) {
   const screeningInput = store.getApplicationScreeningInput(applicationId, {
     userRules: payload.userRules || {}
   });
+  const workflowRuntime = resolveWorkflowRuntime({
+    mode: payload.mode || "auto",
+    modelConfig: payload.modelConfig || {},
+    modelRoutes: payload.modelRoutes || {}
+  });
+  const runtime = resolveAgentRuntime(workflowRuntime, "ScreeningAgent");
+  const screeningCacheKey = buildScreeningCacheKey({
+    ...screeningInput,
+    mode: runtime.mode,
+    modelIdentity: publicModelIdentity(runtime.modelConfig, runtime.mode),
+    promptVersion: SCREENING_PROMPT_VERSION,
+    agentVersion: SCREENING_AGENT_VERSION
+  });
   const agentRun = store.startAgentRun({
     agentName: "ScreeningAgent",
     applicationId,
     step: "score_job",
-    provider: payload.mode || "auto",
+    provider: runtime.mode,
     input: {
       application: screeningInput.application,
       job: screeningInput.job,
@@ -972,8 +995,8 @@ async function screenApplication(applicationId, payload = {}) {
 
   try {
     const agentResult = await runScreeningAgent(screeningInput, {
-      mode: payload.mode || "auto",
-      modelConfig: payload.modelConfig || {}
+      mode: runtime.mode,
+      modelConfig: runtime.modelConfig
     });
     const finishedRun = store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -999,7 +1022,9 @@ async function screenApplication(applicationId, payload = {}) {
         fallbackUsed: agentResult.fallbackUsed,
         fallbackReason: agentResult.fallbackReason || "",
         fallbackMessage: agentResult.fallbackMessage || "",
-        modelConfig: agentResult.modelConfig
+        modelConfig: agentResult.modelConfig,
+        screeningCacheKey,
+        screeningCacheVersion: SCREENING_CACHE_VERSION
       }
     });
     return {
@@ -1012,7 +1037,7 @@ async function screenApplication(applicationId, payload = {}) {
   } catch (error) {
     const finishedRun = store.finishAgentRun(agentRun.id, {
       status: "FAILED",
-      provider: payload.mode || "auto",
+      provider: runtime.mode,
       output: {
         error: structuredError(error)
       },
@@ -1141,7 +1166,8 @@ async function screenApplicationsBatch(payload = {}) {
         : await screenApplication(candidate.id, {
           mode: payload.mode || "rules",
           userRules,
-          modelConfig: payload.modelConfig || {}
+          modelConfig: payload.modelConfig || {},
+          modelRoutes: payload.modelRoutes || {}
         });
       const batchResult = normalizeBatchScreeningResult(candidate.id, result);
       results.push(batchResult);

@@ -2,7 +2,7 @@
 
 本文是当前项目的主开发路线图。M1 已经完成 BOSS 浏览器执行层的技术选型，M2-M12 已建立从岗位采集、用户画像、Agent 简历闭环到本地执行包和投递结果证据的主流程。
 
-截至 2026-07-14，M13“质量基线与可回放工作流”、M15 ProfileAgent 持久化对话、M16 真实模型质量闭环、M16.1 Shadow 评审基础均已完成；M17/M17.1 已完成多意向岗位队列、本地启动器、后端模型配置、四阶段工作台、画像简历上传和人工联系/投递记录。M14 真实动作 canary 仅保留为默认关闭的内部实验，普通用户主路径不提供自动打招呼、上传或投递。
+截至 2026-07-14，M13“质量基线与可回放工作流”、M15 ProfileAgent 持久化对话、M16 真实模型质量闭环、M16.1 Shadow 评审基础均已完成；M17/M17.1 已完成多意向岗位队列、本地启动器、后端模型配置、四阶段工作台、画像简历上传和人工联系/投递记录；M18 已完成 Agent 缓存、按节点模型路由、提示压缩和无效修订消除。M14 真实动作 canary 仅保留为默认关闭的内部实验，普通用户主路径不提供自动打招呼、上传或投递。
 
 ## 0. 开发原则
 
@@ -2204,3 +2204,37 @@ npm run agent:evaluate:real -- --samples 3 --delay-ms 2500
 - 后端模型配置探针使用 `gpt-5.4-mini` Chat 协议单次成功；API 只返回 `hasApiKey`，未返回原始 Key。
 - `m17:application-queues:smoke`、`m17:model-config:smoke`、`m17:native-host:smoke`、`m17:popup-runtime:smoke`、`m17:options-queues-runtime:smoke` 均通过。
 - options UI 已覆盖四阶段切换、队列新建/归档、跨队列隔离、批量移除、风险信任重筛、人工状态、模型设置、画像简历上传，以及桌面/390px 无溢出和控制台错误为 0。
+
+### M18 Agent 延迟、缓存与模型路由
+
+状态：已完成实现与同 JD 真实模型验证。目标是在不降低 Claim/Audit 门禁的前提下减少首次闭环耗时，并让相同输入的重复执行不再重复调用模型。
+
+复用与缓存：
+
+- 继续复用现有 `@langchain/langgraph`、`node:sqlite`、workflow snapshot 和 `inputHash`，不引入进程内 LRU 或新 SQLite 缓存依赖。
+- 完整工作流按画像、JD、用户规则、渲染选项、图/Prompt/Agent 版本和模型路由生成语义 hash；application 进度和时间戳不使缓存失效。
+- 相同输入直接复用已审核的最终版本；显式强制重跑时仍可复用同一语义输入的 Screening。
+- DOCX 只渲染最终选定版本；质量更差的修订版本会被拒绝，无内容变化时跳过第二次 Fit/Claim。
+
+首次运行优化：
+
+- 默认速度路由：`ResumeAgent`、`ResumeRevisionAgent` 使用 `gpt-5.5 + responses + low`；Screening、Fit、Claim、Audit 使用规则模式。每个节点仍可单独覆盖模型、协议、reasoning、超时和重试。
+- Resume 提示只发送确定性候选经历/技能，删除 facts 与 `evidenceText` 重复副本；Screening 和 Fit 同样移除重复的完整画像、JD 与逐项 baseline。
+- 默认模板不展示独立摘要和顶层技能，因此这两个字段及 source mapping 在落库前移除，也不参与 Fit/Claim；项目技能按 JD 相关性补齐并使用唯一索引证据字段。
+- 复合中文摘要使用 CJK bigram 和多条直接来源聚合验证；未证实百分比、数量、奖项和项目要点仍保持严格拦截。
+- 供应商把正整数 ID 返回为字符串时仅做纯十进制归一化，随后仍校验 ID 白名单、sourceFact 原文和 Claim 支撑。
+
+真实验证：
+
+- 同一份盛大 AI 产品实习 JD、同一画像下，GPT-5.5 速度路由 44.3 秒完成，只有 1 次模型调用，无 Revision；Fit 67、无 blocker，54/54 Claim 支持，Audit approve，DOCX 1 页。
+- 同条件 GPT-5.4-mini Chat 对照为 48.7 秒：首稿 25.8 秒，但触发 22.5 秒 Revision；最终 Fit 62，54/54 Claim 支持，Audit approve。
+- GPT-5.5 Resume 输入从压缩前 8,157 token 降到 4,561 token，首次有效响应从 76.5 秒降到 43.8 秒。
+- M18 规则 smoke 中首轮 Agent run 从 8 降到 5；缓存命中约 13ms、模型调用 0。真实数据是一组工程对照，不替代 M16 的 27 样本质量评测。
+
+验收标准：
+
+- 相同语义输入命中完整缓存，强制重跑只复用 Screening，缓存结果仍包含 Fit、Claim、Audit 和最终文件路径。
+- 默认模板的隐藏摘要/技能不进入持久化质量门禁；项目技能证据字段不可互相覆盖。
+- 无可确认事实的 JD 缺口不触发 ResumeRevisionAgent；修订必须减少安全问题、blocker 或提高 Fit，否则保留基线版本。
+- GPT-5.5 Responses 可在本机后端完成严格结构化 Resume；纯数字字符串 ID 可归一化，未知 ID 和非原文事实仍失败。
+- `m10:claim-verifier:smoke`、`m10:langgraph-resume:smoke`、`m16:real-model-agents:smoke`、`m17:model-config:smoke`、`m18:agent-latency:smoke` 和 `test:ci` 通过。

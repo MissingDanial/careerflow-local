@@ -1,9 +1,10 @@
 const AGENT_NAME = "ResumeFitEvaluator";
 const { FitReviewOutputSchema } = require("./agent-output-schemas");
 const { loadModelConfig, requestStructuredCompletion } = require("./model-client");
+const { resolveResumeTemplate } = require("./resume-template-registry");
 
-const PROMPT_VERSION = "m16.resume-fit.prompt.v1";
-const AGENT_VERSION = "m16.resume-fit.agent.v1";
+const PROMPT_VERSION = "m18.resume-fit.prompt.v1";
+const AGENT_VERSION = "m18.resume-fit.agent.v1";
 
 const TECH_TERMS = [
   "javascript",
@@ -214,10 +215,16 @@ function buildFitModelInput(context, baseline, evidenceItems) {
       "Missing must-have requirements remain blockers.",
       "Do not decide application submission."
     ],
-    job: context.job,
+    job: {
+      title: context.job.title,
+      tags: context.job.tags
+    },
     jdRequirements: baseline.result.jdRequirements.requirements.map((requirement, index) => ({ index, ...requirement })),
     resumeEvidence: evidenceItems,
-    deterministicBaseline: baseline.result.coverage.items
+    deterministicBaseline: {
+      coverageScore: baseline.result.coverage.score,
+      blockers: baseline.result.blockers
+    }
   };
 }
 
@@ -415,16 +422,17 @@ function extractJdRequirements(job = {}) {
 
 function extractResumeEvidence(resumeVersion = {}) {
   const fields = resumeVersion.resumeFields || {};
-  const skills = normalizeStringArray(fields.skills);
+  const template = resolveResumeTemplate(resumeVersion.renderMetadata?.template || resumeVersion.render_metadata?.template);
+  const skills = template.showSkillsSection ? normalizeStringArray(fields.skills) : [];
   const projects = Array.isArray(fields.projects) ? fields.projects : [];
-  const summary = multiline(fields.summary || "");
+  const summary = template.showSummarySection ? multiline(fields.summary || "") : "";
   const projectEvidence = projects.flatMap((project, projectIndex) => {
     const title = text(project?.title || "");
     const projectSkills = normalizeStringArray(project?.skills);
     const bullets = normalizeStringArray(project?.bullets);
     return [
-      ...projectSkills.map((item) => ({
-        field: `projects[${projectIndex}].skills`,
+      ...projectSkills.map((item, skillIndex) => ({
+        field: `projects[${projectIndex}].skills[${skillIndex}]`,
         text: item,
         source: "project_skill",
         title

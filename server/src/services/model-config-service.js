@@ -8,6 +8,7 @@ const {
   requestStructuredCompletion,
   resolveModelSecretConfigPath
 } = require("../model-client");
+const { normalizeModelRoutes } = require("../agent-runtime-policy");
 
 const MODEL_PROBE_SCHEMA = z.object({
   ok: z.literal(true),
@@ -72,7 +73,12 @@ class ModelConfigService {
         input.outputCostPerMillion,
         existing.outputCostPerMillion,
         effective.outputCostPerMillion
-      ))
+      )),
+      modelRoutes: normalizeModelRoutes(firstDefined(
+        input.modelRoutes,
+        existing.modelRoutes,
+        effective.modelRoutes
+      ) || {})
     };
     this.writeStoredConfig(next);
     return this.getStatus();
@@ -146,6 +152,7 @@ function publicModelConfig(config = {}) {
     maxRetries: Number(config.maxRetries || 0),
     inputCostPerMillion: nonNegativeNumber(config.inputCostPerMillion),
     outputCostPerMillion: nonNegativeNumber(config.outputCostPerMillion),
+    modelRoutes: normalizeModelRoutes(config.modelRoutes || {}),
     source: cleanText(config.source)
   };
 }

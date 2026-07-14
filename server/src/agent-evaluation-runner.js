@@ -11,7 +11,8 @@ const { runResumeFitEvaluator } = require("./resume-fit-evaluator");
 const {
   AGENT_VERSION,
   GRAPH_VERSION,
-  PROMPT_VERSION
+  PROMPT_VERSION,
+  applyResumeRenderPolicy
 } = require("./resume-workflow-graph");
 const { runScreeningAgent } = require("./screening-agent");
 
@@ -174,17 +175,22 @@ async function evaluateJobCase(fixture, profiles) {
   let audit = null;
 
   if (screening.result.recommendation !== "skip") {
-    resume = runResumeAgent({
+    const generatedResume = runResumeAgent({
       application: { id: 0 },
       job: fixture.job,
       profile,
       screening: screening.result,
       userRules: fixture.userRules || {}
     }, { mode: "rules" });
+    resume = {
+      ...generatedResume,
+      result: applyResumeRenderPolicy(generatedResume.result, {})
+    };
     const resumeVersion = {
       id: 0,
       applicationId: 0,
-      resumeFields: resume.result.resumeFields
+      resumeFields: resume.result.resumeFields,
+      renderMetadata: resume.result.renderMetadata
     };
     fit = runResumeFitEvaluator({
       application: { id: 0 },

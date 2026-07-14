@@ -81,7 +81,8 @@ const TEST_TIERS = Object.freeze({
     "m14:real-action:smoke",
     "m17:application-queues:smoke",
     "m17:model-config:smoke",
-    "m17:native-host:smoke"
+    "m17:native-host:smoke",
+    "m18:agent-latency:smoke"
   ])
 });
 
