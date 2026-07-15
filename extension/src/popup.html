@@ -18,6 +18,25 @@
         </button>
       </header>
 
+      <section class="runtime-strip" aria-label="本地后端状态">
+        <div class="runtime-state">
+          <span id="backendStateDot" class="state-dot" aria-hidden="true"></span>
+          <div>
+            <strong id="backendStateText">正在检查后端</strong>
+            <span id="backendModelText">模型状态未知</span>
+          </div>
+        </div>
+        <div class="runtime-actions">
+          <button id="startBackend" type="button">启动后端</button>
+          <button id="openModelConfig" type="button" hidden>配置模型</button>
+        </div>
+      </section>
+
+      <label class="queue-target">
+        <span>采集到</span>
+        <select id="activeApplicationQueue" aria-label="采集目标岗位队列"></select>
+      </label>
+
       <section class="actions" aria-label="岗位采集操作">
         <button id="startCollection" class="primary" type="button">开始岗位信息采集</button>
         <button id="pauseCollection" type="button">暂停</button>
@@ -34,12 +53,12 @@
         </div>
         <div class="summary-grid">
           <div>
-            <strong id="jobCount">0</strong>
-            <span>岗位</span>
+            <strong id="descCount">0</strong>
+            <span>完整岗位</span>
           </div>
           <div>
-            <strong id="descCount">0</strong>
-            <span>完整 JD</span>
+            <strong id="missingDescriptionCount">0</strong>
+            <span>待补 JD</span>
           </div>
           <div>
             <strong id="browserTaskFailed">0</strong>
@@ -50,7 +69,8 @@
       </section>
 
       <section class="detail-link">
-        <button id="openOptionsSecondary" class="link-button" type="button">查看设置、诊断和待补 JD</button>
+        <button id="clearMissingDescriptions" class="link-button danger-link" type="button">清理待补 JD</button>
+        <button id="openOptionsSecondary" class="link-button" type="button">打开工作台与设置</button>
       </section>
 
       <div class="visually-hidden" aria-hidden="true">
@@ -83,6 +103,7 @@
         <span id="crawlLastAction"></span>
         <span id="crawlLastJobTitle"></span>
         <span id="pageCount">0</span>
+        <span id="jobCount">0</span>
         <span id="qualityDescriptionCoverage"></span>
         <span id="qualityRequiredCoverage"></span>
         <span id="qualityInvalidJobs"></span>
@@ -90,7 +111,6 @@
         <span id="qualityEvents"></span>
         <span id="recentEventCount"></span>
         <span id="recentEvents"></span>
-        <span id="missingDescriptionCount"></span>
         <span id="missingDescriptions"></span>
         <pre id="preview"></pre>
       </div>

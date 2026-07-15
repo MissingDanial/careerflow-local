@@ -3,8 +3,8 @@ const { DEFAULT_RESUME_TEMPLATE } = require("./resume-template-registry");
 const { ResumePlanOutputSchema } = require("./agent-output-schemas");
 const { loadModelConfig, requestStructuredCompletion } = require("./model-client");
 
-const PROMPT_VERSION = "m16.resume.prompt.v1";
-const AGENT_VERSION = "m16.resume.agent.v1";
+const PROMPT_VERSION = "m18.resume.prompt.v1";
+const AGENT_VERSION = "m18.resume.agent.v1";
 
 function runResumeAgent(input = {}, options = {}) {
   const context = normalizeResumeInput(input);
@@ -132,6 +132,14 @@ async function runModelResumeAgent(context, baseline, mode, modelConfig, options
 }
 
 function buildResumeModelInput(context, baseline) {
+  const selectedExperienceIds = new Set(baseline.result.metadata.selectedExperienceIds || []);
+  const selectedSkillIds = new Set(baseline.result.metadata.selectedSkillIds || []);
+  const candidateExperiences = context.profile.experiences
+    .filter((experience) => selectedExperienceIds.has(experience.id))
+    .map(compactExperienceForModel);
+  const candidateSkills = context.profile.skills
+    .filter((skill) => selectedSkillIds.has(skill.id))
+    .map(compactSkillForModel);
   return {
     task: "Select confirmed evidence and tailor a concise two-page resume for this JD. Return JSON only.",
     outputSchema: {
@@ -161,17 +169,59 @@ function buildResumeModelInput(context, baseline) {
     job: context.job,
     screening: context.screening,
     confirmedProfile: {
-      profile: context.profile.profile,
-      experiences: context.profile.experiences,
-      skills: context.profile.skills,
+      profile: compactProfileForModel(context.profile.profile),
+      experiences: candidateExperiences,
+      skills: candidateSkills,
       constraints: context.profile.constraints
     },
     userRules: context.userRules,
     deterministicBaseline: {
-      selectedExperienceIds: baseline.result.metadata.selectedExperienceIds,
-      selectedSkillIds: baseline.result.metadata.selectedSkillIds,
-      resumeFields: baseline.result.resumeFields
+      selectedExperienceIds: Array.from(selectedExperienceIds),
+      selectedSkillIds: Array.from(selectedSkillIds),
+      projectOrder: (baseline.result.resumeFields.projects || []).map((project) => ({
+        experienceId: Number(project.experienceId || 0),
+        title: text(project.title),
+        skills: normalizeStringArray(project.skills)
+      }))
     }
+  };
+}
+
+function compactProfileForModel(profile = {}) {
+  return {
+    id: Number(profile.id || 0),
+    displayName: text(profile.displayName || ""),
+    headline: text(profile.headline || ""),
+    location: text(profile.location || ""),
+    target: normalizeObject(profile.target),
+    summary: multiline(profile.summary || "")
+  };
+}
+
+function compactExperienceForModel(experience = {}) {
+  return {
+    id: Number(experience.id || 0),
+    kind: text(experience.kind),
+    title: text(experience.title),
+    organization: text(experience.organization),
+    role: text(experience.role),
+    startDate: text(experience.startDate),
+    endDate: text(experience.endDate),
+    facts: normalizeStringArray(experience.facts),
+    skills: normalizeStringArray(experience.skills),
+    confidence: text(experience.confidence),
+    allowedRewrites: normalizeStringArray(experience.allowedRewrites),
+    forbiddenClaims: normalizeStringArray(experience.forbiddenClaims)
+  };
+}
+
+function compactSkillForModel(skill = {}) {
+  return {
+    id: Number(skill.id || 0),
+    name: text(skill.name),
+    category: text(skill.category),
+    proficiency: text(skill.proficiency),
+    evidence: normalizeStringArray(skill.evidence)
   };
 }
 
@@ -189,6 +239,7 @@ function resumeSystemPrompt() {
 function buildModelResumeResult(output, context, baseline) {
   const skillById = new Map(context.profile.skills.map((skill) => [Number(skill.id || 0), skill]));
   const experienceById = new Map(context.profile.experiences.map((experience) => [Number(experience.id || 0), experience]));
+  const jobText = searchableText([context.job.title, context.job.tags, context.job.description, context.screening.matchedPoints]);
   const selectedSkills = Array.from(new Set(output.selectedSkillIds || []))
     .map((id) => skillById.get(Number(id)))
     .filter(Boolean)
@@ -214,13 +265,24 @@ function buildModelResumeResult(output, context, baseline) {
       continue;
     }
     usedExperienceIds.add(experience.id);
-    const allowedSkills = new Set([
-      ...experience.skills,
-      ...selectedSkills.map((skill) => skill.name)
-    ].map((item) => text(item).toLowerCase()).filter(Boolean));
+    const allowedSkills = new Map(experience.skills
+      .map((item) => [text(item).toLowerCase(), text(item)])
+      .filter(([key]) => key));
+    const requestedSkills = normalizeStringArray(plan.skills)
+      .map((skill) => allowedSkills.get(skill.toLowerCase()))
+      .filter(Boolean);
+    const selectedSkillNames = new Set(selectedSkills.map((skill) => text(skill.name).toLowerCase()).filter(Boolean));
+    const relevantSourceSkills = experience.skills
+      .map((skill) => ({
+        skill: text(skill),
+        score: containsLoose(jobText, skill) ? 2 : selectedSkillNames.has(text(skill).toLowerCase()) ? 1 : 0
+      }))
+      .filter((item) => item.skill && item.score > 0)
+      .sort((left, right) => right.score - left.score || left.skill.localeCompare(right.skill))
+      .map((item) => item.skill);
     projectPlans.push({
       experience,
-      skills: normalizeStringArray(plan.skills).filter((skill) => allowedSkills.has(skill.toLowerCase())).slice(0, 8),
+      skills: Array.from(new Set([...requestedSkills, ...relevantSourceSkills])).slice(0, 8),
       bullets
     });
   }
@@ -546,9 +608,21 @@ function buildProjectSection(experience, context) {
     organization: experience.organization,
     role: experience.role,
     period: [experience.startDate, experience.endDate].filter(Boolean).join(" - "),
-    skills: experience.skills.slice(0, 8),
+    skills: prioritizeExperienceSkills(experience, context).slice(0, 8),
     bullets
   };
+}
+
+function prioritizeExperienceSkills(experience, context) {
+  const jobText = searchableText([context.job.title, context.job.description, context.job.tags, context.screening.matchedPoints]);
+  return experience.skills
+    .map((skill, index) => ({
+      skill,
+      index,
+      score: containsLoose(jobText, skill) ? 1 : 0
+    }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((item) => item.skill);
 }
 
 function prioritizeFacts(experience, context) {
@@ -601,7 +675,8 @@ function buildSourceMapping(fields, skills, experiences) {
         sourceFact: experience.role
       });
     }
-    experience.skills.slice(0, 8).forEach((skill, skillIndex) => {
+    const project = fields.projects[projectIndex] || {};
+    normalizeStringArray(project.skills).slice(0, 8).forEach((skill, skillIndex) => {
       mappings.push({
         resumeField: `projects[${projectIndex}].skills[${skillIndex}]`,
         sourceType: "experience",
@@ -609,7 +684,6 @@ function buildSourceMapping(fields, skills, experiences) {
         sourceFact: skill
       });
     });
-    const project = fields.projects[projectIndex] || {};
     normalizeStringArray(project.bullets).slice(0, 4).forEach((bullet, factIndex) => {
       mappings.push({
         resumeField: `projects[${projectIndex}].bullets[${factIndex}]`,

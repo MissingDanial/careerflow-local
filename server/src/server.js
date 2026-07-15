@@ -3,7 +3,11 @@ const path = require("path");
 const { createJobStore } = require("./sqlite-store");
 const { extractResumeSource } = require("./resume-extractor");
 const { generateProfileFactDrafts } = require("./profile-draft-generator");
-const { runScreeningAgent } = require("./screening-agent");
+const {
+  AGENT_VERSION: SCREENING_AGENT_VERSION,
+  PROMPT_VERSION: SCREENING_PROMPT_VERSION,
+  runScreeningAgent
+} = require("./screening-agent");
 const { evaluateJobRiskGate } = require("./job-risk-gate");
 const { runResumeAgent } = require("./resume-agent");
 const { runAuditAgent } = require("./audit-agent");
@@ -19,6 +23,14 @@ const { createProfileConversationService } = require("./services/profile-convers
 const { createResumeWorkflowService } = require("./services/resume-workflow-service");
 const { createExecutionPackageService } = require("./services/execution-package-service");
 const { createSubmissionResultService } = require("./services/submission-result-service");
+const { createAgentShadowService } = require("./services/agent-shadow-service");
+const { createModelConfigService } = require("./services/model-config-service");
+const {
+  publicModelIdentity,
+  resolveAgentRuntime,
+  resolveWorkflowRuntime
+} = require("./agent-runtime-policy");
+const { buildScreeningCacheKey, SCREENING_CACHE_VERSION } = require("./workflow-cache");
 const {
   httpError,
   structuredError,
@@ -35,6 +47,9 @@ const profileConversationService = createProfileConversationService({ store, dat
 const resumeWorkflowService = createResumeWorkflowService({ store, dataDir: DATA_DIR });
 const executionPackageService = createExecutionPackageService({ store, dataDir: DATA_DIR });
 const submissionResultService = createSubmissionResultService({ store, dataDir: DATA_DIR });
+const agentShadowService = createAgentShadowService({ store });
+const modelConfigService = createModelConfigService({ dataDir: DATA_DIR });
+agentShadowService.recoverInterruptedRuns();
 
 const server = http.createServer(async (request, response) => {
   setCors(response);
@@ -50,6 +65,24 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/health") {
       sendJson(response, 200, { ok: true, service: "boss-find-backend" });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/model-config") {
+      sendJson(response, 200, modelConfigService.getStatus());
+      return;
+    }
+
+    if (request.method === "PUT" && url.pathname === "/api/model-config") {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, modelConfigService.save(payload));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/model-config/test") {
+      assertAuthorized(request);
+      sendJson(response, 200, await modelConfigService.testConnection());
       return;
     }
 
@@ -271,10 +304,90 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/application-queues") {
+      sendJson(response, 200, store.getApplicationQueues({
+        includeArchived: parseBoolean(url.searchParams.get("includeArchived"), false)
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/application-queues") {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 201, store.createApplicationQueue(payload));
+      return;
+    }
+
+    const archiveApplicationQueueMatch = url.pathname.match(/^\/api\/application-queues\/([0-9]+)$/);
+    if (request.method === "DELETE" && archiveApplicationQueueMatch) {
+      assertAuthorized(request);
+      sendJson(response, 200, store.archiveApplicationQueue(
+        Number(archiveApplicationQueueMatch[1]),
+        { actor: "local-user", reason: "workbench_queue_delete" }
+      ));
+      return;
+    }
+
+    const trustQueueApplicationMatch = url.pathname.match(
+      /^\/api\/application-queues\/([0-9]+)\/applications\/([0-9]+)\/trust$/
+    );
+    if (request.method === "POST" && trustQueueApplicationMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, store.trustApplicationInQueue(
+        Number(trustQueueApplicationMatch[1]),
+        Number(trustQueueApplicationMatch[2]),
+        payload
+      ));
+      return;
+    }
+
+    const removeQueueApplicationsMatch = url.pathname.match(
+      /^\/api\/application-queues\/([0-9]+)\/remove-applications$/
+    );
+    if (request.method === "POST" && removeQueueApplicationsMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, store.removeApplicationsFromQueue(
+        Number(removeQueueApplicationsMatch[1]),
+        payload
+      ));
+      return;
+    }
+
+    const removeQueueMissingMatch = url.pathname.match(
+      /^\/api\/application-queues\/([0-9]+)\/remove-missing-descriptions$/
+    );
+    if (request.method === "POST" && removeQueueMissingMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, store.removeMissingDescriptionsFromQueue(
+        Number(removeQueueMissingMatch[1]),
+        payload
+      ));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/applications") {
       sendJson(response, 200, store.getApplications({
-        limit: Number(url.searchParams.get("limit") || 100)
+        limit: Number(url.searchParams.get("limit") || 100),
+        queueId: url.searchParams.get("queueId") || "",
+        completeDescriptionOnly: parseBoolean(url.searchParams.get("completeDescriptionOnly"), false),
+        manualStatus: url.searchParams.get("manualStatus") || ""
       }));
+      return;
+    }
+
+    const manualApplicationStatusMatch = url.pathname.match(
+      /^\/api\/applications\/([0-9]+)\/manual-status$/
+    );
+    if (request.method === "POST" && manualApplicationStatusMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 200, store.updateManualApplicationStatus(
+        Number(manualApplicationStatusMatch[1]),
+        payload
+      ));
       return;
     }
 
@@ -467,6 +580,7 @@ const server = http.createServer(async (request, response) => {
         status: url.searchParams.getAll("status").length ? url.searchParams.getAll("status") : (url.searchParams.get("statuses") || "DETAIL_CAPTURED"),
         minDescriptionLength: Number(url.searchParams.get("minDescriptionLength") || 80),
         includeAlreadyScreened: parseBoolean(url.searchParams.get("includeAlreadyScreened"), false),
+        queueId: url.searchParams.get("queueId") || "",
         limit: Number(url.searchParams.get("limit") || 10)
       }));
       return;
@@ -661,6 +775,41 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/agent-shadow-runs") {
+      sendJson(response, 200, agentShadowService.listRuns({
+        limit: Number(url.searchParams.get("limit") || 20)
+      }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/agent-shadow-runs") {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 202, agentShadowService.startRun(payload));
+      return;
+    }
+
+    const agentShadowRunMatch = url.pathname.match(/^\/api\/agent-shadow-runs\/([0-9]+)$/);
+    if (request.method === "GET" && agentShadowRunMatch) {
+      sendJson(response, 200, agentShadowService.getRun(Number(agentShadowRunMatch[1])));
+      return;
+    }
+
+    const agentShadowReviewMatch = url.pathname.match(/^\/api\/agent-shadow-items\/([0-9]+)\/reviews$/);
+    if (request.method === "POST" && agentShadowReviewMatch) {
+      assertAuthorized(request);
+      const payload = await readJson(request);
+      sendJson(response, 201, agentShadowService.addReview(Number(agentShadowReviewMatch[1]), payload));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/agent-shadow-failures") {
+      sendJson(response, 200, agentShadowService.listFailureCandidates({
+        limit: Number(url.searchParams.get("limit") || 50)
+      }));
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/real-actions/policy") {
       assertAuthorized(request);
       sendJson(response, 200, store.getRealActionPolicy({
@@ -784,7 +933,8 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/api/jobs/missing-descriptions") {
       sendJson(response, 200, store.getMissingDescriptions({
         limit: Number(url.searchParams.get("limit") || 50),
-        minDescriptionLength: Number(url.searchParams.get("minDescriptionLength") || 80)
+        minDescriptionLength: Number(url.searchParams.get("minDescriptionLength") || 80),
+        queueId: url.searchParams.get("queueId") || ""
       }));
       return;
     }
@@ -817,11 +967,24 @@ async function screenApplication(applicationId, payload = {}) {
   const screeningInput = store.getApplicationScreeningInput(applicationId, {
     userRules: payload.userRules || {}
   });
+  const workflowRuntime = resolveWorkflowRuntime({
+    mode: payload.mode || "auto",
+    modelConfig: payload.modelConfig || {},
+    modelRoutes: payload.modelRoutes || {}
+  });
+  const runtime = resolveAgentRuntime(workflowRuntime, "ScreeningAgent");
+  const screeningCacheKey = buildScreeningCacheKey({
+    ...screeningInput,
+    mode: runtime.mode,
+    modelIdentity: publicModelIdentity(runtime.modelConfig, runtime.mode),
+    promptVersion: SCREENING_PROMPT_VERSION,
+    agentVersion: SCREENING_AGENT_VERSION
+  });
   const agentRun = store.startAgentRun({
     agentName: "ScreeningAgent",
     applicationId,
     step: "score_job",
-    provider: payload.mode || "auto",
+    provider: runtime.mode,
     input: {
       application: screeningInput.application,
       job: screeningInput.job,
@@ -832,8 +995,8 @@ async function screenApplication(applicationId, payload = {}) {
 
   try {
     const agentResult = await runScreeningAgent(screeningInput, {
-      mode: payload.mode || "auto",
-      modelConfig: payload.modelConfig || {}
+      mode: runtime.mode,
+      modelConfig: runtime.modelConfig
     });
     const finishedRun = store.finishAgentRun(agentRun.id, {
       status: "SUCCEEDED",
@@ -859,7 +1022,9 @@ async function screenApplication(applicationId, payload = {}) {
         fallbackUsed: agentResult.fallbackUsed,
         fallbackReason: agentResult.fallbackReason || "",
         fallbackMessage: agentResult.fallbackMessage || "",
-        modelConfig: agentResult.modelConfig
+        modelConfig: agentResult.modelConfig,
+        screeningCacheKey,
+        screeningCacheVersion: SCREENING_CACHE_VERSION
       }
     });
     return {
@@ -872,7 +1037,7 @@ async function screenApplication(applicationId, payload = {}) {
   } catch (error) {
     const finishedRun = store.finishAgentRun(agentRun.id, {
       status: "FAILED",
-      provider: payload.mode || "auto",
+      provider: runtime.mode,
       output: {
         error: structuredError(error)
       },
@@ -948,17 +1113,23 @@ function normalizeBatchScreeningResult(applicationId, result = {}) {
 }
 
 async function screenApplicationsBatch(payload = {}) {
+  const queueId = Number(payload.queueId || 0);
   const explicitApplicationIds = Array.isArray(payload.applicationIds)
     ? payload.applicationIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)
     : [];
+  const scopedExplicitIds = queueId
+    ? explicitApplicationIds.filter((id) => store.isApplicationActiveInQueue(queueId, id))
+    : explicitApplicationIds;
   const candidates = explicitApplicationIds.length
-    ? explicitApplicationIds.map((id) => ({ id }))
+    ? scopedExplicitIds.map((id) => ({ id }))
     : store.getScreeningCandidates({
       status: payload.statuses || payload.status || ["DETAIL_CAPTURED"],
       minDescriptionLength: Number(payload.minDescriptionLength || 80),
       includeAlreadyScreened: Boolean(payload.includeAlreadyScreened),
+      queueId,
       limit: Number(payload.limit || 10)
     }).candidates;
+  const requested = explicitApplicationIds.length ? scopedExplicitIds.length : candidates.length;
   const limit = Math.max(1, Math.min(50, Number(payload.limit || candidates.length || 10)));
   const selected = candidates.slice(0, limit);
   const results = [];
@@ -974,8 +1145,9 @@ async function screenApplicationsBatch(payload = {}) {
     message: `Screening batch started for ${selected.length} application(s).`,
     metadata: {
       batchId,
-      requested: explicitApplicationIds.length || candidates.length,
+      requested,
       selected: selected.length,
+      queueId: queueId || null,
       mode: payload.mode || "rules",
       continueOnError: Boolean(payload.continueOnError),
       riskGateOnly: Boolean(payload.riskGateOnly)
@@ -983,14 +1155,19 @@ async function screenApplicationsBatch(payload = {}) {
   });
   for (const candidate of selected) {
     try {
+      const trusted = queueId ? store.isApplicationTrustedInQueue(queueId, candidate.id) : false;
+      const userRules = trusted
+        ? { ...(payload.userRules || {}), excludedDirections: [] }
+        : (payload.userRules || {});
       const result = payload.riskGateOnly
         ? await screenApplicationRiskGateOnly(candidate.id, {
-          userRules: payload.userRules || {}
+          userRules
         })
         : await screenApplication(candidate.id, {
           mode: payload.mode || "rules",
-          userRules: payload.userRules || {},
-          modelConfig: payload.modelConfig || {}
+          userRules,
+          modelConfig: payload.modelConfig || {},
+          modelRoutes: payload.modelRoutes || {}
         });
       const batchResult = normalizeBatchScreeningResult(candidate.id, result);
       results.push(batchResult);
@@ -1009,6 +1186,8 @@ async function screenApplicationsBatch(payload = {}) {
         metadata: {
           batchId,
           riskGateOnly: Boolean(payload.riskGateOnly),
+          queueId: queueId || null,
+          trusted,
           screeningId: batchResult.screeningId || null,
           agentRunId: batchResult.agentRunId || null,
           recommendation: batchResult.recommendation || "",
@@ -1061,8 +1240,9 @@ async function screenApplicationsBatch(payload = {}) {
     errorMessage: failed ? `${failed} application(s) failed in screening batch.` : "",
     metadata: {
       batchId,
-      requested: explicitApplicationIds.length || candidates.length,
+      requested,
       selected: selected.length,
+      queueId: queueId || null,
       succeeded,
       failed
     }
@@ -1071,7 +1251,8 @@ async function screenApplicationsBatch(payload = {}) {
     ok: failed === 0,
     storage: "sqlite",
     mode: payload.mode || "rules",
-    requested: explicitApplicationIds.length || candidates.length,
+    queueId: queueId || null,
+    requested,
     selected: selected.length,
     succeeded,
     failed,

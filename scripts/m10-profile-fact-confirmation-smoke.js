@@ -171,7 +171,7 @@ function runWiringChecks() {
   const profileServiceJs = read("server/src/services/profile-service.js");
   const storeJs = read("server/src/sqlite-store.js");
   const packageJson = read("package.json");
-  const readme = read("README.md");
+  const readme = read("README.zh-CN.md");
   const planDoc = read("docs/04_DEVELOPMENT_PLAN.md");
   return {
     checks: {

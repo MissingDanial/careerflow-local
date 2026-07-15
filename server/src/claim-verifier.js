@@ -1,4 +1,6 @@
 const AGENT_NAME = "ClaimVerifier";
+const SUMMARY_AGGREGATE_SUPPORT_THRESHOLD = 0.6;
+const SUMMARY_AGGREGATE_MIN_MAPPINGS = 2;
 
 const HIGH_RISK_PATTERNS = [
   /\b(?:expert|lead|principal|architect|owned|managed|scaled|optimized|reduced|increased|improved)\b/i,
@@ -171,27 +173,100 @@ function verifyClaim(claim, evidenceIndex) {
     }))
     .filter((item) => item.score > 0)
     .sort((left, right) => right.score - left.score);
+  const directBest = scored[0];
+  const aggregate = buildSummaryAggregateEvidence(claim, mappings, evidenceIndex);
+  if (aggregate?.score > 0) {
+    scored.push(aggregate);
+    scored.sort((left, right) => right.score - left.score);
+  }
   const best = scored[0];
   const hasDirectMapping = mappings.length > 0;
+  const aggregateSummarySupported = Boolean(
+    aggregate
+    && aggregate.score >= SUMMARY_AGGREGATE_SUPPORT_THRESHOLD
+    && aggregate.missingMetrics.length === 0
+  );
+  const metricEvidenceText = mappedEvidence.length
+    ? collectMappedSourceTexts(mappings, mappedEvidence, evidenceIndex).join("\n")
+    : directBest?.evidence?.text || "";
+  const directMissingMetrics = extractSensitiveMetrics(claim.claim).filter((metric) => {
+    return !normalizeMetricText(metricEvidenceText).includes(normalizeMetricText(metric));
+  });
+  const statusScore = directMissingMetrics.length ? 0 : (directBest?.score || 0);
   const status = decideStatus({
     claim,
     hasDirectMapping,
-    score: best?.score || 0
+    score: statusScore,
+    aggregateSummarySupported
   });
   return {
     ...claim,
     status,
-    confidence: confidenceForStatus(status, best?.score || 0, hasDirectMapping),
+    confidence: confidenceForStatus(
+      status,
+      aggregateSummarySupported ? aggregate.score : statusScore,
+      hasDirectMapping || aggregateSummarySupported
+    ),
     evidence: best ? {
       sourceType: best.evidence.sourceType,
       sourceId: best.evidence.sourceId,
       sourceField: best.evidence.sourceField,
       text: best.evidence.text,
-      score: Math.round(best.score * 100)
+      score: Math.round(best.score * 100),
+      mode: best.evidence.mode || "single",
+      evidenceCount: Number(best.evidence.evidenceCount || 1),
+      missingMetrics: Array.isArray(best.evidence.missingMetrics)
+        ? best.evidence.missingMetrics
+        : directMissingMetrics
     } : null,
     sourceMappingCount: mappings.length,
-    reason: reasonForStatus(status, claim, best?.score || 0, hasDirectMapping)
+    reason: reasonForStatus(status, claim, statusScore, hasDirectMapping, aggregateSummarySupported)
   };
+}
+
+function buildSummaryAggregateEvidence(claim, mappings, evidenceIndex) {
+  if (claim.type !== "summary" || mappings.length < SUMMARY_AGGREGATE_MIN_MAPPINGS) {
+    return null;
+  }
+  const mappedEvidence = mappings.map((mapping) => ({
+    sourceType: mapping.sourceType,
+    sourceId: mapping.sourceId,
+    text: mapping.sourceFact
+  })).filter((item) => item.text);
+  const uniqueTexts = collectMappedSourceTexts(mappings, mappedEvidence, evidenceIndex);
+  const aggregateText = uniqueTexts.join("\n");
+  if (!aggregateText) {
+    return null;
+  }
+  const missingMetrics = extractSensitiveMetrics(claim.claim)
+    .filter((metric) => !normalizeMetricText(aggregateText).includes(normalizeMetricText(metric)));
+  return {
+    evidence: {
+      sourceType: "source_mapping_set",
+      sourceId: null,
+      sourceField: "sourceMapping",
+      text: aggregateText,
+      mode: "aggregate_direct_sources",
+      evidenceCount: uniqueTexts.length,
+      missingMetrics
+    },
+    score: scoreEvidence(claim.claim, aggregateText),
+    missingMetrics
+  };
+}
+
+function collectMappedSourceTexts(mappings, mappedEvidence, evidenceIndex) {
+  const linkedSources = new Set(mappings
+    .filter((mapping) => mapping.sourceType && mapping.sourceId)
+    .map((mapping) => `${cleanText(mapping.sourceType).toLowerCase()}:${Number(mapping.sourceId)}`));
+  const texts = mappedEvidence.map((item) => cleanMultiline(item.text)).filter(Boolean);
+  for (const evidence of evidenceIndex.items) {
+    const sourceKey = `${cleanText(evidence.sourceType).toLowerCase()}:${Number(evidence.sourceId || 0)}`;
+    if (linkedSources.has(sourceKey)) {
+      texts.push(cleanMultiline(evidence.text));
+    }
+  }
+  return Array.from(new Set(texts)).filter(Boolean);
 }
 
 function findMappingsForClaim(field, mappingByField) {
@@ -208,7 +283,10 @@ function findMappingsForClaim(field, mappingByField) {
   return [];
 }
 
-function decideStatus({ claim, hasDirectMapping, score }) {
+function decideStatus({ claim, hasDirectMapping, score, aggregateSummarySupported = false }) {
+  if (aggregateSummarySupported) {
+    return "SUPPORTED";
+  }
   if (hasDirectMapping && score >= 0.2) {
     return "SUPPORTED";
   }
@@ -237,8 +315,11 @@ function confidenceForStatus(status, score, hasDirectMapping) {
   return "low";
 }
 
-function reasonForStatus(status, claim, score, hasDirectMapping) {
+function reasonForStatus(status, claim, score, hasDirectMapping, aggregateSummarySupported = false) {
   if (status === "SUPPORTED") {
+    if (aggregateSummarySupported) {
+      return "Combined direct source mappings support this composite summary.";
+    }
     return hasDirectMapping ? "Direct source mapping supports this claim." : "Profile evidence has a strong text match.";
   }
   if (status === "WEAK") {
@@ -330,7 +411,22 @@ function scoreEvidence(claim, evidence) {
     return 0;
   }
   const overlap = Array.from(leftTokens).filter((token) => rightTokens.has(token)).length;
-  return overlap / Math.max(1, Math.min(leftTokens.size, 12));
+  return Math.min(1, overlap / Math.max(1, leftTokens.size));
+}
+
+function extractSensitiveMetrics(value) {
+  const text = cleanText(value);
+  const unit = "%|percent|倍|x|k|w|万|\\+|家|位|人|项|个|类|大|条|份|轮|年|月|天|次|秒|s";
+  const matches = [
+    ...(text.match(/\d+\s*\/\s*\d+/g) || []),
+    ...(text.match(new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:${unit})`, "gi")) || []),
+    ...(text.match(new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:-|~|→)\\s*\\d+(?:\\.\\d+)?\\s*(?:${unit})`, "gi")) || [])
+  ];
+  return Array.from(new Set(matches.map(normalizeMetricText).filter(Boolean)));
+}
+
+function normalizeMetricText(value) {
+  return cleanText(value).toLowerCase().replace(/\s+/g, "");
 }
 
 function isHighRiskClaim(value) {
@@ -395,11 +491,18 @@ function normalizeStringArray(value) {
 }
 
 function tokenSet(value) {
-  return new Set(cleanText(value)
-    .toLowerCase()
-    .split(/[^a-z0-9\u4e00-\u9fa5+#.]+/g)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 2));
+  const tokens = new Set();
+  const segments = cleanText(value).toLowerCase().match(/[a-z0-9+#.]+|\p{Script=Han}+/gu) || [];
+  for (const segment of segments) {
+    if (/^\p{Script=Han}+$/u.test(segment)) {
+      for (let index = 0; index < segment.length - 1; index += 1) {
+        tokens.add(segment.slice(index, index + 2));
+      }
+    } else if (segment.length >= 2) {
+      tokens.add(segment);
+    }
+  }
+  return tokens;
 }
 
 function cleanText(value) {

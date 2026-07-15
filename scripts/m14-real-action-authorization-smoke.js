@@ -14,7 +14,7 @@ function main() {
     const confirmed = runConfirmedScenario(path.join(rootDir, "confirmed"));
     const uncertain = runUncertainScenario(path.join(rootDir, "uncertain"));
     const checks = {
-      schemaIncludesRealActionMigration: confirmed.schemaVersion === 15 && SCHEMA_VERSION === 15,
+      schemaIncludesRealActionMigration: confirmed.schemaVersion === SCHEMA_VERSION && SCHEMA_VERSION >= 13,
       policyDefaultsOff: confirmed.defaultPolicyEnabled === false && confirmed.defaultPolicyDefaultsOff === true,
       genericTaskCreationBlocked: confirmed.genericCreateError.includes("real-action authorization API"),
       disabledPolicyBlocksArming: confirmed.disabledArmError === "REAL_ACTION_POLICY_DISABLED",

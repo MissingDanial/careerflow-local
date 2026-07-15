@@ -95,7 +95,7 @@ function loadMigrations(migrationsDir, targetVersion) {
       if (!match) {
         throw migrationError("SQLITE_MIGRATION_NAME_INVALID", `Invalid migration file name: ${entry.name}`);
       }
-      const sql = fs.readFileSync(path.join(directory, entry.name), "utf8").trim();
+      const sql = normalizeMigrationSql(fs.readFileSync(path.join(directory, entry.name), "utf8"));
       if (!sql) {
         throw migrationError("SQLITE_MIGRATION_EMPTY", `Migration file is empty: ${entry.name}`);
       }
@@ -105,12 +105,14 @@ function loadMigrations(migrationsDir, targetVersion) {
           `Migration must not manage transactions or user_version directly: ${entry.name}`
         );
       }
+      const acceptedChecksums = lineEndingChecksums(sql);
       return {
         version: Number(match[1]),
         name: match[2],
         fileName: entry.name,
         sql,
-        checksum: checksum(sql)
+        checksum: acceptedChecksums[0],
+        acceptedChecksums
       };
     })
     .sort((left, right) => left.version - right.version);
@@ -217,7 +219,7 @@ function validateMigrationHistory(history, migrations, currentVersion) {
         { currentVersion, historyVersion: version }
       );
     }
-    if (row.checksum !== migration.checksum) {
+    if (!migration.acceptedChecksums.includes(row.checksum)) {
       throw migrationError(
         "SQLITE_MIGRATION_CHECKSUM_MISMATCH",
         `Migration checksum mismatch for ${migration.fileName}.`,
@@ -290,6 +292,19 @@ function readUserVersion(database) {
 
 function checksum(sql) {
   return crypto.createHash("sha256").update(sql, "utf8").digest("hex");
+}
+
+function normalizeMigrationSql(sql) {
+  return String(sql).replace(/\r\n?/g, "\n").trim();
+}
+
+function lineEndingChecksums(sql) {
+  const normalized = normalizeMigrationSql(sql);
+  // Older Windows runs stored CRLF hashes before migrations adopted canonical LF checksums.
+  return [...new Set([
+    checksum(normalized),
+    checksum(normalized.replace(/\n/g, "\r\n"))
+  ])];
 }
 
 function escapeSqliteString(value) {

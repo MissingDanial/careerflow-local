@@ -1,497 +1,324 @@
-# BOSS 平台层逻辑问题与开发约束
+# BOSS 平台层逻辑与开发约束
 
-本文记录 JoB_Find 在 BOSS 直聘网页端闭环中已经遇到或明确预期会遇到的平台层问题。它的目的不是罗列 BOSS 内部接口，而是把 BOSS 侧抽象成一个受登录态、页面状态和平台规则约束的 `BossAdapter / BrowserExecutor`，方便后续开发时把 Agent 决策和网页执行解耦。
+> 本文描述 M17.1 的当前产品边界。系统采集页面信息并打开岗位链接；打招呼、简历上传和投递均由用户在 BOSS 页面人工完成。
 
 ## 1. BOSS 层定位
 
-BOSS 层只负责两类事情：
+BOSS 层只负责：
 
-1. 读取用户当前浏览器中已经登录、已经渲染的页面信息。
-2. 在用户授权或系统任务允许的前提下执行页面动作，例如打开详情、发送打招呼语、检查沟通状态、上传或选择简历、点击投递。
+1. 读取用户当前浏览器中已经登录、已经渲染的岗位列表和详情。
+2. 在采集过程中按顺序打开当前已加载岗位，使详情区域渲染完整 JD。
+3. 将结构化岗位、页面诊断和采集进度同步到本地后端。
+4. 从工作台打开用户选中的岗位详情 URL。
 
 BOSS 层不负责：
 
-- 岗位是否值得投递。
-- 简历应该如何修改。
-- 是否允许自动投递。
-- 生成虚假内容、绕过验证码、绕过登录或规避风控。
+- 决定岗位是否匹配。
+- 生成或审核简历。
+- 点击打招呼或发送消息。
+- 选择、上传或确认简历文件。
+- 点击投递、确认或提交。
+- 绕过登录、验证码、安全验证、频率限制或反爬机制。
+- 获取、转发或保存 BOSS Cookie/session。
 
-这些判断必须属于后端状态机和 Agent 层。
+Agent 和工作流只处理本地数据，不能把评分、审核、Shadow 结果或本地审批转化为 BOSS 写动作。
 
-## 1.1 BrowserExecutor 技术选型
+## 2. 当前技术选型
 
-当前优先级不是继续扩展数据库或 Agent，而是先验证哪个执行器能稳定承载 BOSS 页面流程：
+~~~text
+用户正常 Chrome/Edge 登录会话
+-> Chrome MV3 content script 读取列表和详情 DOM
+-> extension background 负责同步、队列上下文和页面导航
+-> Node.js 本地后端
+-> SQLite、Agent、DOCX 和日志
 
-```text
-BrowserExecutor
-  |-- ChromeExtensionAdapter BOSS 主执行器
-  |-- FirecrawlAdapter       scrape-only 辅助候选
-  `-- LocalPlaywrightAdapter 后续文件上传/投递入口实验候选
-```
+Native Messaging Host
+-> 仅探测或启动固定的本地后端
+~~~
 
-M1 实测后，Chrome Extension 是当前唯一满足真实 BOSS 岗位/JD 获取阈值的主路径。它运行在用户正常登录的浏览器页面内，不依赖 DevTools，也不要求后端持有 BOSS session。
+### 2.1 Chrome MV3 是主路径
 
-Firecrawl profile 持久化和普通 scrape 能力可用，但 BOSS interact/profile-check 没有证明能稳定承载登录态和页面交互，因此只作为 scrape-only 辅助候选。LocalPlaywright 能打开本地 Edge，但受控 profile 被 BOSS 引导到登录/安全验证；用户完成登录后又出现登录界面失效、浏览器闪烁并自动关闭的现象，因此不作为主执行器推进。
+Chrome Extension 是当前唯一通过真实 BOSS 岗位和 JD 采集验证的主执行器：
 
-技术选型 POC 的详细计划见 [04_DEVELOPMENT_PLAN.md](04_DEVELOPMENT_PLAN.md)，实际操作手册见 [07_BROWSER_EXECUTOR_POC.md](07_BROWSER_EXECUTOR_POC.md)，Firecrawl 选型记录见 [08_FIRECRAWL_DECISION.md](08_FIRECRAWL_DECISION.md)。
+- 运行在用户正常登录的页面内。
+- 不依赖 F1、DevTools 或控制台。
+- 后端不需要持有 BOSS 登录态。
+- 可以读取已经渲染的 DOM，并逐项触发详情加载。
+- 页面变化时可以上报选择器和字段诊断。
 
-## 2. 当前已知平台逻辑问题
+扩展不具有任意本地命令执行能力，也不执行当前产品边界外的真实 BOSS 写动作。
 
-### 2.1 登录态只能由用户浏览器持有
+### 2.2 Native Host 不是 BrowserExecutor
 
-BOSS 页面依赖用户登录态。后端不应该直接持有、复用或转发用户 cookie/session。当前合理路径是 Chrome Extension 内容脚本读取当前页面 DOM，并将结构化结果传给本地后端。
+Native Messaging Host 只接受 STATUS 和 START_BACKEND：
 
-开发影响：
+- 启动路径固定为本仓库 server/src/server.js。
+- 不接受 shell 字符串、任意路径或任意参数。
+- 不读取 BOSS DOM，不操作浏览器标签页。
+- 不读取模型 API Key。
 
-- 后端不能假设自己能直接请求 BOSS 页面或接口。
-- BOSS 采集任务必须有浏览器在线且页面处于有效登录态。
-- 登录失效、验证码、账号异常必须进入 `needs_manual_action`，不能自动绕过。
+它解决的是“用户一键启动本地服务”，不是登录态自动化或平台交互。
 
-### 2.2 搜索条件是批次上下文，不只是岗位字段
+### 2.3 Firecrawl 只作为辅助候选
 
-用户会先筛选城市、求职类型、关键词、薪资、公司规模、行业等条件。很多条件不一定完整出现在岗位卡片里，但会影响后续解释“为什么采到这批岗位”。
+Firecrawl 的 profile 持久化和普通 scrape 能力可用于公开或静态页面补充，但实测没有证明它能稳定承载 BOSS 登录态详情交互。它不作为当前登录页面的岗位/JD 主采集器，也不用于打招呼、上传或投递。
 
-开发影响：
+### 2.4 Playwright 不作为运行时主路径
 
-- 每次采集需要保存 `capture_batch`。
-- 批次要记录搜索页 URL、页面标题、关键词、城市、岗位类型、筛选条件快照。
-- 岗位本身只保存岗位事实；搜索条件作为 `capture_batches.search_context_json` 或类似字段保存。
+Local Playwright 受控 profile 曾被 BOSS 引导到登录或安全验证，登录后还出现页面失效和浏览器关闭。当前仅保留在测试或隔离 POC 范围，不进入普通用户主流程。
 
-### 2.3 职位描述通常需要打开详情后才完整
+## 3. 已知页面逻辑
 
-列表页通常只能拿到岗位标题、公司、薪资、城市和部分标签。完整职位描述需要点击某个岗位，使右侧详情或详情页渲染后再读取。
+### 3.1 登录态只能由用户浏览器持有
 
-开发影响：
+BOSS 页面依赖用户会话。后端不能假设可直接请求 BOSS 页面或内部接口。
 
-- `jobs` 表不能要求初次采集就有完整 JD。
-- 岗位状态需要区分 `LIST_CAPTURED` 与 `DETAIL_CAPTURED`。
-- 自动补齐描述应作为显式任务运行，带限速、最大数量、可停止、失败记录。
-- 页面结构变化时需要记录 selector diagnostics，而不是静默失败。
+处理规则：
 
-### 2.4 当前列表不是完整搜索结果
+- 采集前检查当前标签页、域名和登录态线索。
+- 登录失效、验证码或安全验证立即暂停并记录。
+- 用户处理后显式重试，不自动绕过或循环刷新。
 
-BOSS 列表可能存在分页、滚动加载、虚拟列表、推荐位、广告位、重复卡片和非岗位入口。
+### 3.2 完整 JD 需要激活岗位详情
 
-开发影响：
+列表卡片通常只有标题、公司、薪资、城市和标签。详情区域只有在岗位被点击或打开后才会刷新，因此采集必须按页面实际顺序逐项处理。
 
-- MVP 只承诺采集“当前已加载列表”。
-- 后续如果做翻页/滚动，需要建模为多个 `capture_batch` 或 batch 内多个 page segment。
-- 必须做 URL 归一化和重复过滤，尤其是 `securityId`、`ka` 等易变参数。
-- 明显非岗位项，例如“职位搜索”“查看更多信息”，要在导入前过滤。
+处理规则：
 
-### 2.5 公司信息可能分散在多个页面
+- LIST_CAPTURED 允许缺少完整 JD。
+- 只有可用描述达到当前质量门槛时才进入 DETAIL_CAPTURED。
+- 工作台主列表只展示完整 JD。
+- 待补 JD 单独统计、可继续补齐或从当前队列批量移除。
 
-公司名、融资阶段、规模、行业、工商信息、招聘者身份等信息可能分散在岗位卡片、详情页、公司页和聊天页。
+### 3.3 页面加载会改变可见岗位集合
 
-开发影响：
+BOSS 可能在浏览到第 10 个岗位后又加载到 15 个岗位，也可能使用虚拟列表、推荐位或滚动加载。因此“一次看到的列表”不是完整搜索结果。
 
-- 第一版只保存能从列表和详情页稳定拿到的公司字段。
-- 公司信息应建独立 `companies` 表，允许后续增量补齐。
-- Agent 打分时必须标注公司信息不足带来的不确定性，不能把缺失字段当成负面事实。
+处理规则：
 
-### 2.6 已沟通状态会影响投递策略
+- 当前版本只承诺处理当前页面已经加载的岗位。
+- 每轮重新枚举可见卡片，并把新出现的稳定岗位键追加到待处理集合。
+- 不把“页面当前不可见”直接解释为岗位已删除。
+- 不承诺抓取搜索结果总量。
 
-PRD 中已有“跳过已沟通 HR”的规则。但在 BOSS 上，已沟通状态可能体现在列表标签、按钮状态、聊天入口或历史会话里，不一定在岗位列表里稳定存在。
+### 3.4 再次补齐不能重置到第一个岗位
 
-开发影响：
+再次点击开始或重试时，采集器必须从未完成项继续，而不是清空进度后回到第一个已采集岗位。
 
-- `already_contacted` 应作为可空/置信度字段，而不是简单布尔常量。
-- 需要保存 HR/Boss 身份线索，例如招聘者名称、职位、头像文本、聊天入口 URL。
-- 对已沟通状态不确定的岗位，应进入人工确认或后续会话检查任务。
+恢复规则：
 
-### 2.7 打招呼后才可能解锁简历投递
+1. 读取当前页面稳定岗位键。
+2. 合并扩展本地 checkpoint 和后端当前队列状态。
+3. 跳过已具有完整 JD 的岗位。
+4. 跳过当前队列中已成功同步的 active 成员。
+5. 从第一个仍缺 JD 或上次失败的岗位继续。
+6. 页面新增岗位追加到队尾，不改变已完成项。
 
-BOSS 的求职流程不是“看到岗位 -> 直接投递”。很多场景下需要先打招呼，双方沟通或对方响应后，才允许投递附件简历或进一步操作。
+暂停只停止继续点击，不清空成功、失败和待处理状态。重试只处理可重试失败和新出现岗位。
 
-开发影响：
+### 3.5 刷新页面不能制造重复岗位
 
-- 投递状态机必须包含沟通阶段。
-- `GREETING_READY`、`GREETING_SENT`、`CHAT_OPENED`、`RESUME_UNLOCKED`、`SUBMISSION_READY` 不能合并成一个 `APPLYING`。
-- MessageAgent 生成打招呼语后，BrowserExecutor 只是执行和回报结果。
-- 是否已解锁投递，需要浏览器侧检测按钮状态、聊天状态或页面提示，并写回后端。
-- 当前 M8.2 支持 `SEND_GREETING` dry-run：扩展可在 BOSS 页面校验岗位匹配、定位聊天输入框、填入招呼语并确认发送按钮可见，但不会点击发送。只有后续 BrowserExecutor 明确完成真实发送并回写成功后，才允许推进到 `GREETING_SENT`。
-- 当前 M8.3-M9.5 支持 `REFRESH_CONVERSATION` / `CHECK_RESUME_UNLOCK` 只读刷新、`UPLOAD_RESUME` dry-run、`SUBMIT_APPLICATION` dry-run、本地 `submissionReadiness` gate、投递准备复核队列和本地复核决策：扩展只读取当前页面 DOM，若明确看到聊天状态或简历入口，可回写 `CHAT_OPENED` / `RESUME_UNLOCKED`，并把近期聊天快照归档为 `messages` 的 `boss_chat/CAPTURED` 记录。后端会基于归档消息生成 `communicationAssessment`、`nextActionRecommendation` 和 `submissionReadiness`，用于区分对方已回复、要求简历、仍在等待回复、投递准备证据是否齐全。`UPLOAD_RESUME` dry-run 只诊断上传入口和文件 input，不选择文件、不上传、不投递；`SUBMIT_APPLICATION` dry-run 只诊断投递/确认候选、锁定信号和确认弹窗线索，不点击投递、不确认、不提交；`submissionReadiness`、复核队列和本地复核决策只写 metadata/event 或派生列表，不会推进到 `SUBMISSION_READY` 或 `SUBMITTED`。
+刷新 BOSS 页面可能重新加载同一岗位列表。去重必须分两层：
 
-### 2.8 简历上传/选择不是普通后端 API
+- 全局层：jobs 和 applications 依据规范化岗位 URL、岗位 ID 和稳定字段复用。
+- 队列层：application_queue_items 依据 queue_id + application_id 复用。
 
-本地后端可以生成 DOCX/PDF，但浏览器页面上的文件上传动作受浏览器安全限制。内容脚本通常不能静默把本地任意文件路径塞进文件选择框。用户可能还需要选择 BOSS 在线简历、附件简历或重新上传。
+结果：
 
-开发影响：
+- 同一岗位在当前队列重复采集时更新快照并跳过重复成员。
+- 同一岗位采集到另一个意向队列时复用全局实体，仅新增队列成员。
+- URL 中 securityId、ka 等易变参数不能单独作为稳定身份。
 
-- 简历生成完成不等于可以自动上传。
-- MVP 应先采用“生成文件 + 展示路径 + 用户确认/手动选择”的方式。
-- 当前 M7.4 的本地审批只表示用户确认某个已审核通过的简历版本可进入下一阶段；它不会上传文件、不会点击投递，也不会创建上传或投递任务。
-- 如果未来要自动上传，可能需要评估 Playwright 控制浏览器、Chrome Extension 特定权限、Native Messaging 或人工文件选择流程。
-- `resume_versions` 要记录本地文件路径、导出格式和是否已被用户确认用于投递。
+### 3.6 公司信息可能不完整
 
-### 2.9 投递动作必须可审计、可停止
+公司规模、融资、行业和招聘者信息可能分散在卡片、详情、公司页和沟通页。
 
-投递会真实影响用户求职账号和对外沟通。即使 Agent 评分很高，也不能把投递当作普通后台任务静默执行。
+处理规则：
 
-开发影响：
+- 只保存当前页面稳定可读字段。
+- 缺失字段表示未知，不表示负面事实。
+- Agent 必须把公司信息不足作为不确定性，而不是自动降低真实性。
 
-- 默认自动投递必须关闭。
-- 自动投递只允许在用户明确开启、岗位高匹配低风险、AuditAgent 通过、状态已解锁投递时执行。
-- 每次发送打招呼语、上传简历、点击投递都要写入 `browser_events` 和 `application_events`。
-- 遇到验证码、登录失效、按钮不可用、页面不匹配时立即暂停任务。
-- 从 `RESUME_AUDITED` 到 `GREETING_READY` 可以由本地审批推进；从 `GREETING_READY` 往后的 `GREETING_SENT`、`CHAT_OPENED`、`RESUME_UNLOCKED`、`SUBMISSION_READY` 和 `SUBMITTED` 必须来自明确的 BrowserExecutor 结果或后续人工确认，不能由简历审批或 MessageAgent 草稿隐式推进。
+### 3.7 BOSS 的联系与投递存在平台前置条件
 
-### 2.10 BOSS 页面适配器必须可诊断
+很多岗位需要先打招呼或双方沟通后才开放简历入口。该规则意味着“生成简历成功”不等于“可以投递”。
 
-BOSS 页面 DOM 可能频繁变化。选择器失败、字段错位、详情未加载、弹窗遮挡等问题都应能被定位。
+当前处理：
 
-开发影响：
+- 系统展示岗位 URL 和 DOCX 路径。
+- 用户人工打开岗位、打招呼、沟通、上传和投递。
+- 用户在工作台记录未联系、已打招呼或已投递。
+- 系统不推断 BOSS 是否已经接受投递。
 
-- 内容脚本应上报 selector counts、页面 URL、页面标题、短文本样本、失败步骤。
-- 后端应保留 `browser_events` 或 `adapter_events`。
-- 自动任务需要 task id，便于从后端追踪到浏览器动作。
-- 不能把 Agent 判断失败和页面动作失败混在一个错误码里。
+### 3.8 文件上传受浏览器安全限制
 
-## 3. 建议状态机
+网页内容脚本不能静默把任意本地路径放入文件选择框。Native Host 的存在也不改变当前产品边界。
 
-岗位主流程建议至少包含：
+当前处理：
 
-```text
-DISCOVERED
--> LIST_CAPTURED
+- DocumentRenderer 只输出本地 DOCX。
+- 工作台展示路径，用户自行选择文件。
+- 不把本地文件路径发送给 BOSS 以外的服务。
+
+## 4. 采集状态与算法
+
+### 4.1 单轮采集
+
+~~~text
+选择当前意向队列
+-> 枚举当前已加载岗位卡片
+-> 生成稳定岗位键并去重
+-> 跳过已完成项
+-> 逐项打开详情
+-> 等待详情与目标岗位匹配
+-> 提取字段和 selector diagnostics
+-> 完整 JD 同步后端
+-> 继续处理新出现或未完成岗位
+~~~
+
+每个岗位处理必须有限时、间隔和最大数量。参数放在设置页：
+
+- 最大本地缓存岗位数。
+- 最多补齐岗位数。
+- 自动点击间隔。
+
+### 4.2 同步规则
+
+- 完整 JD 采集成功后立即同步到当前队列。
+- 同步使用幂等写入，重复请求不能重复创建岗位。
+- 缺 JD 岗位保留在待补集合，不进入完整 JD 工作台主列表。
+- 同步失败保留本地 checkpoint 和错误上下文，允许重试。
+- 切换意向队列后，新采集结果必须写入新队列，不能沿用旧队列 ID。
+
+### 4.3 停止条件
+
+出现以下情况必须暂停：
+
+- 登录失效。
+- 验证码或安全验证。
+- 页面域名或岗位不匹配。
+- 详情区域长时间未加载。
+- 关键选择器全部失效。
+- 用户点击暂停。
+
+不得通过高频刷新、模拟 DevTools、注入反检测代码或更换指纹绕过停止条件。
+
+## 5. 队列和删除语义
+
+- 新建意向岗位队列时不复制其他队列成员。
+- 默认队列保存历史回填数据且不可归档。
+- 删除自定义意向使用 archived_at，不硬删除全局岗位、application、筛选、简历或日志。
+- 多选“移出队列”只把 application_queue_items.state 改为 REMOVED。
+- “清理待补 JD”只移除当前队列中描述不足的成员。
+- 被移除成员后续是否恢复必须由显式重新采集或添加动作触发。
+- 队列级 trusted_at 只绕过该队列的风险方向门禁，不影响其他队列。
+
+## 6. 状态所有权
+
+### 6.1 本地工作流状态
+
+applications.status 表示本地证据流：
+
+~~~text
+LIST_CAPTURED
 -> DETAIL_CAPTURED
--> SCORED
--> SHORTLISTED | SKIPPED | NEEDS_USER_REVIEW
+-> SCORED | SHORTLISTED | SKIPPED | NEEDS_USER_REVIEW
 -> RESUME_DRAFTED
--> RESUME_AUDITED
+-> RESUME_AUDITED | NEEDS_USER_REVIEW
 -> GREETING_READY
--> GREETING_SENT
--> CHAT_OPENED
--> RESUME_UNLOCKED
--> SUBMISSION_READY
--> SUBMITTED
-```
-
-异常状态：
-
-```text
-LOGIN_REQUIRED
-CAPTCHA_REQUIRED
-SELECTOR_CHANGED
-DETAIL_CAPTURE_FAILED
-GREETING_FAILED
-RESUME_UPLOAD_BLOCKED
-SUBMISSION_FAILED
-NEEDS_MANUAL_ACTION
-```
-
-关键原则：
-
-- BOSS 层负责把页面事实推进到状态机。
-- Agent 层负责提出建议和生成内容。
-- Approval/Workflow 层负责决定是否允许进入下一动作。
-
-## 4. 建议数据对象
-
-第一版 SQLite 可以先围绕这些对象设计：
-
-- `capture_batches`：一次搜索页采集批次，含搜索上下文。
-- `jobs`：岗位最新主记录。
-- `job_snapshots`：岗位每次采集快照。
-- `companies`：公司主记录，允许后续增量补齐。
-- `applications`：岗位投递工作流主记录。
-- `conversations`：BOSS 沟通状态、HR/Boss 线索、解锁状态。
-- `messages`：打招呼语和聊天内容快照，需注意隐私。
-- `browser_tasks`：发送给浏览器执行器的任务。
-- `browser_events`：浏览器执行器上报的动作和异常。
-- `resume_versions`：针对岗位生成的简历版本。
-
-## 5. 推荐开发顺序
-
-### 阶段 A：岗位资料完整采集
-
-- 采集搜索上下文。
-- 采集当前列表岗位。
-- 自动打开详情补齐 JD。
-- 本地 SQLite 入库。
-- 保留 selector diagnostics 和导入质量统计。
-
-### 阶段 B：Agent 筛选和 shortlist
-
-- ScreeningAgent 基于完整 JD、用户规则、公司信息置信度输出评分。
-- 不触发任何 BOSS 写动作。
-- 用户可以确认 shortlist。
-
-### 阶段 C：简历生成和审核
-
-- ResumeAgent 生成岗位版简历。
-- AuditAgent 审核真实性和格式。
-- 生成 DOCX/PDF 与 diff。
-- 用户确认简历版本；当前实现为本地审批，只推进到 `GREETING_READY`，不创建 BOSS 页面动作任务。
-
-### 阶段 D：打招呼与沟通状态
-
-- MessageAgent 生成打招呼语。
-- 当前实现先生成 `SEND_GREETING` dry-run 任务；用户确认后由 BrowserExecutor 发送的能力仍是后续 POC。
-- 当前实现可通过 `REFRESH_CONVERSATION` 手动只读刷新沟通状态。
-- 当前实现会把 `REFRESH_CONVERSATION` 读到的近期消息快照去重归档，但不保证覆盖完整聊天历史。
-- 当前实现会生成 `communicationAssessment`，但这个判定只是策略输入，不是投递授权。
-- 当前实现会生成 `nextActionRecommendation`，但建议只用于界面提示和后续 POC，不会自动创建上传或投递任务。
-- 当前实现可通过 `CHECK_RESUME_UNLOCK` 手动只读检测是否解锁简历投递。
-- 当前实现可通过 `UPLOAD_RESUME` dry-run 手动检测上传入口，但不会选择本地文件或点击上传。
-- 当前实现可通过 `SUBMIT_APPLICATION` dry-run 手动检测投递入口和确认弹窗线索，但不会点击投递、确认或提交。
-- 当前实现会基于上传/投递 dry-run 证据生成 `submissionReadiness`，但该结论只用于人工复核和后续 POC，不会触发真实动作。
-- 当前实现可通过 `GET /api/submission-readiness` 查看投递准备复核队列，但队列项不会自动变成真实上传/投递任务。
-- 当前实现可通过 `POST /api/submission-readiness/:applicationId/review` 写入本地复核决策，但决策不会自动触发真实上传、投递或状态推进。
-
-### 阶段 E：投递执行
-
-- `RESUME_UNLOCKED` 后进入 `SUBMISSION_READY`。
-- MVP 先人工确认投递。
-- 稳定后再允许小范围、可配置、可审计的自动投递。
+~~~
 
-## 6. 仍需用户确认的问题
+历史兼容状态 GREETING_SENT、CHAT_OPENED、RESUME_UNLOCKED、SUBMISSION_READY 和 SUBMITTED 仍存在于 schema 和 transition service，但当前普通用户流程不会由扩展自动推进。所有 applications.status 更新必须经过 ApplicationTransitionService，并提供合法证据。
 
-后续在你补充 Agent 业务逻辑时，需要一起明确：
+### 6.2 人工外部状态
 
-1. 求职类型的枚举：实习、校招、社招、兼职、远程等如何定义。
-2. 城市和岗位扩展策略：是否允许跨城市、远程岗位、相邻岗位方向。
-3. 公司信息优先级：公司规模、融资阶段、行业、外包/培训风险如何影响评分。
-4. 打招呼策略：是否每个岗位都生成个性化招呼语，是否需要人工确认。
-5. 简历投递方式：BOSS 在线简历、附件简历、PDF/DOCX 上传分别如何处理。
-6. 自动动作边界：哪些动作必须人工确认，哪些动作未来可自动执行。
-7. 频率限制：每批最大打招呼/投递数量、每日上限、失败后冷却时间。
+applications.manual_status 只记录用户声明的外部进度：
 
-## M10.1 WorkflowOrchestrator 与 BOSS 边界
+- NOT_CONTACTED：未联系。
+- GREETED：已打招呼。
+- APPLIED：已投递。
 
-M10.1 新增的 `WorkflowOrchestrator` 只属于后端计划层，不属于 BOSS 页面执行层。
+更新 manual_status：
 
-它可以做：
-- 读取 application、JD、screening、resume version、audit、conversation、browser task、submission readiness 等本地证据。
-- 生成阶段状态、下一步建议、阻断原因和证据摘要。
-- 把计划写入 `agent_runs` 作为审计记录。
+- 只写窄字段和 MANUAL_APPLICATION_STATUS_UPDATED workflow event。
+- 不改变 applications.status。
+- 不创建 browser task。
+- 不证明 BOSS 已接受或成功处理动作。
 
-它不能做：
-- 不能直接点击 BOSS 页面。
-- 不能创建真实打招呼、真实上传、真实投递任务。
-- 不能把 `APPROVED_FOR_MANUAL_EXECUTION` 自动转成 `SUBMISSION_READY` 或 `SUBMITTED`。
-- 不能绕过 `UPLOAD_RESUME` / `SUBMIT_APPLICATION` dry-run 和本地复核。
+### 6.3 队列成员状态
 
-因此 M10.1 之后的真实动作边界仍然是：
-```text
-Agent/WorkflowOrchestrator -> 只产出建议和本地记录
-BrowserExecutor/Chrome Extension -> 只执行明确排队的页面任务
-Human review -> 决定是否进入任何真实外部动作 POC
-```
+application_queue_items.state 只表示某 application 是否在某队列中处于 ACTIVE 或 REMOVED。它不代表岗位关闭、筛选失败或已投递。
 
-后续如果实现自动上传或自动投递，必须新增独立 POC、独立开关、独立事件记录和失败恢复策略，不能复用 M10.1 的计划 API 直接执行。
+## 7. 页面诊断要求
 
-## M11.3 Local Execution Package Boundary
+每次失败至少记录：
 
-M11.3 新增 `GET/POST /api/applications/:id/execution-package`，作用是把本地投递前证据打成一个可审计执行包，不是自动投递器。
+- 页面 URL 和标题。
+- 当前岗位稳定键和目标岗位稳定键。
+- 列表、详情和关键选择器命中数。
+- 失败步骤、等待时长和错误码。
+- 登录、验证码、安全验证和岗位关闭线索。
+- 当前队列 ID、采集批次和 checkpoint 摘要。
 
-`POST` 会额外在后端数据目录写入 `execution_packages/*.json` 和 `execution_packages/*.md`。这些文件是本地审计归档，供投递前人工检查和后续纠错使用。
+错误分类必须区分：
 
-执行包可以包含：
+- LOGIN_REQUIRED。
+- CAPTCHA_REQUIRED。
+- SECURITY_CHECK_REQUIRED。
+- SELECTOR_CHANGED。
+- DETAIL_CAPTURE_FAILED。
+- PAGE_JOB_MISMATCH。
+- BACKEND_UNAVAILABLE。
+- SYNC_FAILED。
+- NEEDS_MANUAL_ACTION。
 
-- 岗位标题、公司、detail URL 和 JD 长度。
-- 已审核且本地审批通过的 DOCX 简历路径。
-- DOCX render QA 摘要。
-- 最近一次 AuditAgent、ResumeFitEvaluator、ClaimVerifier 摘要。
-- MessageAgent 打招呼草稿。
-- `SEND_GREETING`、`UPLOAD_RESUME`、`SUBMIT_APPLICATION` 的 dry-run 证据。
-- `submissionReadiness` 和 `submissionReadinessReview`。
-- 阻断项和手动步骤。
+最近异常和待补 JD 在 UI 中默认可折叠。标记错误已解决不能自动重试或推进状态。
 
-执行包必须保持：
+## 8. 历史兼容实验边界
 
-- `noRealBossAction: true`
-- `createsBrowserTasks: false`
-- `noBrowserTaskCreated: true`
-- `realActionsBlocked: ["SEND_GREETING_REAL", "UPLOAD_RESUME_REAL", "SUBMIT_APPLICATION_REAL"]`
+M8-M12 曾建立只读会话检测、上传/投递入口 dry-run、执行包和人工 checklist；M14 曾建立单岗位真实打招呼 canary。当前规则是：
 
-明确不允许：
+- 普通用户界面不显示这些实验入口。
+- M14 canary 默认关闭，不作为当前产品能力。
+- SEND_GREETING_REAL、UPLOAD_RESUME_REAL 和 SUBMIT_APPLICATION_REAL 不属于 M17/M17.1 主流程。
+- Shadow 评审只评价 Agent 输出，不授权 BOSS 动作。
+- execution package、dry-run 或本地 review 不能推进真实外部状态。
+- 后续如果重新评估真实动作，必须单独立项、单独威胁建模、单独验收，不能从当前工作台直接放开。
 
-- 不点击发送。
-- 不选择或上传文件。
-- 不点击确认或投递。
-- 不创建新的 BOSS browser task。
-- 不把 application 状态推进到 `SUBMITTED`。
+### 8.1 历史本地协议索引
 
-因此 M11.3 只解决“闭环证据是否齐全、用户下一步该怎么手动执行”的问题，不解决真实自动投递。
-## M10.2b Observability and BOSS boundary
+以下名称仍被数据库、兼容 API 和回归测试引用，但相关入口在 M17 普通用户界面中隐藏：
 
-M10.2b adds `workflow_events`, timeline APIs, and an error queue. This is an audit and correction layer, not a BOSS execution layer.
+- M9.3 submissionReadiness：根据上传/投递入口 dry-run 生成的本地 metadata；只表示是否有足够证据供人工复核。
+- M9.4 /api/submission-readiness：历史复核队列；读取派生数据，不创建上传或投递任务。
+- M9.5：把 APPROVED_FOR_MANUAL_EXECUTION、REFRESH_REQUIRED 或 BLOCKED 写入本地复核记录；不触发 BOSS 动作。
+- M10.1 WorkflowOrchestrator：汇总本地证据并建议下一步；不打开页面、不创建真实动作任务。
+- M11.5 manual execution checklist：记录用户自报的本地步骤，不证明平台侧动作成功。
+- M12.1/M12.2 SUBMISSION_EVIDENCE_RECORDED：保存只读页面线索或用户确认；不点击页面，也不自动把 application 标记为已投递。
 
-Allowed:
+这些历史协议的 noRealBossAction 约束继续生效。当前工作台使用更简单的 manual_status 作为用户进度台账，不依赖上述链路完成主流程。
 
-- Record backend agent progress and failures.
-- Record browser task queue, claim, success, failure, cancel, and retry events.
-- Show a single-application timeline across workflow events, application events, agent runs, and browser tasks.
-- Mark an error as `RESOLVED` or `IGNORED` after the user or developer has corrected the cause.
+## 9. Firecrawl 与反爬结论
 
-Not allowed:
+Firecrawl 可以复用在公开静态资料抓取、HTML 清洗或独立研究任务中，但不能解决以下当前核心问题：
 
-- Resolving an error must not automatically retry a browser task.
-- Resolving an error must not advance application status.
-- Timeline or workflow error APIs must not create `SEND_GREETING`, `UPLOAD_RESUME`, or `SUBMIT_APPLICATION` tasks.
-- Observability APIs must not bypass Chrome Extension execution, login state, captcha, security checks, or BOSS page restrictions.
+- 用户本地 Chrome 登录态。
+- 只有激活岗位后才刷新的详情 DOM。
+- BOSS 安全验证和动态列表状态。
+- 浏览器本地文件选择。
+- 当前产品要求的人工打招呼和投递边界。
 
-The intended correction loop is:
+因此主路径保持 Chrome MV3 + 本地后端。不得引入 patchright、undetected 或指纹伪装方案来规避平台检测。
 
-```text
-failure recorded
--> inspect timeline / workflow-errors
--> fix selector, login, profile fact, model config, or input data
--> mark event RESOLVED or IGNORED
--> explicitly rerun the safe API or requeue the browser task when appropriate
-```
+## 10. 验收清单
 
-M10.2c exposes this loop in the Chrome Extension settings page through the `Workflow progress` panel. The panel can display open errors, recent workflow events, and a single application's merged timeline, but it remains read/correction-only. `RESOLVED` and `IGNORED` update local observability metadata only; they must not trigger BOSS page clicks, uploads, submissions, browser task retries, or application state advancement.
-
-## M10.3a Resume/JD Fit and BOSS boundary
-
-`ResumeFitEvaluator` is a backend-only evaluation node. It reads the local JD and the local generated resume version, writes `resume_fit_evaluations`, `agent_runs`, and `workflow_events`, and then stops.
-
-M10.3a also exposes this node in the Chrome Extension settings page. `Evaluate JD fit` calls the local backend evaluator through the background script and renders the latest fit score, blockers, recommendations, and policy beside the resume detail. This remains a local evaluation action only.
-
-Allowed:
-
-- Extract JD requirements from locally stored job descriptions.
-- Score resume coverage against the JD.
-- Produce revision recommendations for missing or weak coverage.
-- Let `WorkflowOrchestrator` decide whether the next safe step is resume revision or `AuditAgent`.
-
-Not allowed:
-
-- It must not open or click BOSS pages.
-- It must not create `SEND_GREETING`, `UPLOAD_RESUME`, or `SUBMIT_APPLICATION` browser tasks.
-- It must not create any browser task from the settings page fit action.
-- It must not advance application status.
-- It must not mark a resume as truthful, approved, ready to upload, or ready to submit.
-
-## M10.3b Claim Verification and BOSS boundary
-
-`ClaimVerifier` is a backend-only truthfulness/evidence node. It reads the local resume version, source mappings, and confirmed profile facts, writes `resume_claim_verifications`, `agent_runs`, and `workflow_events`, and then stops.
-
-M10.3b also exposes this node in the Chrome Extension settings page. `Verify claims` calls the local backend verifier through the background script and renders unsupported claims, user-confirmation needs, recommendations, and evidence summaries beside the resume detail.
-
-Allowed:
-
-- Extract claims from local resume fields.
-- Compare claims against local `sourceMapping`, confirmed experiences, and confirmed skills.
-- Mark claims as `SUPPORTED`, `WEAK`, `UNSUPPORTED`, or `NEEDS_USER_CONFIRMATION`.
-- Let `WorkflowOrchestrator` decide whether the next safe step is revision/confirmation or `AuditAgent`.
-
-Not allowed:
-
-- It must not use pending profile fact drafts.
-- It must not open or click BOSS pages.
-- It must not create browser tasks.
-- It must not trigger `SEND_GREETING`, `UPLOAD_RESUME`, or `SUBMIT_APPLICATION`.
-- It must not advance application status.
-- It must not mark final submission readiness.
-
-## M10.3c Resume Revision and BOSS boundary
-
-`ResumeRevisionAgent` is a backend-only local resume versioning node. It reads a base resume version, latest fit evaluation, latest claim verification, and confirmed profile evidence, then creates a new local resume version.
-
-Allowed:
-
-- Create a new `resume_versions` row from the previous local version.
-- Remove unsupported claims or soften weak/unconfirmed claims.
-- Surface JD-relevant evidence only when it exists in confirmed profile facts or skills.
-- Record `agent_runs` and `workflow_events`.
-- Let `WorkflowOrchestrator` require fit re-evaluation and claim re-verification for the new version.
-
-Not allowed:
-
-- It must not overwrite the old resume version.
-- It must not use pending profile fact drafts.
-- It must not open, click, scroll, or inspect BOSS pages.
-- It must not create any browser task.
-- It must not trigger `SEND_GREETING`, `UPLOAD_RESUME`, or `SUBMIT_APPLICATION`.
-- It must not advance application status.
-- It must not mark the resume as audited, approved, locally approved, submission-ready, or submitted.
-
-The safe loop after this milestone is:
-
-```text
-ResumeFitEvaluator / ClaimVerifier blocks audit
--> ResumeRevisionAgent creates a new local version
--> ResumeFitEvaluator reruns on the new version
--> ClaimVerifier reruns on the new version
--> AuditAgent only after those gates pass
-```
-
-## M11.4 Execution Package Review Boundary
-
-M11.4 keeps the execution-package layer local and review-only. It adds validation and an explicit package review event, but it does not unlock BOSS automation.
-
-Allowed:
-
-- Validate that the execution package preserves `noRealBossAction`, `createsBrowserTasks: false`, and `noBrowserTaskCreated`.
-- Validate that `SEND_GREETING_REAL`, `UPLOAD_RESUME_REAL`, and `SUBMIT_APPLICATION_REAL` remain blocked.
-- Validate local evidence: DOCX approval, DOCX QA, audit approval, greeting draft, dry-run evidence, submission readiness, local readiness approval, and archive files.
-- Record `EXECUTION_PACKAGE_REVIEWED` with `APPROVED_FOR_MANUAL_EXECUTION`, `REFRESH_REQUIRED`, or `BLOCKED`.
-- Show validation failures and review actions in the Chrome Extension settings page.
-
-Not allowed:
-
-- It must not click BOSS send.
-- It must not upload or select a local resume file in BOSS.
-- It must not confirm or submit an application.
-- It must not create browser tasks.
-- It must not advance application status.
-- It must not mark anything as submitted.
-
-Approval rule:
-
-`APPROVED_FOR_MANUAL_EXECUTION` is accepted only when the package is ready and validation passes. If the package has blockers, missing archives, or any safety-contract failure, the approval attempt is recorded as blocked and must be corrected upstream.
-
-## M11.5 Manual Execution Checklist Boundary
-
-M11.5 records local manual progress after an approved execution package. It is a ledger, not a BOSS executor.
-
-Allowed:
-
-- Read the current execution package checklist.
-- Show package review state, blockers, and manual steps in the settings page.
-- Record a package-derived step as `DONE`, `SKIPPED`, `FAILED`, `BLOCKED`, or `NEEDS_REFRESH`.
-- Store the record as `EXECUTION_CHECKLIST_STEP_RECORDED` in `workflow_events`.
-- Keep a local progress count for review and correction.
-
-Not allowed:
-
-- It must not open or control BOSS pages.
-- It must not click BOSS send.
-- It must not select, upload, or confirm a resume file.
-- It must not submit an application.
-- It must not create browser tasks.
-- It must not change application status.
-- It must not mark the application as submitted.
-
-Gate:
-
-Checklist progress can be recorded only after the package review accepted `APPROVED_FOR_MANUAL_EXECUTION`. A checklist record is evidence for the local user workflow only; it is not proof that BOSS accepted a submission unless later user-supplied evidence is added.
-
-## M12 Submission Evidence Boundary
-
-M12 records local evidence about what the current BOSS page appears to show after manual execution. It is not a BOSS executor and it is not proof of a successful platform-side application unless the user confirms the outcome.
-
-Allowed:
-
-- Read visible DOM text from the currently logged-in BOSS page.
-- Reuse existing read-only snapshots for conversation state, resume unlock state, upload dry-run state, and submit dry-run state.
-- Classify the visible result as `MANUAL_SUBMISSION_CONFIRMED`, `GREETING_SENT_CONFIRMED`, `RESUME_UPLOAD_CONFIRMED`, `BLOCKED_BY_BOSS`, `NEEDS_USER_ACTION`, or `UNKNOWN`.
-- Record `SUBMISSION_EVIDENCE_RECORDED` in `workflow_events`.
-- Show the latest evidence in the extension settings page.
-
-Not allowed:
-
-- It must not click BOSS buttons.
-- It must not send a greeting.
-- It must not select, upload, or confirm a resume file.
-- It must not submit an application.
-- It must not create browser tasks.
-- It must not change application status.
-- It must not mark the application as submitted.
-
-Operational note:
-
-If BOSS shows login, captcha, security verification, job closed, or abnormal access signals, the result should be recorded as `BLOCKED_BY_BOSS` or `NEEDS_USER_ACTION` and handed back to the user for correction.
+- 不打开 DevTools 也能采集当前页面完整 JD。
+- 再次开始或重试时跳过已完成岗位，并从未完成项继续。
+- 页面新增岗位可追加处理，不清空原进度。
+- 刷新页面不会产生重复全局岗位或当前队列成员。
+- 切换队列后采集、统计和删除都严格作用于新队列。
+- 完整 JD 自动同步后端，待补 JD 不进入主工作台。
+- 登录、验证、选择器和同步错误可定位并重试。
+- 工作台只打开岗位 URL，不点击打招呼、上传或投递。
+- manual_status 更新不改变 applications.status。
+- Native Host 只能执行 STATUS 和 START_BACKEND。

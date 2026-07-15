@@ -26,10 +26,12 @@ async function main() {
     const storeResult = await runStoreChecks(storeDataDir);
     const apiResult = await runApiChecks(apiDataDir);
     const wiring = runWiringChecks();
+    const compositeSummary = runCompositeSummaryChecks();
     const checks = {
       ...storeResult.checks,
       ...apiResult.checks,
-      ...wiring.checks
+      ...wiring.checks,
+      ...compositeSummary.checks
     };
     const ok = Object.values(checks).every(Boolean);
     console.log(JSON.stringify({
@@ -43,6 +45,115 @@ async function main() {
     fs.rmSync(storeDataDir, { recursive: true, force: true });
     fs.rmSync(apiDataDir, { recursive: true, force: true });
   }
+}
+
+function runCompositeSummaryChecks() {
+  const summary = "聚焦 AI 产品、用户研究、需求分析、PRD 与 Agent 工作流；有高校教师访谈、双 Agent 协同、0-1 产品验证和迭代落地经验。";
+  const experiences = [
+    {
+      id: 3,
+      title: "超星学习通 AI 教案 Agent",
+      organization: "超星学习通",
+      role: "AI 产品经理实习生",
+      facts: [
+        "主导 20+ 位高校教师访谈，梳理教案编写效率低、教学方案评价主观等核心问题。",
+        "设计 Generator 与 Evaluator 双 Agent 协同工作流，以结构化评分和修改建议驱动生成迭代。"
+      ],
+      skills: ["用户访谈", "需求分析", "PRD", "Agent 工作流"]
+    },
+    {
+      id: 4,
+      title: "CareerFlow Local",
+      organization: "个人项目",
+      role: "产品与工程负责人",
+      facts: [
+        "从自身秋招低反馈问题出发，完成本地 AI 求职工作流的需求拆解、产品边界、Agent 分工和质量指标设计。"
+      ],
+      skills: ["AI 产品", "Agent 工作流", "用户流程设计"]
+    },
+    {
+      id: 5,
+      title: "AFBABY 宠物服饰 AIGC 产品实践",
+      organization: "AFBABY",
+      role: "项目负责人",
+      facts: [
+        "调研 20+ 家商店和 100+ 位用户，识别社交与定制两类核心需求并形成差异化产品定位。"
+      ],
+      skills: ["用户研究", "0-1 产品", "产品定位"]
+    }
+  ];
+  const sourceMapping = [
+    {
+      resumeField: "summary",
+      sourceType: "experience",
+      sourceId: 3,
+      sourceFact: experiences[0].facts[0]
+    },
+    {
+      resumeField: "summary",
+      sourceType: "experience",
+      sourceId: 4,
+      sourceFact: experiences[1].facts[0]
+    },
+    {
+      resumeField: "summary",
+      sourceType: "experience",
+      sourceId: 5,
+      sourceFact: experiences[2].facts[0]
+    }
+  ];
+  const supported = runClaimVerifier({
+    resumeVersion: { resumeFields: { summary } },
+    profile: { experiences, skills: [] },
+    sourceMapping
+  }, { mode: "rules" });
+  const unsupportedMetric = runClaimVerifier({
+    resumeVersion: {
+      resumeFields: {
+        summary: `${summary} 投递成功率提升 300%。`
+      }
+    },
+    profile: { experiences, skills: [] },
+    sourceMapping
+  }, { mode: "rules" });
+  const projectMetric = runClaimVerifier({
+    resumeVersion: {
+      resumeFields: {
+        projects: [{
+          title: experiences[0].title,
+          bullets: ["主导 20+ 位高校教师访谈，使产品转化率提升 300%。"]
+        }]
+      }
+    },
+    profile: { experiences, skills: [] },
+    sourceMapping: [{
+      resumeField: "projects[0].title",
+      sourceType: "experience",
+      sourceId: 3,
+      sourceFact: experiences[0].title
+    }, {
+      resumeField: "projects[0].bullets[0]",
+      sourceType: "experience",
+      sourceId: 3,
+      sourceFact: experiences[0].facts[0]
+    }]
+  }, { mode: "rules" });
+  const supportedClaim = supported.result.claims.find((claim) => claim.field === "summary");
+  const metricClaim = unsupportedMetric.result.claims.find((claim) => claim.field === "summary");
+  const projectMetricClaim = projectMetric.result.claims.find((claim) => claim.field === "projects[0].bullets[0]");
+  return {
+    checks: {
+      compositeSummaryUsesAggregateEvidence: supportedClaim?.status === "SUPPORTED"
+        && supportedClaim.evidence?.mode === "aggregate_direct_sources"
+        && supportedClaim.evidence?.score >= 60,
+      unverifiedSummaryMetricStaysBlocked: metricClaim?.status === "NEEDS_USER_CONFIRMATION"
+        && metricClaim.evidence?.missingMetrics?.includes("300%")
+        && unsupportedMetric.result.summary.truthfulnessPassed === false,
+      unverifiedProjectMetricStaysBlocked: projectMetricClaim?.status === "NEEDS_USER_CONFIRMATION"
+        && projectMetricClaim.evidence?.missingMetrics?.includes("300%")
+        && projectMetric.result.summary.truthfulnessPassed === false
+    }
+  };
 }
 
 async function runStoreChecks(dataDir) {

@@ -3,8 +3,8 @@ const { loadModelConfig, requestStructuredCompletion } = require("./model-client
 const { buildRiskGateScreeningResult, evaluateJobRiskGate } = require("./job-risk-gate");
 
 const AGENT_NAME = "ScreeningAgent";
-const PROMPT_VERSION = "m16.screening.prompt.v2";
-const AGENT_VERSION = "m16.screening.agent.v1";
+const PROMPT_VERSION = "m18.screening.prompt.v1";
+const AGENT_VERSION = "m18.screening.agent.v1";
 
 async function runScreeningAgent(input = {}, options = {}) {
   const context = normalizeScreeningInput(input);
@@ -302,8 +302,49 @@ function buildModelInput(context, baseline) {
       "Prefer conservative risk scoring."
     ],
     job: context.job,
-    confirmedProfile: context.profile,
-    deterministicBaseline: baseline
+    confirmedProfile: compactScreeningProfile(context.profile),
+    deterministicBaseline: {
+      matchScore: baseline.matchScore,
+      riskScore: baseline.riskScore,
+      recommendation: baseline.recommendation,
+      hardConditions: baseline.hardConditions,
+      matchedPoints: baseline.matchedPoints,
+      riskPoints: baseline.riskPoints
+    }
+  };
+}
+
+function compactScreeningProfile(profile = {}) {
+  const root = profile.profile && typeof profile.profile === "object" ? profile.profile : {};
+  return {
+    profile: {
+      headline: text(root.headline || ""),
+      location: text(root.location || ""),
+      target: root.target && typeof root.target === "object" ? root.target : {},
+      summary: multiline(root.summary || "")
+    },
+    experiences: (profile.experiences || []).map((experience) => ({
+      id: Number(experience.id || 0),
+      kind: text(experience.kind || ""),
+      title: text(experience.title || ""),
+      organization: text(experience.organization || ""),
+      role: text(experience.role || ""),
+      facts: array(experience.facts),
+      skills: array(experience.skills),
+      confidence: text(experience.confidence || "")
+    })),
+    skills: (profile.skills || []).map((skill) => ({
+      id: Number(skill.id || 0),
+      name: text(skill.name || ""),
+      category: text(skill.category || ""),
+      proficiency: text(skill.proficiency || ""),
+      evidence: array(skill.evidence)
+    })),
+    constraints: (profile.constraints || []).map((constraint) => ({
+      ruleType: text(constraint.ruleType || ""),
+      content: multiline(constraint.content || ""),
+      severity: text(constraint.severity || "")
+    }))
   };
 }
 
@@ -448,6 +489,8 @@ function clamp(value, min, max) {
 }
 
 module.exports = {
+  AGENT_VERSION,
+  PROMPT_VERSION,
   evaluateJobRiskGate,
   runScreeningAgent,
   runRuleBasedScreening,

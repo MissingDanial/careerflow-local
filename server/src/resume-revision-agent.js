@@ -1,5 +1,5 @@
 const AGENT_NAME = "ResumeRevisionAgent";
-const { DEFAULT_RESUME_TEMPLATE } = require("./resume-template-registry");
+const { DEFAULT_RESUME_TEMPLATE, resolveResumeTemplate } = require("./resume-template-registry");
 const { loadModelConfig } = require("./model-client");
 const { runResumeAgent } = require("./resume-agent");
 
@@ -23,7 +23,8 @@ function runResumeRevisionAgent(input = {}, options = {}) {
 function runRuleBasedResumeRevisionAgent(context) {
   const revision = reviseFields(context);
   const unsupportedClaims = detectUnsupportedClaims(revision.resumeFields, revision.sourceMapping);
-  const changed = JSON.stringify(revision.resumeFields) !== JSON.stringify(context.resumeVersion.resumeFields);
+  const changed = JSON.stringify(revision.resumeFields) !== JSON.stringify(context.resumeVersion.resumeFields)
+    || JSON.stringify(revision.sourceMapping) !== JSON.stringify(context.resumeVersion.sourceMapping);
   const diffSummary = buildDiffSummary(context, revision, changed);
 
   return {
@@ -203,7 +204,7 @@ function reviseFields(context) {
     ? context.resumeFitEvaluation.coverageItems
     : [];
   for (const item of fitItems.filter((coverage) => ["missing", "weak"].includes(coverage.status)).slice(0, 8)) {
-    const evidence = findConfirmedEvidenceForRequirement(item.requirement, context.profile);
+    const evidence = findActionableRevisionEvidence(item, context.profile, context.resumeVersion);
     if (!evidence) {
       actions.push({
         type: "fit_gap_left_for_profile_update",
@@ -212,8 +213,10 @@ function reviseFields(context) {
       });
       continue;
     }
-    const added = addEvidenceToResume(fields, sourceMapping, item, evidence);
-    actions.push(added);
+    const added = addEvidenceToResume(fields, sourceMapping, item, evidence, context.resumeVersion);
+    if (added) {
+      actions.push(added);
+    }
   }
 
   compactFields(fields);
@@ -383,7 +386,8 @@ function findConfirmedEvidenceForRequirement(requirement, profile) {
   if (!requirementText) {
     return null;
   }
-  const skills = Array.isArray(profile.skills) ? profile.skills : [];
+  const normalizedProfile = profile && typeof profile === "object" ? profile : {};
+  const skills = Array.isArray(normalizedProfile.skills) ? normalizedProfile.skills : [];
   for (const skill of skills) {
     const name = cleanText(skill.name);
     if (name && includesLoose(requirementText, name)) {
@@ -396,7 +400,7 @@ function findConfirmedEvidenceForRequirement(requirement, profile) {
       };
     }
   }
-  const experiences = Array.isArray(profile.experiences) ? profile.experiences : [];
+  const experiences = Array.isArray(normalizedProfile.experiences) ? normalizedProfile.experiences : [];
   for (const experience of experiences) {
     const facts = normalizeStringArray(experience.facts);
     const skillsForExperience = normalizeStringArray(experience.skills);
@@ -421,10 +425,98 @@ function findConfirmedEvidenceForRequirement(requirement, profile) {
   return null;
 }
 
-function addEvidenceToResume(fields, sourceMapping, requirement, evidence) {
+function findActionableRevisionEvidence(requirement, profile, resumeVersion = {}) {
+  const item = requirement && typeof requirement === "object"
+    ? requirement
+    : { requirement: cleanText(requirement), type: "" };
+  const evidence = findConfirmedEvidenceForRequirement(item.requirement, profile);
+  if (!evidence) {
+    return null;
+  }
+  if (cleanText(item.type).toLowerCase() !== "skill") {
+    return evidence;
+  }
+  const template = resolveResumeTemplate(
+    resumeVersion.renderMetadata?.template
+    || resumeVersion.render_metadata?.template
+    || DEFAULT_RESUME_TEMPLATE
+  );
+  if (template.showSkillsSection) {
+    return evidence;
+  }
+  const projectEvidence = findProjectEvidenceForSkill(item.requirement, evidence, profile, resumeVersion);
+  return projectEvidence ? { ...evidence, projectEvidence } : null;
+}
+
+function findProjectEvidenceForSkill(requirement, skillEvidence, profile, resumeVersion = {}) {
+  const fields = normalizeObject(resumeVersion.resumeFields || resumeVersion.resume_fields);
+  const projects = Array.isArray(fields.projects) ? fields.projects : [];
+  const experiences = Array.isArray(profile?.experiences) ? profile.experiences : [];
+  const experienceById = new Map(experiences.map((experience) => [Number(experience.id || 0), experience]));
+  const sourceMapping = normalizeSourceMapping(resumeVersion.sourceMapping || resumeVersion.source_mapping || []);
+  const terms = skillEvidenceTerms(requirement, skillEvidence.skillName || skillEvidence.sourceFact);
+  for (const [projectIndex, project] of projects.entries()) {
+    const experienceId = resolveProjectExperienceId(project, projectIndex, sourceMapping);
+    const experience = experienceById.get(experienceId);
+    if (!experience) {
+      continue;
+    }
+    const sourceFact = findExperienceSkillSourceFact(experience, terms);
+    if (sourceFact) {
+      return {
+        projectIndex,
+        sourceType: "experience",
+        sourceId: experienceId,
+        sourceFact
+      };
+    }
+  }
+  return null;
+}
+
+function resolveProjectExperienceId(project, projectIndex, sourceMapping) {
+  const directId = Number(project?.experienceId || project?.experience_id || 0);
+  if (directId) {
+    return directId;
+  }
+  const prefix = `projects[${projectIndex}].`;
+  return Number(sourceMapping.find((mapping) => (
+    mapping.sourceType === "experience"
+    && mapping.sourceId
+    && mapping.resumeField.startsWith(prefix)
+  ))?.sourceId || 0);
+}
+
+function findExperienceSkillSourceFact(experience, terms) {
+  const candidates = [
+    ...normalizeStringArray(experience.skills),
+    ...normalizeStringArray(experience.facts),
+    cleanMultiline(experience.evidenceText || "")
+  ].filter(Boolean);
+  return candidates.find((candidate) => terms.some((term) => includesLoose(candidate, term))) || "";
+}
+
+function skillEvidenceTerms(requirement, skillName) {
+  const terms = [cleanText(requirement), cleanText(skillName)].filter(Boolean);
+  const normalized = terms.join(" ").toLowerCase();
+  if (/(^|\s)prd($|\s)/i.test(normalized)) {
+    terms.push("product requirement", "product requirements", "产品需求", "需求文档");
+  }
+  return unique(terms);
+}
+
+function addEvidenceToResume(fields, sourceMapping, requirement, evidence, resumeVersion = {}) {
   const requirementText = cleanText(requirement.requirement);
   const skillName = cleanText(evidence.skillName || evidence.sourceFact);
   if (requirement.type === "skill" && skillName) {
+    const template = resolveResumeTemplate(
+      resumeVersion.renderMetadata?.template
+      || resumeVersion.render_metadata?.template
+      || DEFAULT_RESUME_TEMPLATE
+    );
+    if (!template.showSkillsSection) {
+      return addProjectSkillEvidence(fields, sourceMapping, requirementText, skillName, evidence);
+    }
     fields.skills = unique([...normalizeStringArray(fields.skills), skillName]).slice(0, 18);
     const index = fields.skills.findIndex((item) => item === skillName);
     sourceMapping.push({
@@ -482,6 +574,54 @@ function addEvidenceToResume(fields, sourceMapping, requirement, evidence) {
     field,
     sourceType: evidence.sourceType,
     sourceId: evidence.sourceId
+  };
+}
+
+function addProjectSkillEvidence(fields, sourceMapping, requirement, skillName, evidence) {
+  const projectIndex = Number(evidence.projectEvidence?.projectIndex);
+  const project = Array.isArray(fields.projects) ? fields.projects[projectIndex] : null;
+  if (!project || !Number.isInteger(projectIndex) || projectIndex < 0) {
+    return null;
+  }
+  const projectSkills = unique(normalizeStringArray(project.skills));
+  let skillIndex = projectSkills.findIndex((item) => item.toLowerCase() === skillName.toLowerCase());
+  let replacedSkill = "";
+  if (skillIndex < 0) {
+    if (projectSkills.length < 8) {
+      projectSkills.push(skillName);
+      skillIndex = projectSkills.length - 1;
+    } else {
+      skillIndex = projectSkills.length - 1;
+      replacedSkill = projectSkills[skillIndex];
+      projectSkills[skillIndex] = skillName;
+    }
+  }
+  project.skills = projectSkills.slice(0, 8);
+  const field = `projects[${projectIndex}].skills[${skillIndex}]`;
+  removeMapping(sourceMapping, field);
+  sourceMapping.push({
+    resumeField: field,
+    sourceType: evidence.sourceType,
+    sourceId: evidence.sourceId,
+    sourceFact: evidence.sourceFact
+  });
+  const projectEvidence = evidence.projectEvidence;
+  if (projectEvidence?.sourceFact) {
+    sourceMapping.push({
+      resumeField: field,
+      sourceType: projectEvidence.sourceType,
+      sourceId: projectEvidence.sourceId,
+      sourceFact: projectEvidence.sourceFact
+    });
+  }
+  return {
+    type: "surfaced_confirmed_project_skill",
+    requirement,
+    field,
+    sourceType: evidence.sourceType,
+    sourceId: evidence.sourceId,
+    projectSourceId: projectEvidence?.sourceId || null,
+    replacedSkill
   };
 }
 
@@ -702,5 +842,6 @@ function cleanMultiline(value) {
 
 module.exports = {
   AGENT_NAME,
+  findActionableRevisionEvidence,
   runResumeRevisionAgent
 };

@@ -17,26 +17,32 @@ function loadModelConfig(options = {}) {
     || process.env.BOSS_MODEL_LOCAL_CONFIG_PATH
     || DEFAULT_LOCAL_CONFIG_PATH;
   const localConfig = readLocalModelConfig(localConfigPath);
+  const secretConfigPath = options.secretConfigPath || resolveModelSecretConfigPath();
+  const secretConfig = readSecretModelConfig(secretConfigPath);
   const apiKey = options.apiKey
     || process.env.OPENAI_API_KEY
     || process.env.BOSS_OPENAI_API_KEY
+    || secretConfig.apiKey
     || fileConfig.apiKey
     || "";
   const baseUrl = options.baseUrl
     || process.env.OPENAI_BASE_URL
     || process.env.BOSS_OPENAI_BASE_URL
+    || secretConfig.baseUrl
     || localConfig.baseUrl
     || fileConfig.baseUrl
     || "https://api.openai.com";
   const model = options.model
     || process.env.OPENAI_MODEL
     || process.env.BOSS_OPENAI_MODEL
+    || secretConfig.model
     || localConfig.model
     || fileConfig.model
     || "";
   const wireApi = options.wireApi
     || process.env.OPENAI_WIRE_API
     || process.env.BOSS_OPENAI_WIRE_API
+    || secretConfig.wireApi
     || localConfig.wireApi
     || fileConfig.wireApi
     || "responses";
@@ -44,14 +50,22 @@ function loadModelConfig(options = {}) {
     options.reasoningEffort,
     process.env.OPENAI_REASONING_EFFORT,
     process.env.BOSS_OPENAI_REASONING_EFFORT,
+    secretConfig.reasoningEffort,
     localConfig.reasoningEffort,
     fileConfig.reasoningEffort,
     ""
+  );
+  const modelRoutes = firstObject(
+    options.modelRoutes,
+    secretConfig.modelRoutes,
+    localConfig.modelRoutes,
+    fileConfig.modelRoutes
   );
 
   const source = options.source
     || (options.apiKey || options.baseUrl || options.model ? "explicit" : "")
     || (process.env.OPENAI_API_KEY || process.env.BOSS_OPENAI_API_KEY ? "env" : "")
+    || (secretConfig.source ? "model_provider_local" : "")
     || (localConfig.source ? "local_overlay" : "")
     || (fileConfig.source ? "file" : "")
     || "default";
@@ -64,12 +78,17 @@ function loadModelConfig(options = {}) {
     wireApi,
     reasoningEffort,
     timeoutMs: positiveNumber(
-      options.timeoutMs || process.env.BOSS_MODEL_TIMEOUT_MS || localConfig.timeoutMs || fileConfig.timeoutMs
+      options.timeoutMs
+        || process.env.BOSS_MODEL_TIMEOUT_MS
+        || secretConfig.timeoutMs
+        || localConfig.timeoutMs
+        || fileConfig.timeoutMs
     )
       || DEFAULT_TIMEOUT_MS,
     maxRetries: clampInteger(
       options.maxRetries
         ?? process.env.BOSS_MODEL_MAX_RETRIES
+        ?? secretConfig.maxRetries
         ?? localConfig.maxRetries
         ?? fileConfig.maxRetries
         ?? DEFAULT_MAX_RETRIES,
@@ -79,15 +98,18 @@ function loadModelConfig(options = {}) {
     inputCostPerMillion: nonNegativeNumber(
       options.inputCostPerMillion
         ?? process.env.BOSS_MODEL_INPUT_COST_PER_MILLION
+        ?? secretConfig.inputCostPerMillion
         ?? localConfig.inputCostPerMillion
         ?? fileConfig.inputCostPerMillion
     ),
     outputCostPerMillion: nonNegativeNumber(
       options.outputCostPerMillion
         ?? process.env.BOSS_MODEL_OUTPUT_COST_PER_MILLION
+        ?? secretConfig.outputCostPerMillion
         ?? localConfig.outputCostPerMillion
         ?? fileConfig.outputCostPerMillion
     ),
+    modelRoutes,
     source
   };
 }
@@ -461,11 +483,63 @@ function readLocalModelConfig(configPath) {
       timeoutMs: parsed.timeoutMs,
       maxRetries: parsed.maxRetries,
       inputCostPerMillion: parsed.inputCostPerMillion,
-      outputCostPerMillion: parsed.outputCostPerMillion
+      outputCostPerMillion: parsed.outputCostPerMillion,
+      modelRoutes: normalizeObject(parsed.modelRoutes)
     };
   } catch {
     throw agentClientError("LLM_CONFIG_INVALID", "boss-model.local.json must contain a valid JSON object");
   }
+}
+
+function readSecretModelConfig(configPath) {
+  if (!configPath || !fs.existsSync(configPath)) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("root must be an object");
+    }
+    return {
+      source: configPath,
+      apiKey: cleanText(parsed.apiKey),
+      baseUrl: cleanText(parsed.baseUrl),
+      model: cleanText(parsed.model),
+      wireApi: cleanText(parsed.wireApi),
+      reasoningEffort: Object.prototype.hasOwnProperty.call(parsed, "reasoningEffort")
+        ? cleanText(parsed.reasoningEffort)
+        : undefined,
+      timeoutMs: parsed.timeoutMs,
+      maxRetries: parsed.maxRetries,
+      inputCostPerMillion: parsed.inputCostPerMillion,
+      outputCostPerMillion: parsed.outputCostPerMillion,
+      modelRoutes: normalizeObject(parsed.modelRoutes)
+    };
+  } catch {
+    throw agentClientError(
+      "LLM_CONFIG_INVALID",
+      "server/data/model-provider.local.json must contain a valid JSON object"
+    );
+  }
+}
+
+function resolveModelSecretConfigPath(options = {}) {
+  const dataDir = options.dataDir
+    || process.env.BOSS_DATA_DIR
+    || path.join(__dirname, "..", "data");
+  return path.resolve(
+    options.secretConfigPath
+      || process.env.BOSS_MODEL_SECRET_CONFIG_PATH
+      || path.join(dataDir, "model-provider.local.json")
+  );
+}
+
+function firstObject(...values) {
+  return values.find((value) => value && typeof value === "object" && !Array.isArray(value)) || {};
+}
+
+function normalizeObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
 function matchAssignment(text, key) {
@@ -550,6 +624,7 @@ function agentClientError(code, message) {
 module.exports = {
   TELEMETRY_SCHEMA_VERSION,
   loadModelConfig,
+  resolveModelSecretConfigPath,
   requestJsonCompletion,
   requestStructuredCompletion
 };

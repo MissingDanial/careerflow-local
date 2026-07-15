@@ -11,7 +11,8 @@ const { DEFAULT_RESUME_TEMPLATE } = require("./resume-template-registry");
 const {
   AGENT_VERSION,
   GRAPH_VERSION,
-  PROMPT_VERSION
+  PROMPT_VERSION,
+  applyResumeRenderPolicy
 } = require("./resume-workflow-graph");
 
 async function replayResumeWorkflowRun(input = {}) {
@@ -57,13 +58,19 @@ async function replayResumeWorkflowRun(input = {}) {
   let revisionCount = 0;
 
   if (!stopReason) {
-    resumeVersion = toReplayResumeVersion(runResumeAgent({
+    const preparedResume = runResumeAgent({
       application: frozen.application,
       job: frozen.job,
       profile: frozen.profile,
       screening,
       userRules: frozen.userRules
-    }, { mode }).result, frozen.application.id, screening.id, 1);
+    }, { mode }).result;
+    resumeVersion = toReplayResumeVersion(
+      applyResumeRenderPolicy(preparedResume, frozen.renderOptions),
+      frozen.application.id,
+      screening.id,
+      1
+    );
 
     while (resumeVersion) {
       resumeFitEvaluation = toReplayFitEvaluation(runResumeFitEvaluator({
@@ -97,7 +104,7 @@ async function replayResumeWorkflowRun(input = {}) {
         }, { mode });
         revisionCount += 1;
         resumeVersion = toReplayResumeVersion(
-          revised.result,
+          applyResumeRenderPolicy(revised.result, frozen.renderOptions),
           frozen.application.id,
           screening.id,
           revisionCount + 1

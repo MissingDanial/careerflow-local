@@ -12,6 +12,7 @@ const sqliteStoreSource = readText("server/src/sqlite-store.js");
 const ciWorkflowSource = readText(".github/workflows/ci.yml");
 const developmentPlan = readText("docs/04_DEVELOPMENT_PLAN.md");
 const readme = readText("README.md");
+const readmeZh = readText("README.zh-CN.md");
 
 main();
 
@@ -19,6 +20,7 @@ function main() {
   const requiredPaths = [
     ".gitignore",
     "README.md",
+    "README.zh-CN.md",
     "boss-model.example.json",
     "package-lock.json",
     "extension/manifest.json",
@@ -31,6 +33,8 @@ function main() {
     "server/src/services/application-transition-service.js",
     "server/src/services/real-action-authorization-service.js",
     "server/src/services/profile-conversation-service.js",
+    "server/src/services/agent-shadow-service.js",
+    "server/src/services/model-config-service.js",
     "server/src/profile-conversation-agent.js",
     "server/src/agent-evaluation-runner.js",
     "server/src/agent-output-schemas.js",
@@ -53,9 +57,19 @@ function main() {
     "scripts/m16-real-model-agents-smoke.js",
     "scripts/m16-agent-quality-evaluation-smoke.js",
     "scripts/m16-options-agent-quality-smoke.js",
+    "scripts/m16-1-agent-shadow-review-smoke.js",
+    "scripts/m16-1-options-shadow-review-smoke.js",
+    "scripts/m17-application-queues-smoke.js",
+    "scripts/m17-model-config-smoke.js",
+    "scripts/m17-native-host-smoke.js",
+    "scripts/m17-popup-runtime-smoke.js",
+    "scripts/m17-options-queues-runtime-smoke.js",
+    "scripts/build-native-host.js",
+    "scripts/install-native-host.ps1",
+    "native-host/index.js",
     "scripts/run-real-model-evaluation.js",
     ".github/workflows/ci.yml",
-    ...Array.from({ length: 15 }, (_, index) => {
+    ...Array.from({ length: 18 }, (_, index) => {
       const version = String(index + 1).padStart(3, "0");
       const migrationNames = [
         "core_job_capture",
@@ -72,7 +86,10 @@ function main() {
         "application_transition_invariants",
         "real_action_authorization",
         "profile_conversation_memory",
-        "agent_model_quality"
+        "agent_model_quality",
+        "agent_shadow_review",
+        "application_queues",
+        "manual_application_tracking"
       ];
       return `server/migrations/${version}_${migrationNames[index]}.sql`;
     }),
@@ -111,7 +128,16 @@ function main() {
     "m15:options-profile-conversation:smoke",
     "m16:real-model-agents:smoke",
     "m16:agent-quality-evaluation:smoke",
-    "m16:options-agent-quality:smoke"
+    "m16:options-agent-quality:smoke",
+    "m16:shadow-review:smoke",
+    "m16:options-shadow-review:smoke",
+    "m17:application-queues:smoke",
+    "m17:model-config:smoke",
+    "m17:native-host:smoke",
+    "m17:popup-runtime:smoke",
+    "m17:options-queues-runtime:smoke",
+    "native:build",
+    "native:install"
   ];
   const ignoredSentinels = [
     ".env",
@@ -133,7 +159,7 @@ function main() {
     requiredPathsPresent: requiredPaths.every((relativePath) => fs.existsSync(path.join(ROOT, relativePath))),
     requiredPackageScriptsPresent: requiredScripts.every((name) => typeof packageJson.scripts?.[name] === "string"),
     nodeRuntimePinned: packageJson.engines?.node === ">=24",
-    schemaVersionPinned: /const SCHEMA_VERSION = 15;/.test(sqliteStoreSource)
+    schemaVersionPinned: /const SCHEMA_VERSION = 18;/.test(sqliteStoreSource)
       && /runSqliteMigrations\(\{/.test(sqliteStoreSource)
       && !/applySchema\(\)/.test(sqliteStoreSource),
     privateArtifactsIgnored: ignoredSentinels.every(isIgnoredByGit),
@@ -155,7 +181,21 @@ function main() {
       && developmentPlan.includes("m13:agent-evaluation:smoke"),
     readmeUsesCurrentMilestone: readme.includes("M13.1")
       && readme.includes("M14.1")
-      && readme.includes("npm run test:ci")
+      && readme.includes("M16.1")
+      && readme.includes("M18")
+      && readme.includes("npm run test:ci"),
+    readmeLanguageNavigation: readme.includes("[简体中文](README.zh-CN.md)")
+      && readmeZh.includes("[English](README.md)"),
+    readmeQuickStartContract: readme.includes("## 10-Minute Quick Start")
+      && readme.includes("npm ci")
+      && readme.includes("chrome://extensions/")
+      && readme.includes("npm run native:install")
+      && readme.includes("npm run server")
+      && readme.includes("http://127.0.0.1:8787/health")
+      && readme.includes("server/data/model-provider.local.json"),
+    chineseReadmeKeepsDetailedOnboarding: readmeZh.includes("## 10 分钟开始使用")
+      && readmeZh.includes("npm run native:install")
+      && readmeZh.includes("M10.5 Backend Service Structure")
   };
 
   console.log(JSON.stringify({

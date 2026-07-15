@@ -117,6 +117,7 @@ async function runApiChecks(dataDir) {
       ...process.env,
       BOSS_DATA_DIR: dataDir,
       BOSS_SKIP_LEGACY_IMPORT: "1",
+      BOSS_MODEL_LOCAL_CONFIG_PATH: path.join(dataDir, "missing-model-overlay.json"),
       PORT: String(port)
     },
     stdio: ["ignore", "ignore", "ignore"]

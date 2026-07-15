@@ -11,6 +11,7 @@ const {
   RealActionAuthorizationService,
   isRealActionType
 } = require("./services/real-action-authorization-service");
+const { buildWorkflowInputHash } = require("./workflow-cache");
 
 let DatabaseSync;
 try {
@@ -19,7 +20,7 @@ try {
   throw new Error("SQLite storage requires Node.js with node:sqlite support. Use Node.js 24 or newer for this project.");
 }
 
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 18;
 const DEFAULT_DB_NAME = "boss_find.sqlite3";
 
 function createJobStore(options = {}) {
@@ -106,13 +107,31 @@ class SqliteJobStore {
     }
 
     const now = new Date().toISOString();
-    const incoming = payload.jobs.map((job) => normalizeJob(job, payload, now)).filter(isValidJob);
+    const normalizedJobs = payload.jobs.map((job) => normalizeJob(job, payload, now)).filter(isValidJob);
+    const incoming = deduplicateNormalizedJobs(normalizedJobs, now);
+    const queueId = this.resolveApplicationQueueId(payload.queueId);
+    const counters = {
+      jobsCreated: 0,
+      jobsUpdated: 0,
+      queueItemsAdded: 0,
+      queueDuplicatesSkipped: 0,
+      queueRemovedSkipped: 0
+    };
 
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const batchId = this.insertCaptureBatch(payload, incoming.length, now);
       for (const job of incoming) {
-        this.upsertJob(job, batchId, now);
+        const stored = this.upsertJob(job, batchId, now);
+        counters[stored.created ? "jobsCreated" : "jobsUpdated"] += 1;
+        const membership = this.ensureApplicationQueueItem(queueId, stored.applicationId, now);
+        if (membership.added) {
+          counters.queueItemsAdded += 1;
+        } else if (membership.removed) {
+          counters.queueRemovedSkipped += 1;
+        } else {
+          counters.queueDuplicatesSkipped += 1;
+        }
       }
       this.insertCaptureQuality(batchId, payload, incoming, now);
       this.insertBrowserEvents(batchId, payload, now);
@@ -125,7 +144,11 @@ class SqliteJobStore {
     return {
       ok: true,
       received: incoming.length,
+      receivedRaw: payload.jobs.length,
+      duplicatesSkipped: normalizedJobs.length - incoming.length,
       stored: this.countJobs(),
+      queueId,
+      ...counters,
       updatedAt: now,
       storage: "sqlite"
     };
@@ -194,6 +217,8 @@ class SqliteJobStore {
     const workflowRunCount = this.database.prepare("SELECT COUNT(*) AS count FROM workflow_runs").get().count;
     const workflowInputSnapshotCount = this.database.prepare("SELECT COUNT(*) AS count FROM workflow_input_snapshots").get().count;
     const agentEvaluationRunCount = this.database.prepare("SELECT COUNT(*) AS count FROM agent_evaluation_runs").get().count;
+    const agentShadowRunCount = this.database.prepare("SELECT COUNT(*) AS count FROM agent_shadow_runs").get().count;
+    const agentShadowReviewCount = this.database.prepare("SELECT COUNT(*) AS count FROM agent_shadow_reviews").get().count;
     const openWorkflowErrorCount = this.database.prepare(`
       SELECT COUNT(*) AS count
       FROM workflow_events
@@ -243,6 +268,8 @@ class SqliteJobStore {
       workflowRunCount: Number(workflowRunCount || 0),
       workflowInputSnapshotCount: Number(workflowInputSnapshotCount || 0),
       agentEvaluationRunCount: Number(agentEvaluationRunCount || 0),
+      agentShadowRunCount: Number(agentShadowRunCount || 0),
+      agentShadowReviewCount: Number(agentShadowReviewCount || 0),
       openWorkflowErrorCount: Number(openWorkflowErrorCount || 0),
       latestQuality: this.getLatestQuality(),
       lastBatch: this.getLastBatch()
@@ -1416,11 +1443,490 @@ class SqliteJobStore {
     };
   }
 
+  getApplicationQueues(options = {}) {
+    const includeArchived = Boolean(options.includeArchived);
+    const rows = this.database.prepare(`
+      SELECT
+        application_queues.*,
+        COUNT(CASE WHEN application_queue_items.state = 'ACTIVE' THEN 1 END) AS total_applications,
+        COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND applications.status NOT IN ('SUBMITTED', 'SKIPPED') THEN 1 END) AS pending_applications,
+        COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND applications.status IN ('NEEDS_USER_REVIEW', 'NEEDS_MANUAL_ACTION', 'FAILED') THEN 1 END) AS attention_applications,
+        COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND LENGTH(TRIM(COALESCE(jobs.description, ''))) < 80 THEN 1 END) AS missing_description_count
+        ,COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND LENGTH(TRIM(COALESCE(jobs.description, ''))) >= 80 THEN 1 END) AS complete_application_count
+        ,COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND application_queue_items.trusted_at IS NOT NULL THEN 1 END) AS trusted_application_count
+        ,COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND applications.manual_status = 'NOT_CONTACTED' THEN 1 END) AS not_contacted_count
+        ,COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND applications.manual_status = 'GREETED' THEN 1 END) AS greeted_count
+        ,COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND applications.manual_status = 'APPLIED' THEN 1 END) AS applied_count
+      FROM application_queues
+      LEFT JOIN application_queue_items
+        ON application_queue_items.queue_id = application_queues.id
+      LEFT JOIN applications
+        ON applications.id = application_queue_items.application_id
+      LEFT JOIN jobs
+        ON jobs.id = applications.job_id
+      WHERE (? = 1 OR application_queues.archived_at IS NULL)
+      GROUP BY application_queues.id
+      ORDER BY application_queues.is_default DESC,
+               datetime(application_queues.updated_at) DESC,
+               application_queues.id ASC
+    `).all(includeArchived ? 1 : 0);
+    return {
+      storage: "sqlite",
+      queues: rows.map(rowToApplicationQueue)
+    };
+  }
+
+  createApplicationQueue(input = {}) {
+    const name = cleanText(input.name).slice(0, 50);
+    if (!name) {
+      throw storeError(422, "APPLICATION_QUEUE_NAME_REQUIRED", "Queue name is required");
+    }
+    const existing = this.database.prepare(`
+      SELECT id FROM application_queues WHERE name = ? COLLATE NOCASE
+    `).get(name);
+    if (existing) {
+      throw storeError(409, "APPLICATION_QUEUE_NAME_EXISTS", `Queue already exists: ${name}`);
+    }
+    const now = new Date().toISOString();
+    const result = this.database.prepare(`
+      INSERT INTO application_queues (
+        name, description, search_url, is_default, created_at, updated_at
+      ) VALUES (?, ?, ?, 0, ?, ?)
+    `).run(
+      name,
+      cleanMultiline(input.description).slice(0, 500),
+      cleanText(input.searchUrl).slice(0, 2000),
+      now,
+      now
+    );
+    return {
+      storage: "sqlite",
+      queue: this.getApplicationQueue(Number(result.lastInsertRowid))
+    };
+  }
+
+  archiveApplicationQueue(queueId, input = {}) {
+    const id = normalizePositiveInteger(queueId);
+    const queue = id ? this.database.prepare(`
+      SELECT * FROM application_queues WHERE id = ? AND archived_at IS NULL
+    `).get(id) : null;
+    if (!queue) {
+      throw storeError(404, "APPLICATION_QUEUE_NOT_FOUND", `Application queue not found: ${queueId}`);
+    }
+    if (queue.is_default) {
+      throw storeError(409, "DEFAULT_APPLICATION_QUEUE_REQUIRED", "The default application queue cannot be deleted");
+    }
+    const now = new Date().toISOString();
+    const archivedName = `${queue.name} [archived ${id}]`;
+    this.database.prepare(`
+      UPDATE application_queues
+      SET name = ?, archived_at = ?, updated_at = ?
+      WHERE id = ? AND archived_at IS NULL
+    `).run(archivedName, now, now, id);
+    this.insertWorkflowEvent({
+      sourceType: "workflow",
+      sourceId: id,
+      eventType: "APPLICATION_QUEUE_ARCHIVED",
+      severity: "info",
+      status: "ARCHIVED",
+      progressCurrent: 1,
+      progressTotal: 1,
+      message: `Application queue ${queue.name} was archived by the local user.`,
+      metadata: {
+        queueId: id,
+        queueName: queue.name,
+        archivedName,
+        actor: cleanText(input.actor || "local-user"),
+        reason: cleanMultiline(input.reason || "workbench_queue_delete"),
+        noDataDeleted: true,
+        noRealBossAction: true
+      }
+    }, now);
+    return {
+      ok: true,
+      storage: "sqlite",
+      queueId: id,
+      archivedAt: now,
+      noDataDeleted: true
+    };
+  }
+
+  getApplicationQueue(queueId) {
+    const id = normalizePositiveInteger(queueId);
+    const row = id ? this.database.prepare(`
+      SELECT
+        application_queues.*,
+        COUNT(CASE WHEN application_queue_items.state = 'ACTIVE' THEN 1 END) AS total_applications,
+        COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND applications.status NOT IN ('SUBMITTED', 'SKIPPED') THEN 1 END) AS pending_applications,
+        COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND applications.status IN ('NEEDS_USER_REVIEW', 'NEEDS_MANUAL_ACTION', 'FAILED') THEN 1 END) AS attention_applications,
+        COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND LENGTH(TRIM(COALESCE(jobs.description, ''))) < 80 THEN 1 END) AS missing_description_count
+        ,COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND LENGTH(TRIM(COALESCE(jobs.description, ''))) >= 80 THEN 1 END) AS complete_application_count
+        ,COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND application_queue_items.trusted_at IS NOT NULL THEN 1 END) AS trusted_application_count
+        ,COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND applications.manual_status = 'NOT_CONTACTED' THEN 1 END) AS not_contacted_count
+        ,COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND applications.manual_status = 'GREETED' THEN 1 END) AS greeted_count
+        ,COUNT(CASE WHEN application_queue_items.state = 'ACTIVE'
+          AND applications.manual_status = 'APPLIED' THEN 1 END) AS applied_count
+      FROM application_queues
+      LEFT JOIN application_queue_items
+        ON application_queue_items.queue_id = application_queues.id
+      LEFT JOIN applications
+        ON applications.id = application_queue_items.application_id
+      LEFT JOIN jobs
+        ON jobs.id = applications.job_id
+      WHERE application_queues.id = ?
+      GROUP BY application_queues.id
+    `).get(id) : null;
+    if (!row) {
+      throw storeError(404, "APPLICATION_QUEUE_NOT_FOUND", `Application queue not found: ${queueId}`);
+    }
+    return rowToApplicationQueue(row);
+  }
+
+  resolveApplicationQueueId(queueId = null) {
+    const requestedId = normalizePositiveInteger(queueId);
+    const row = requestedId
+      ? this.database.prepare(`
+        SELECT id FROM application_queues WHERE id = ? AND archived_at IS NULL
+      `).get(requestedId)
+      : this.database.prepare(`
+        SELECT id FROM application_queues WHERE is_default = 1 AND archived_at IS NULL LIMIT 1
+      `).get();
+    if (!row) {
+      throw storeError(
+        404,
+        "APPLICATION_QUEUE_NOT_FOUND",
+        requestedId ? `Application queue not found: ${requestedId}` : "Default application queue is missing"
+      );
+    }
+    return Number(row.id);
+  }
+
+  ensureApplicationQueueItem(queueId, applicationId, now = new Date().toISOString()) {
+    const resolvedQueueId = this.resolveApplicationQueueId(queueId);
+    const resolvedApplicationId = normalizePositiveInteger(applicationId);
+    if (!resolvedApplicationId) {
+      throw storeError(422, "APPLICATION_ID_REQUIRED", "Valid application id is required");
+    }
+    const existing = this.database.prepare(`
+      SELECT state FROM application_queue_items
+      WHERE queue_id = ? AND application_id = ?
+    `).get(resolvedQueueId, resolvedApplicationId);
+    if (existing) {
+      return {
+        added: false,
+        removed: existing.state === "REMOVED",
+        state: existing.state
+      };
+    }
+    this.database.prepare(`
+      INSERT INTO application_queue_items (
+        queue_id, application_id, state, added_at, removed_at,
+        removed_by, removed_reason, updated_at
+      ) VALUES (?, ?, 'ACTIVE', ?, NULL, '', '', ?)
+    `).run(resolvedQueueId, resolvedApplicationId, now, now);
+    this.database.prepare(`
+      UPDATE application_queues SET updated_at = ? WHERE id = ?
+    `).run(now, resolvedQueueId);
+    return { added: true, removed: false, state: "ACTIVE" };
+  }
+
+  removeApplicationsFromQueue(queueId, input = {}) {
+    const resolvedQueueId = this.resolveApplicationQueueId(queueId);
+    const applicationIds = uniquePositiveIntegers(input.applicationIds).slice(0, 500);
+    if (!applicationIds.length) {
+      throw storeError(422, "APPLICATION_QUEUE_ITEMS_REQUIRED", "Select at least one application to remove");
+    }
+    const now = new Date().toISOString();
+    const placeholders = applicationIds.map(() => "?").join(", ");
+    const result = this.database.prepare(`
+      UPDATE application_queue_items
+      SET state = 'REMOVED', removed_at = ?, removed_by = ?, removed_reason = ?, updated_at = ?
+      WHERE queue_id = ? AND state = 'ACTIVE'
+        AND application_id IN (${placeholders})
+    `).run(
+      now,
+      cleanText(input.removedBy || "local-user").slice(0, 100),
+      cleanMultiline(input.reason || "workbench_bulk_remove").slice(0, 500),
+      now,
+      resolvedQueueId,
+      ...applicationIds
+    );
+    this.database.prepare(`
+      UPDATE application_queues SET updated_at = ? WHERE id = ?
+    `).run(now, resolvedQueueId);
+    return {
+      ok: true,
+      storage: "sqlite",
+      queueId: resolvedQueueId,
+      requested: applicationIds.length,
+      removed: Number(result.changes || 0),
+      skipped: applicationIds.length - Number(result.changes || 0)
+    };
+  }
+
+  removeMissingDescriptionsFromQueue(queueId, input = {}) {
+    const resolvedQueueId = this.resolveApplicationQueueId(queueId);
+    const minDescriptionLength = Math.max(1, Math.min(2000, Number(input.minDescriptionLength) || 80));
+    const now = new Date().toISOString();
+    const result = this.database.prepare(`
+      UPDATE application_queue_items
+      SET state = 'REMOVED', removed_at = ?, removed_by = ?, removed_reason = ?, updated_at = ?
+      WHERE queue_id = ? AND state = 'ACTIVE'
+        AND application_id IN (
+          SELECT applications.id
+          FROM applications
+          JOIN jobs ON jobs.id = applications.job_id
+          WHERE LENGTH(TRIM(COALESCE(jobs.description, ''))) < ?
+            AND LENGTH(TRIM(COALESCE(jobs.detail_url, ''))) > 0
+        )
+    `).run(
+      now,
+      cleanText(input.removedBy || "local-user").slice(0, 100),
+      cleanMultiline(input.reason || "missing_jd_bulk_remove").slice(0, 500),
+      now,
+      resolvedQueueId,
+      minDescriptionLength
+    );
+    this.database.prepare(`
+      UPDATE application_queues SET updated_at = ? WHERE id = ?
+    `).run(now, resolvedQueueId);
+    return {
+      ok: true,
+      storage: "sqlite",
+      queueId: resolvedQueueId,
+      minDescriptionLength,
+      removed: Number(result.changes || 0)
+    };
+  }
+
+  trustApplicationInQueue(queueId, applicationId, input = {}) {
+    const resolvedQueueId = this.resolveApplicationQueueId(queueId);
+    const resolvedApplicationId = normalizePositiveInteger(applicationId);
+    if (!resolvedApplicationId) {
+      throw storeError(422, "APPLICATION_ID_REQUIRED", "Valid application id is required");
+    }
+    const now = new Date().toISOString();
+    const actor = cleanText(input.actor || "local-user").slice(0, 100);
+    const reason = cleanMultiline(input.reason || "user_trusted_filtered_job").slice(0, 500);
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const membership = this.database.prepare(`
+        SELECT application_queue_items.*, applications.status AS application_status
+        FROM application_queue_items
+        JOIN applications ON applications.id = application_queue_items.application_id
+        WHERE application_queue_items.queue_id = ?
+          AND application_queue_items.application_id = ?
+          AND application_queue_items.state = 'ACTIVE'
+      `).get(resolvedQueueId, resolvedApplicationId);
+      if (!membership) {
+        throw storeError(404, "APPLICATION_QUEUE_ITEM_NOT_FOUND", "Application is not active in this queue");
+      }
+      this.database.prepare(`
+        UPDATE application_queue_items
+        SET trusted_at = ?, trusted_by = ?, trust_reason = ?, updated_at = ?
+        WHERE queue_id = ? AND application_id = ? AND state = 'ACTIVE'
+      `).run(now, actor, reason, now, resolvedQueueId, resolvedApplicationId);
+      let transition = null;
+      if (membership.application_status === "SKIPPED") {
+        transition = this.transitionApplicationWithinTransaction(resolvedApplicationId, {
+          toStatus: "DETAIL_CAPTURED",
+          eventType: "APPLICATION_QUEUE_ITEM_TRUSTED",
+          reason: "queue_trust_override",
+          idempotencyKey: `queue-trust-${resolvedQueueId}-${resolvedApplicationId}-${Date.now()}`,
+          evidence: {
+            type: "operator_override",
+            actor,
+            rationale: reason
+          },
+          metadata: {
+            queueId: resolvedQueueId,
+            trustedAt: now,
+            noRealBossAction: true
+          }
+        });
+      } else {
+        this.insertWorkflowEvent({
+          applicationId: resolvedApplicationId,
+          sourceType: "workflow",
+          sourceId: resolvedQueueId,
+          eventType: "APPLICATION_QUEUE_ITEM_TRUSTED",
+          severity: "info",
+          status: membership.application_status,
+          progressCurrent: 1,
+          progressTotal: 1,
+          message: "Application was trusted in the active queue.",
+          metadata: {
+            queueId: resolvedQueueId,
+            actor,
+            reason,
+            noRealBossAction: true
+          }
+        }, now);
+      }
+      this.database.prepare(`
+        UPDATE application_queues SET updated_at = ? WHERE id = ?
+      `).run(now, resolvedQueueId);
+      this.database.exec("COMMIT");
+      return {
+        ok: true,
+        storage: "sqlite",
+        queueId: resolvedQueueId,
+        applicationId: resolvedApplicationId,
+        trustedAt: now,
+        restoredToDetailCaptured: transition?.toStatus === "DETAIL_CAPTURED"
+      };
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  isApplicationTrustedInQueue(queueId, applicationId) {
+    const resolvedQueueId = normalizePositiveInteger(queueId);
+    const resolvedApplicationId = normalizePositiveInteger(applicationId);
+    if (!resolvedQueueId || !resolvedApplicationId) {
+      return false;
+    }
+    return Boolean(this.database.prepare(`
+      SELECT 1
+      FROM application_queue_items
+      WHERE queue_id = ? AND application_id = ?
+        AND state = 'ACTIVE' AND trusted_at IS NOT NULL
+      LIMIT 1
+    `).get(resolvedQueueId, resolvedApplicationId));
+  }
+
+  isApplicationActiveInQueue(queueId, applicationId) {
+    const resolvedQueueId = normalizePositiveInteger(queueId);
+    const resolvedApplicationId = normalizePositiveInteger(applicationId);
+    if (!resolvedQueueId || !resolvedApplicationId) {
+      return false;
+    }
+    return Boolean(this.database.prepare(`
+      SELECT 1
+      FROM application_queue_items
+      WHERE queue_id = ? AND application_id = ? AND state = 'ACTIVE'
+      LIMIT 1
+    `).get(resolvedQueueId, resolvedApplicationId));
+  }
+
+  updateManualApplicationStatus(applicationId, input = {}) {
+    const id = normalizePositiveInteger(applicationId);
+    const manualStatus = normalizeManualApplicationStatus(input.manualStatus || input.status);
+    if (!id) {
+      throw storeError(422, "APPLICATION_ID_REQUIRED", "Valid application id is required");
+    }
+    if (!manualStatus) {
+      throw storeError(422, "MANUAL_APPLICATION_STATUS_INVALID", "Manual status must be NOT_CONTACTED, GREETED, or APPLIED");
+    }
+    const application = this.database.prepare(`
+      SELECT id, manual_status, manual_status_updated_at
+      FROM applications WHERE id = ?
+    `).get(id);
+    if (!application) {
+      throw storeError(404, "APPLICATION_NOT_FOUND", `Application not found: ${id}`);
+    }
+    const previousStatus = application.manual_status || "NOT_CONTACTED";
+    if (previousStatus === manualStatus) {
+      return {
+        ok: true,
+        storage: "sqlite",
+        applicationId: id,
+        previousStatus,
+        manualStatus,
+        changed: false,
+        updatedAt: application.manual_status_updated_at || ""
+      };
+    }
+    const now = new Date().toISOString();
+    const actor = cleanText(input.actor || "local-user").slice(0, 100);
+    const note = cleanMultiline(input.note || input.reason || "manual_status_update").slice(0, 500);
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare(`
+        UPDATE applications
+        SET manual_status = ?, manual_status_updated_at = ?, manual_status_note = ?, updated_at = ?
+        WHERE id = ?
+      `).run(manualStatus, now, note, now, id);
+      this.insertWorkflowEvent({
+        applicationId: id,
+        sourceType: "workflow",
+        sourceId: null,
+        eventType: "MANUAL_APPLICATION_STATUS_UPDATED",
+        severity: "info",
+        status: manualStatus,
+        progressCurrent: 1,
+        progressTotal: 1,
+        message: `Manual application status changed from ${previousStatus} to ${manualStatus}.`,
+        metadata: {
+          previousStatus,
+          manualStatus,
+          actor,
+          note,
+          noRealBossAction: true
+        }
+      }, now);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return {
+      ok: true,
+      storage: "sqlite",
+      applicationId: id,
+      previousStatus,
+      manualStatus,
+      changed: true,
+      updatedAt: now,
+      noRealBossAction: true
+    };
+  }
+
   getApplications(options = {}) {
     const limit = Math.max(1, Math.min(500, Number(options.limit) || 100));
+    const queueId = normalizePositiveInteger(options.queueId);
+    if (queueId) {
+      this.resolveApplicationQueueId(queueId);
+    }
+    const queueJoin = queueId ? `
+      JOIN application_queue_items
+        ON application_queue_items.application_id = applications.id
+       AND application_queue_items.queue_id = ?
+       AND application_queue_items.state = 'ACTIVE'
+    ` : "";
+    const completeDescriptionOnly = Boolean(options.completeDescriptionOnly);
+    const manualStatus = normalizeManualApplicationStatus(options.manualStatus || "");
+    const whereParts = [];
+    const scopeParams = queueId ? [queueId] : [];
+    if (completeDescriptionOnly) {
+      whereParts.push("LENGTH(TRIM(COALESCE(jobs.description, ''))) >= 80");
+    }
+    if (manualStatus) {
+      whereParts.push("applications.manual_status = ?");
+      scopeParams.push(manualStatus);
+    }
+    const whereSql = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
     const rows = this.database.prepare(`
       SELECT
         applications.*,
+        ${queueId ? "application_queue_items.queue_id" : "NULL AS queue_id"},
+        ${queueId ? "application_queue_items.trusted_at" : "NULL AS trusted_at"},
         jobs.source_key,
         jobs.job_id AS boss_job_id,
         jobs.title,
@@ -1428,16 +1934,40 @@ class SqliteJobStore {
         jobs.salary,
         jobs.location,
         jobs.detail_url,
-        LENGTH(TRIM(COALESCE(jobs.description, ''))) AS description_length
+        jobs.description,
+        LENGTH(TRIM(COALESCE(jobs.description, ''))) AS description_length,
+        (SELECT id FROM screenings WHERE application_id = applications.id ORDER BY id DESC LIMIT 1) AS latest_screening_id,
+        (SELECT match_score FROM screenings WHERE application_id = applications.id ORDER BY id DESC LIMIT 1) AS latest_match_score,
+        (SELECT risk_score FROM screenings WHERE application_id = applications.id ORDER BY id DESC LIMIT 1) AS latest_risk_score,
+        (SELECT recommendation FROM screenings WHERE application_id = applications.id ORDER BY id DESC LIMIT 1) AS latest_screening_recommendation,
+        (SELECT id FROM resume_versions WHERE application_id = applications.id ORDER BY id DESC LIMIT 1) AS latest_resume_version_id,
+        (SELECT status FROM resume_versions WHERE application_id = applications.id ORDER BY id DESC LIMIT 1) AS latest_resume_status,
+        (SELECT file_path FROM resume_versions WHERE application_id = applications.id ORDER BY id DESC LIMIT 1) AS latest_resume_file_path,
+        (SELECT error_code FROM agent_runs
+          WHERE application_id = applications.id
+            AND agent_name IN ('ResumeAgent', 'ResumeWorkflowGraph')
+          ORDER BY id DESC LIMIT 1) AS latest_resume_error_code
       FROM applications
       JOIN jobs ON jobs.id = applications.job_id
+      ${queueJoin}
+      ${whereSql}
       ORDER BY datetime(applications.updated_at) DESC, applications.id DESC
       LIMIT ?
-    `).all(limit);
+    `).all(...scopeParams, limit);
+    const total = this.database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM applications
+      JOIN jobs ON jobs.id = applications.job_id
+      ${queueJoin}
+      ${whereSql}
+    `).get(...scopeParams).count;
 
     return {
       storage: "sqlite",
-      totalApplications: this.countApplications(),
+      queueId: queueId || null,
+      completeDescriptionOnly,
+      manualStatus: manualStatus || "",
+      totalApplications: Number(total || 0),
       applications: rows.map(rowToApplication)
     };
   }
@@ -1662,7 +2192,7 @@ class SqliteJobStore {
       renderOptions = normalizeObject(input.renderOptions);
     }
 
-    const inputHash = stableJsonHash({
+    const inputHash = buildWorkflowInputHash({
       application,
       profile,
       job,
@@ -1873,6 +2403,30 @@ class SqliteJobStore {
     };
   }
 
+  findReusableWorkflowRun(options = {}) {
+    const applicationId = normalizePositiveInteger(options.applicationId);
+    const inputHash = cleanText(options.inputHash || "");
+    const workflowName = cleanText(options.workflowName || "ResumeWorkflowGraph");
+    const excludeWorkflowRunId = normalizeOptionalPositiveInteger(options.excludeWorkflowRunId);
+    if (!applicationId || !inputHash || !workflowName) {
+      return null;
+    }
+    const row = this.database.prepare(`
+      SELECT workflow_runs.id
+      FROM workflow_runs
+      JOIN workflow_input_snapshots
+        ON workflow_input_snapshots.workflow_run_id = workflow_runs.id
+      WHERE workflow_runs.application_id = ?
+        AND workflow_runs.workflow_name = ?
+        AND workflow_runs.status = 'SUCCEEDED'
+        AND workflow_input_snapshots.input_hash = ?
+        AND workflow_runs.id <> ?
+      ORDER BY workflow_runs.id DESC
+      LIMIT 1
+    `).get(applicationId, workflowName, inputHash, excludeWorkflowRunId || 0);
+    return row ? this.getWorkflowRun(Number(row.id)) : null;
+  }
+
   getWorkflowRunInput(workflowRunId) {
     const snapshot = this.getWorkflowRun(workflowRunId);
     return {
@@ -1906,7 +2460,17 @@ class SqliteJobStore {
       throw validationError("At least one valid application status is required");
     }
     const includeAlreadyScreened = Boolean(options.includeAlreadyScreened);
-    const params = [...statuses, minDescriptionLength, limit];
+    const queueId = normalizePositiveInteger(options.queueId);
+    if (queueId) {
+      this.resolveApplicationQueueId(queueId);
+    }
+    const queueJoin = queueId ? `
+      JOIN application_queue_items
+        ON application_queue_items.application_id = applications.id
+       AND application_queue_items.queue_id = ?
+       AND application_queue_items.state = 'ACTIVE'
+    ` : "";
+    const params = [...(queueId ? [queueId] : []), ...statuses, minDescriptionLength, limit];
     const rows = this.database.prepare(`
       SELECT
         applications.*,
@@ -1917,6 +2481,8 @@ class SqliteJobStore {
         jobs.salary,
         jobs.location,
         jobs.detail_url,
+        ${queueId ? "application_queue_items.queue_id" : "NULL AS queue_id"},
+        ${queueId ? "application_queue_items.trusted_at" : "NULL AS trusted_at"},
         LENGTH(TRIM(COALESCE(jobs.description, ''))) AS description_length,
         (
           SELECT COUNT(*)
@@ -1925,6 +2491,7 @@ class SqliteJobStore {
         ) AS screening_count
       FROM applications
       JOIN jobs ON jobs.id = applications.job_id
+      ${queueJoin}
       WHERE applications.status IN (${statuses.map(() => "?").join(", ")})
         AND LENGTH(TRIM(COALESCE(jobs.description, ''))) >= ?
         ${includeAlreadyScreened ? "" : "AND NOT EXISTS (SELECT 1 FROM screenings WHERE screenings.application_id = applications.id)"}
@@ -1934,6 +2501,7 @@ class SqliteJobStore {
     return {
       storage: "sqlite",
       statuses,
+      queueId: queueId || null,
       minDescriptionLength,
       includeAlreadyScreened,
       totalCandidates: rows.length,
@@ -2840,6 +3408,34 @@ class SqliteJobStore {
       LIMIT 1
     `).get(id);
     return row ? rowToScreening(row) : null;
+  }
+
+  findReusableScreening(applicationId, cacheKey) {
+    const id = normalizePositiveInteger(applicationId);
+    const key = cleanText(cacheKey || "");
+    if (!id || !key) {
+      return null;
+    }
+    const rows = this.database.prepare(`
+      SELECT
+        screenings.*,
+        jobs.source_key,
+        jobs.title,
+        jobs.company_name
+      FROM screenings
+      JOIN applications ON applications.id = screenings.application_id
+      JOIN jobs ON jobs.id = applications.job_id
+      WHERE screenings.application_id = ?
+      ORDER BY screenings.id DESC
+      LIMIT 50
+    `).all(id);
+    for (const row of rows) {
+      const screening = rowToScreening(row);
+      if (cleanText(screening.metadata?.screeningCacheKey || "") === key) {
+        return screening;
+      }
+    }
+    return null;
   }
 
   getScreenings(options = {}) {
@@ -5178,19 +5774,34 @@ class SqliteJobStore {
   getMissingDescriptions(options = {}) {
     const limit = Math.max(1, Math.min(200, Number(options.limit) || 50));
     const minDescriptionLength = Math.max(1, Math.min(2000, Number(options.minDescriptionLength) || 80));
+    const queueId = normalizePositiveInteger(options.queueId);
+    if (queueId) {
+      this.resolveApplicationQueueId(queueId);
+    }
+    const scopedJoins = queueId ? `
+      JOIN applications ON applications.job_id = jobs.id
+      JOIN application_queue_items
+        ON application_queue_items.application_id = applications.id
+       AND application_queue_items.queue_id = ?
+       AND application_queue_items.state = 'ACTIVE'
+    ` : "";
     const total = this.database.prepare(`
       SELECT COUNT(*) AS count
       FROM jobs
+      ${scopedJoins}
       WHERE LENGTH(TRIM(COALESCE(description, ''))) < ?
         AND LENGTH(TRIM(COALESCE(detail_url, ''))) > 0
-    `).get(minDescriptionLength).count;
+    `).get(...(queueId ? [queueId, minDescriptionLength] : [minDescriptionLength])).count;
     const rows = this.database.prepare(`
       SELECT
         jobs.*,
+        ${queueId ? "applications.id" : "NULL"} AS application_id,
+        ${queueId ? "application_queue_items.queue_id" : "NULL"} AS queue_id,
         companies.name AS company_table_name,
         LENGTH(TRIM(COALESCE(jobs.description, ''))) AS description_length
       FROM jobs
       LEFT JOIN companies ON companies.id = jobs.company_id
+      ${scopedJoins}
       WHERE LENGTH(TRIM(COALESCE(jobs.description, ''))) < ?
         AND LENGTH(TRIM(COALESCE(jobs.detail_url, ''))) > 0
       ORDER BY
@@ -5198,10 +5809,13 @@ class SqliteJobStore {
         datetime(jobs.last_seen_at) DESC,
         jobs.id DESC
       LIMIT ?
-    `).all(minDescriptionLength, limit);
+    `).all(...(queueId
+      ? [queueId, minDescriptionLength, limit]
+      : [minDescriptionLength, limit]));
 
     return {
       storage: "sqlite",
+      queueId: queueId || null,
       minDescriptionLength,
       totalMissingDescriptions: Number(total || 0),
       jobs: rows.map(rowToMissingDescriptionJob)
@@ -5286,7 +5900,7 @@ class SqliteJobStore {
   }
 
   upsertJob(incoming, batchId, now) {
-    const existingRow = this.database.prepare("SELECT * FROM jobs WHERE source_key = ?").get(incoming.sourceKey);
+    const existingRow = this.findExistingJob(incoming);
     const existing = existingRow ? rowToJob(existingRow) : null;
     const merged = existing ? mergeJob(existing, incoming, now) : incoming;
     const companyId = this.upsertCompany(merged.company, now);
@@ -5337,8 +5951,34 @@ class SqliteJobStore {
     this.replaceListValues("job_tags", "tag", jobPk, merged.tags);
     this.replaceListValues("job_welfare", "welfare", jobPk, merged.welfare);
     this.insertJobSnapshot(jobPk, batchId, incoming, now);
-    this.ensureApplication(jobPk, incoming, batchId, now);
-    return jobPk;
+    const applicationId = this.ensureApplication(jobPk, incoming, batchId, now);
+    return {
+      jobId: jobPk,
+      applicationId,
+      created: !existingRow
+    };
+  }
+
+  findExistingJob(incoming) {
+    const bySourceKey = this.database.prepare("SELECT * FROM jobs WHERE source_key = ?")
+      .get(incoming.sourceKey);
+    if (bySourceKey) {
+      return bySourceKey;
+    }
+    if (incoming.jobId) {
+      const byBossJobId = this.database.prepare(`
+        SELECT * FROM jobs WHERE job_id = ? ORDER BY id ASC LIMIT 1
+      `).get(incoming.jobId);
+      if (byBossJobId) {
+        return byBossJobId;
+      }
+    }
+    if (incoming.detailUrl) {
+      return this.database.prepare(`
+        SELECT * FROM jobs WHERE detail_url = ? ORDER BY id ASC LIMIT 1
+      `).get(incoming.detailUrl) || null;
+    }
+    return null;
   }
 
   ensureApplication(jobPk, job, batchId, now) {
@@ -5353,12 +5993,12 @@ class SqliteJobStore {
         batchId,
         descriptionLength: String(job.description || "").length
       }, now);
-      return;
+      return Number(result.lastInsertRowid);
     }
 
     const nextStatus = advanceApplicationStatus(existing.status, targetStatus);
     if (nextStatus === existing.status) {
-      return;
+      return Number(existing.id);
     }
 
     this.transitionApplicationWithinTransaction(existing.id, {
@@ -5377,6 +6017,7 @@ class SqliteJobStore {
       idempotencyKey: `job-sync:${batchId}:${existing.id}:${nextStatus}`,
       now
     });
+    return Number(existing.id);
   }
 
   backfillApplicationsIfNeeded() {
@@ -5401,9 +6042,11 @@ class SqliteJobStore {
           INSERT INTO applications (job_id, status, status_reason, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?)
         `).run(row.id, status, "schema_backfill", now, now);
-        this.insertApplicationEvent(Number(result.lastInsertRowid), null, status, "APPLICATION_BACKFILLED", "schema_backfill", {
+        const applicationId = Number(result.lastInsertRowid);
+        this.insertApplicationEvent(applicationId, null, status, "APPLICATION_BACKFILLED", "schema_backfill", {
           descriptionLength: String(row.description || "").length
         }, now);
+        this.ensureApplicationQueueItem(this.resolveApplicationQueueId(), applicationId, now);
       }
       this.database.exec("COMMIT");
     } catch (error) {
@@ -5795,7 +6438,7 @@ function normalizeJob(job, payload, now) {
   const company = cleanText(job.company);
   const detailUrl = cleanText(job.detailUrl || job.url);
   const jobId = cleanText(job.jobId || extractJobId(detailUrl));
-  const sourceKey = cleanText(job.cacheKey || job.sourceKey || jobId || detailUrl || stableKey([title, company, job.salary, job.location]));
+  const sourceKey = cleanText(jobId || job.cacheKey || job.sourceKey || detailUrl || stableKey([title, company, job.salary, job.location]));
 
   if (!sourceKey || (!title && !detailUrl)) {
     return null;
@@ -5823,6 +6466,25 @@ function normalizeJob(job, payload, now) {
     capturedAt: cleanText(job.capturedAt) || payload.exportedAt || now,
     syncSource: cleanText(payload.source) || "boss-find-extension"
   };
+}
+
+function deduplicateNormalizedJobs(jobs, now) {
+  const uniqueJobs = new Map();
+  for (const job of jobs || []) {
+    const identity = cleanText(
+      job.jobId
+        ? `job:${job.jobId.toLowerCase()}`
+        : job.sourceKey
+          ? `source:${job.sourceKey.toLowerCase()}`
+          : `url:${String(job.detailUrl || "").toLowerCase()}`
+    );
+    if (!uniqueJobs.has(identity)) {
+      uniqueJobs.set(identity, job);
+      continue;
+    }
+    uniqueJobs.set(identity, mergeJob(uniqueJobs.get(identity), job, now));
+  }
+  return Array.from(uniqueJobs.values());
 }
 
 function isValidJob(job) {
@@ -6143,6 +6805,9 @@ function rowToApplication(row) {
   return {
     id: Number(row.id || 0),
     jobId: Number(row.job_id || 0),
+    queueId: row.queue_id === null || row.queue_id === undefined ? null : Number(row.queue_id || 0),
+    trusted: Boolean(row.trusted_at),
+    trustedAt: row.trusted_at || "",
     sourceKey: row.source_key || "",
     bossJobId: row.boss_job_id || "",
     status: row.status || "",
@@ -6152,7 +6817,45 @@ function rowToApplication(row) {
     salary: row.salary || "",
     location: row.location || "",
     detailUrl: row.detail_url || "",
+    description: row.description || "",
     descriptionLength: Number(row.description_length || 0),
+    manualStatus: normalizeManualApplicationStatus(row.manual_status) || "NOT_CONTACTED",
+    manualStatusUpdatedAt: row.manual_status_updated_at || "",
+    manualStatusNote: row.manual_status_note || "",
+    latestScreeningId: Number(row.latest_screening_id || 0),
+    latestMatchScore: row.latest_match_score === null || row.latest_match_score === undefined
+      ? null
+      : Number(row.latest_match_score),
+    latestRiskScore: row.latest_risk_score === null || row.latest_risk_score === undefined
+      ? null
+      : Number(row.latest_risk_score),
+    latestScreeningRecommendation: row.latest_screening_recommendation || "",
+    latestResumeVersionId: Number(row.latest_resume_version_id || 0),
+    latestResumeStatus: row.latest_resume_status || "",
+    latestResumeFilePath: row.latest_resume_file_path || "",
+    latestResumeErrorCode: row.latest_resume_error_code || "",
+    createdAt: row.created_at || "",
+    updatedAt: row.updated_at || ""
+  };
+}
+
+function rowToApplicationQueue(row) {
+  return {
+    id: Number(row.id || 0),
+    name: row.name || "",
+    description: row.description || "",
+    searchUrl: row.search_url || "",
+    isDefault: Boolean(row.is_default),
+    archivedAt: row.archived_at || "",
+    totalApplications: Number(row.total_applications || 0),
+    pendingApplications: Number(row.pending_applications || 0),
+    attentionApplications: Number(row.attention_applications || 0),
+    missingDescriptionCount: Number(row.missing_description_count || 0),
+    completeApplicationCount: Number(row.complete_application_count || 0),
+    trustedApplicationCount: Number(row.trusted_application_count || 0),
+    notContactedCount: Number(row.not_contacted_count || 0),
+    greetedCount: Number(row.greeted_count || 0),
+    appliedCount: Number(row.applied_count || 0),
     createdAt: row.created_at || "",
     updatedAt: row.updated_at || ""
   };
@@ -6368,9 +7071,9 @@ function rowToResumeFitEvaluation(row) {
     weakCount: Number(row.weak_count || 0),
     missingCount: Number(row.missing_count || 0),
     jdRequirements: parseJsonValue(row.jd_requirements_json, {}),
-    coverageItems: parseJsonArray(row.coverage_items_json),
+    coverageItems: parseJsonValue(row.coverage_items_json, []),
     blockers: parseJsonArray(row.blockers_json),
-    recommendations: parseJsonArray(row.recommendations_json),
+    recommendations: parseJsonValue(row.recommendations_json, []),
     policy: parseJsonValue(row.policy_json, {}),
     metadata: parseJsonValue(row.metadata_json, {}),
     createdAt: row.created_at || ""
@@ -6582,6 +7285,10 @@ function sortBrowserTaskRowsByUpdatedAt(rows = []) {
 function rowToMissingDescriptionJob(row) {
   const job = rowToJob(row);
   return {
+    applicationId: row.application_id === null || row.application_id === undefined
+      ? null
+      : Number(row.application_id || 0),
+    queueId: row.queue_id === null || row.queue_id === undefined ? null : Number(row.queue_id || 0),
     sourceKey: job.sourceKey,
     jobId: job.jobId,
     title: job.title,
@@ -8077,6 +8784,16 @@ function stableKey(parts) {
   return parts.map((part) => cleanText(part)).filter(Boolean).join("|").toLowerCase();
 }
 
+function normalizeManualApplicationStatus(value) {
+  const status = cleanText(value).toUpperCase();
+  return new Set(["NOT_CONTACTED", "GREETED", "APPLIED"]).has(status) ? status : "";
+}
+
+function uniquePositiveIntegers(value) {
+  return Array.from(new Set((Array.isArray(value) ? value : []).map(Number)
+    .filter((item) => Number.isInteger(item) && item > 0)));
+}
+
 function validationError(message) {
   const error = new Error(message);
   error.statusCode = 400;
@@ -8087,6 +8804,13 @@ function conflictError(message) {
   const error = new Error(message);
   error.statusCode = 409;
   error.code = "BROWSER_TASK_CALLBACK_CONFLICT";
+  return error;
+}
+
+function storeError(statusCode, code, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
   return error;
 }
 

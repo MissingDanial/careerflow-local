@@ -6,6 +6,7 @@ const fields = {
   maxCachedJobs: document.getElementById("maxCachedJobs"),
   crawlMaxJobs: document.getElementById("crawlMaxJobs"),
   crawlDelayMs: document.getElementById("crawlDelayMs"),
+  resumeOutputDir: document.getElementById("resumeOutputDir"),
   agentExecutionMode: document.getElementById("agentExecutionMode"),
   riskGateEnabled: document.getElementById("riskGateEnabled"),
   excludedDirections: document.getElementById("excludedDirections")
@@ -22,7 +23,19 @@ const ui = {
   workspaceActionCount: document.getElementById("workspaceActionCount"),
   workspaceReadyCount: document.getElementById("workspaceReadyCount"),
   workspaceErrorCount: document.getElementById("workspaceErrorCount"),
+  queueTitle: document.getElementById("queueTitle"),
+  workspaceQueueSelect: document.getElementById("workspaceQueueSelect"),
+  openCreateQueueDialog: document.getElementById("openCreateQueueDialog"),
+  deleteApplicationQueue: document.getElementById("deleteApplicationQueue"),
   workspaceFilter: document.getElementById("workspaceFilter"),
+  workspaceManualFilter: document.getElementById("workspaceManualFilter"),
+  workspaceListTitle: document.getElementById("workspaceListTitle"),
+  runQueueScreening: document.getElementById("runQueueScreening"),
+  runQueueResumeWorkflow: document.getElementById("runQueueResumeWorkflow"),
+  queueResumeBatchStatus: document.getElementById("queueResumeBatchStatus"),
+  workspaceSelectVisible: document.getElementById("workspaceSelectVisible"),
+  workspaceSelectionCount: document.getElementById("workspaceSelectionCount"),
+  removeSelectedApplications: document.getElementById("removeSelectedApplications"),
   workspaceApplications: document.getElementById("workspaceApplications"),
   workspaceEmpty: document.getElementById("workspaceEmpty"),
   nextActionTitle: document.getElementById("nextActionTitle"),
@@ -32,6 +45,22 @@ const ui = {
   workspaceSelectedMeta: document.getElementById("workspaceSelectedMeta"),
   workspaceActionHint: document.getElementById("workspaceActionHint"),
   workspaceNextAction: document.getElementById("workspaceNextAction"),
+  workspaceViewDetail: document.getElementById("workspaceViewDetail"),
+  jobDetailDialog: document.getElementById("jobDetailDialog"),
+  closeJobDetailDialog: document.getElementById("closeJobDetailDialog"),
+  closeJobDetailDialogSecondary: document.getElementById("closeJobDetailDialogSecondary"),
+  jobDetailDialogTitle: document.getElementById("jobDetailDialogTitle"),
+  jobDetailMeta: document.getElementById("jobDetailMeta"),
+  jobDetailDescription: document.getElementById("jobDetailDescription"),
+  jobDetailScreening: document.getElementById("jobDetailScreening"),
+  jobDetailResume: document.getElementById("jobDetailResume"),
+  jobDetailBossLink: document.getElementById("jobDetailBossLink"),
+  createQueueDialog: document.getElementById("createQueueDialog"),
+  createQueueForm: document.getElementById("createQueueForm"),
+  closeCreateQueueDialog: document.getElementById("closeCreateQueueDialog"),
+  cancelCreateQueue: document.getElementById("cancelCreateQueue"),
+  createQueueName: document.getElementById("createQueueName"),
+  createQueueDescription: document.getElementById("createQueueDescription"),
   advancedDiagnostics: document.getElementById("advancedDiagnostics"),
   advancedDiagnosticsMount: document.getElementById("advancedDiagnosticsMount"),
   resumeReviewDialog: document.getElementById("resumeReviewDialog"),
@@ -53,6 +82,19 @@ const ui = {
   refreshWorkflow: document.getElementById("refreshWorkflow"),
   refreshScreening: document.getElementById("refreshScreening"),
   refreshAgentQuality: document.getElementById("refreshAgentQuality"),
+  modelConfigForm: document.getElementById("modelConfigForm"),
+  modelConfigBadge: document.getElementById("modelConfigBadge"),
+  modelBaseUrl: document.getElementById("modelBaseUrl"),
+  modelName: document.getElementById("modelName"),
+  modelWireApi: document.getElementById("modelWireApi"),
+  modelApiKey: document.getElementById("modelApiKey"),
+  modelReasoningEffort: document.getElementById("modelReasoningEffort"),
+  modelTimeoutMs: document.getElementById("modelTimeoutMs"),
+  modelMaxRetries: document.getElementById("modelMaxRetries"),
+  saveModelConfig: document.getElementById("saveModelConfig"),
+  testModelConfig: document.getElementById("testModelConfig"),
+  clearModelApiKey: document.getElementById("clearModelApiKey"),
+  modelConfigStatus: document.getElementById("modelConfigStatus"),
   runRulesBatchScreening: document.getElementById("runRulesBatchScreening"),
   runRiskGateRescreen: document.getElementById("runRiskGateRescreen"),
   refreshResume: document.getElementById("refreshResume"),
@@ -114,12 +156,30 @@ const ui = {
   agentQualityLatency: document.getElementById("agentQualityLatency"),
   agentQualityGate: document.getElementById("agentQualityGate"),
   agentQualityStatus: document.getElementById("agentQualityStatus"),
+  agentShadowRunBadge: document.getElementById("agentShadowRunBadge"),
+  startAgentShadowRun: document.getElementById("startAgentShadowRun"),
+  agentShadowProgress: document.getElementById("agentShadowProgress"),
+  agentShadowSamples: document.getElementById("agentShadowSamples"),
+  agentShadowTokens: document.getElementById("agentShadowTokens"),
+  agentShadowFailures: document.getElementById("agentShadowFailures"),
+  agentShadowStatus: document.getElementById("agentShadowStatus"),
+  agentShadowItems: document.getElementById("agentShadowItems"),
+  agentShadowReviewForm: document.getElementById("agentShadowReviewForm"),
+  agentShadowReviewItem: document.getElementById("agentShadowReviewItem"),
+  agentShadowReviewLabel: document.getElementById("agentShadowReviewLabel"),
+  agentShadowCorrectedRecommendation: document.getElementById("agentShadowCorrectedRecommendation"),
+  agentShadowReviewNote: document.getElementById("agentShadowReviewNote"),
+  saveAgentShadowReview: document.getElementById("saveAgentShadowReview"),
   refreshCareerContext: document.getElementById("refreshCareerContext"),
   profileAgentPortal: document.getElementById("profileAgentPortal"),
   profileDialogSessionSelect: document.getElementById("profileDialogSessionSelect"),
   newProfileDialogSession: document.getElementById("newProfileDialogSession"),
   refreshProfileDialog: document.getElementById("refreshProfileDialog"),
   profileDialogStatus: document.getElementById("profileDialogStatus"),
+  profileResumeFile: document.getElementById("profileResumeFile"),
+  importProfileResume: document.getElementById("importProfileResume"),
+  profileResumeImportStatus: document.getElementById("profileResumeImportStatus"),
+  profileResumeSources: document.getElementById("profileResumeSources"),
   profileDialogMessages: document.getElementById("profileDialogMessages"),
   profileDialogComposer: document.getElementById("profileDialogComposer"),
   sendProfileDialogMessage: document.getElementById("sendProfileDialogMessage"),
@@ -148,6 +208,8 @@ const ui = {
   clearProfileAgentUpdate: document.getElementById("clearProfileAgentUpdate"),
   profileFactDrafts: document.getElementById("profileFactDrafts"),
   careerContextPreview: document.getElementById("careerContextPreview"),
+  careerContextViewer: document.getElementById("careerContextViewer"),
+  viewCareerContext: document.getElementById("viewCareerContext"),
   resumeStatus: document.getElementById("resumeStatus"),
   resumeCandidateCount: document.getElementById("resumeCandidateCount"),
   resumeVersionCount: document.getElementById("resumeVersionCount"),
@@ -190,6 +252,7 @@ const ui = {
   recentEvents: document.getElementById("recentEvents"),
   missingDescriptionCount: document.getElementById("missingDescriptionCount"),
   missingDescriptions: document.getElementById("missingDescriptions"),
+  removeMissingDescriptions: document.getElementById("removeMissingDescriptions"),
   workflowStatus: document.getElementById("workflowStatus"),
   workflowOpenErrorCount: document.getElementById("workflowOpenErrorCount"),
   workflowEventCount: document.getElementById("workflowEventCount"),
@@ -202,9 +265,15 @@ const ui = {
 };
 
 const state = {
+  applicationQueues: [],
+  activeApplicationQueueId: null,
   applications: [],
   totalApplications: 0,
   selectedApplicationId: null,
+  selectedApplicationIds: new Set(),
+  visibleApplicationIds: [],
+  workbenchStageFilter: "collected",
+  queueBatchBusy: false,
   activeView: "workspace",
   screeningCandidates: [],
   screenings: [],
@@ -245,7 +314,10 @@ const state = {
   realActionPolicy: null,
   realActionAuthorization: null,
   realActionAuthorizationToken: "",
-  agentQuality: null
+  agentQuality: null,
+  modelConfig: null,
+  agentShadowRun: null,
+  agentShadowPollTimer: null
 };
 
 organizeOptionPanels();
@@ -270,7 +342,7 @@ function ensureGreetingDryRunControls() {
     if (!ui[id]) {
       const button = document.createElement("button");
       button.id = id;
-      button.className = "secondary";
+      button.className = "secondary diagnostic-command";
       button.type = "button";
       button.textContent = label;
       after.insertAdjacentElement("afterend", button);
@@ -385,10 +457,12 @@ function organizeOptionPanels() {
   const profilePortal = document.getElementById("profileAgentPortal");
   const riskGatePanel = legacyPanels.querySelector(".risk-gate-panel");
   const templatePanel = legacyPanels.querySelector(".inline-setting-row");
+  const executionModePanel = fields.agentExecutionMode?.closest(".inline-setting-row") || null;
   const resumeDetailPanel = document.getElementById("resumeDetailPanel");
   const settingsCoreMount = document.getElementById("settingsCoreMount");
-  const settingsRiskMount = document.getElementById("settingsRiskMount");
-  const settingsTemplateMount = document.getElementById("settingsTemplateMount");
+  const workspaceRiskMount = document.getElementById("workspaceRiskMount");
+  const workspaceResumeMount = document.getElementById("workspaceResumeMount");
+  const compatibilityMount = document.getElementById("retainedCompatibilityPanels");
 
   if (settingsCard && settingsCoreMount) {
     settingsCoreMount.appendChild(settingsCard);
@@ -396,18 +470,26 @@ function organizeOptionPanels() {
   if (profilePortal && ui.profilePanel) {
     ui.profilePanel.appendChild(profilePortal);
   }
-  if (riskGatePanel && settingsRiskMount) {
-    settingsRiskMount.appendChild(riskGatePanel);
+  if (riskGatePanel && workspaceRiskMount) {
+    workspaceRiskMount.appendChild(riskGatePanel);
   }
-  if (templatePanel && settingsTemplateMount) {
-    settingsTemplateMount.appendChild(templatePanel);
+  if (executionModePanel && workspaceResumeMount) {
+    workspaceResumeMount.appendChild(executionModePanel);
+  }
+  if (templatePanel && workspaceResumeMount) {
+    workspaceResumeMount.appendChild(templatePanel);
   }
   if (resumeDetailPanel && ui.resumeReviewDialogBody) {
     ui.resumeReviewDialogBody.appendChild(resumeDetailPanel);
   }
   for (const card of legacyCards) {
     if (card !== settingsCard && card !== profilePortal) {
-      ui.advancedDiagnosticsMount.appendChild(card);
+      const title = cleanUiText(card.querySelector("h2")?.textContent);
+      if (new Set(["最近异常", "Workflow progress"]).has(title)) {
+        ui.advancedDiagnosticsMount.appendChild(card);
+      } else {
+        compatibilityMount?.appendChild(card);
+      }
     }
   }
   legacyPanels.remove();
@@ -433,8 +515,32 @@ function setupOptionWorkspace() {
       activateView(tabs[nextIndex].dataset.viewTarget, { focus: true });
     });
   }
+  ui.workspaceQueueSelect.addEventListener("change", changeActiveApplicationQueue);
+  ui.openCreateQueueDialog.addEventListener("click", openCreateApplicationQueueDialog);
+  ui.deleteApplicationQueue.addEventListener("click", archiveActiveApplicationQueue);
   ui.workspaceFilter.addEventListener("change", renderWorkbench);
+  ui.workspaceManualFilter.addEventListener("change", renderWorkbench);
+  for (const stageButton of document.querySelectorAll("[data-workbench-stage]")) {
+    stageButton.addEventListener("click", () => activateWorkbenchStage(stageButton.dataset.workbenchStage));
+  }
+  ui.runQueueScreening.addEventListener("click", runActiveQueueScreening);
+  ui.runQueueResumeWorkflow.addEventListener("click", runActiveQueueResumeBatch);
+  ui.workspaceSelectVisible.addEventListener("change", toggleVisibleApplicationSelection);
+  ui.removeSelectedApplications.addEventListener("click", removeSelectedApplicationsFromQueue);
   ui.workspaceNextAction.addEventListener("click", runWorkbenchNextAction);
+  ui.workspaceViewDetail.addEventListener("click", () => openJobDetailDialog(state.selectedApplicationId));
+  ui.createQueueForm.addEventListener("submit", createApplicationQueueFromDialog);
+  ui.closeCreateQueueDialog.addEventListener("click", closeCreateApplicationQueueDialog);
+  ui.cancelCreateQueue.addEventListener("click", closeCreateApplicationQueueDialog);
+  ui.createQueueDialog.addEventListener("click", closeDialogFromBackdrop);
+  ui.closeJobDetailDialog.addEventListener("click", () => ui.jobDetailDialog.close());
+  ui.closeJobDetailDialogSecondary.addEventListener("click", () => ui.jobDetailDialog.close());
+  ui.jobDetailDialog.addEventListener("click", closeDialogFromBackdrop);
+  ui.jobDetailBossLink.addEventListener("click", (event) => {
+    if (ui.jobDetailBossLink.getAttribute("aria-disabled") === "true") {
+      event.preventDefault();
+    }
+  });
   ui.closeResumeReviewDialog.addEventListener("click", () => ui.resumeReviewDialog.close());
   ui.closeRealGreetingDialog.addEventListener("click", () => ui.realGreetingDialog.close());
   ui.realGreetingConfirmRationale.addEventListener("input", updateRealGreetingContinueState);
@@ -480,6 +586,442 @@ function closeDialogFromBackdrop(event) {
   }
 }
 
+function openCreateApplicationQueueDialog() {
+  ui.createQueueForm.reset();
+  ui.createQueueDialog.showModal();
+  ui.createQueueName.focus();
+}
+
+function closeCreateApplicationQueueDialog() {
+  ui.createQueueDialog.close();
+}
+
+async function archiveActiveApplicationQueue() {
+  const queue = getActiveApplicationQueue();
+  if (!queue?.id || queue.isDefault) {
+    setStatus("默认队列必须保留，不能删除。", true);
+    return;
+  }
+  if (!window.confirm(`删除意向“${queue.name}”？岗位、筛选、简历和日志历史仍会保留。`)) {
+    return;
+  }
+  try {
+    ui.deleteApplicationQueue.disabled = true;
+    await runtimeMessage({ type: "ARCHIVE_APPLICATION_QUEUE", queueId: queue.id });
+    state.activeApplicationQueueId = null;
+    state.selectedApplicationId = null;
+    state.selectedApplicationIds.clear();
+    const diagnostics = await loadApplicationDiagnostics();
+    await runtimeMessage({
+      type: "SAVE_SETTINGS",
+      settings: { activeApplicationQueueId: diagnostics.activeQueueId }
+    });
+    renderApplicationDiagnostics(diagnostics);
+    setStatus(`意向“${queue.name}”已删除，历史数据未清除。`);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    ui.deleteApplicationQueue.disabled = Boolean(getActiveApplicationQueue()?.isDefault);
+  }
+}
+
+function activateWorkbenchStage(stageName) {
+  const stage = new Set(["collected", "screened", "resume", "manual"]).has(stageName)
+    ? stageName
+    : "collected";
+  state.workbenchStageFilter = stage;
+  state.selectedApplicationIds.clear();
+  for (const button of document.querySelectorAll("[data-workbench-stage]")) {
+    button.classList.toggle("is-active", button.dataset.workbenchStage === stage);
+  }
+  for (const control of document.querySelectorAll("[data-stage-control]")) {
+    control.hidden = control.dataset.stageControl !== stage;
+  }
+  const titles = {
+    collected: "完整 JD 岗位",
+    screened: "岗位筛选结果",
+    resume: "定制简历结果",
+    manual: "人工联系与投递"
+  };
+  ui.workspaceListTitle.textContent = titles[stage];
+  renderWorkbench();
+}
+
+async function runActiveQueueScreening() {
+  const queue = getActiveApplicationQueue();
+  const eligibleStatuses = new Set(["DETAIL_CAPTURED", "SCORED", "SHORTLISTED", "NEEDS_USER_REVIEW"]);
+  const applicationIds = state.applications
+    .filter((application) => application.descriptionLength >= 80 && eligibleStatuses.has(application.status))
+    .map((application) => Number(application.id))
+    .filter(Boolean);
+  if (!queue?.id || !applicationIds.length) {
+    setStatus("当前意向没有可筛选的完整 JD 岗位。", true);
+    return;
+  }
+  try {
+    ui.runQueueScreening.disabled = true;
+    const excludedDirections = parseDelimitedList(fields.excludedDirections.value);
+    const savedSettings = await runtimeMessage({
+      type: "SAVE_SETTINGS",
+      settings: {
+        ...readSettings(),
+        riskGateEnabled: fields.riskGateEnabled.checked,
+        excludedDirections
+      }
+    });
+    renderSettings(savedSettings);
+    let succeeded = 0;
+    let failed = 0;
+    for (let index = 0; index < applicationIds.length; index += 50) {
+      const result = await runtimeMessage({
+        type: "SCREEN_APPLICATION_BATCH",
+        options: {
+          queueId: queue.id,
+          applicationIds: applicationIds.slice(index, index + 50),
+          mode: getSelectedAgentExecutionMode(),
+          limit: 50,
+          includeAlreadyScreened: true,
+          continueOnError: true,
+          userRules: {
+            excludedDirections: fields.riskGateEnabled.checked ? excludedDirections : []
+          }
+        }
+      });
+      succeeded += Number(result.response?.succeeded || 0);
+      failed += Number(result.response?.failed || 0);
+    }
+    await Promise.all([
+      refreshApplicationDiagnostics({ silent: true }),
+      refreshScreeningDiagnostics({ silent: true })
+    ]);
+    activateWorkbenchStage("screened");
+    setStatus(`“${queue.name}”筛选完成：成功 ${succeeded}，失败 ${failed}`, failed > 0);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    ui.runQueueScreening.disabled = false;
+  }
+}
+
+async function runActiveQueueResumeBatch() {
+  const queue = getActiveApplicationQueue();
+  const candidates = state.applications.filter((application) => (
+    application.descriptionLength >= 80
+    && application.latestScreeningRecommendation === "auto_prepare"
+    && !application.latestResumeVersionId
+  ));
+  if (!queue?.id || !candidates.length) {
+    setStatus("当前意向没有待生成的筛选通过岗位。", true);
+    return;
+  }
+  try {
+    state.queueBatchBusy = true;
+    ui.runQueueResumeWorkflow.disabled = true;
+    await saveResumeOutputDirectory();
+    let succeeded = 0;
+    let failed = 0;
+    for (const [index, application] of candidates.entries()) {
+      ui.queueResumeBatchStatus.textContent = `正在生成 ${index + 1}/${candidates.length}：${application.title || "岗位"}`;
+      try {
+        await runtimeMessage({
+          type: "RUN_RESUME_WORKFLOW_GRAPH",
+          applicationId: application.id,
+          options: {
+            mode: getSelectedAgentExecutionMode(),
+            renderDocx: true,
+            maxRevisions: 1,
+            renderOptions: getResumeRenderOptions(),
+            userRules: { forceRescreen: false }
+          }
+        });
+        succeeded += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    await Promise.all([
+      refreshApplicationDiagnostics({ silent: true }),
+      refreshResumeDiagnostics({ silent: true }),
+      refreshWorkflowDiagnostics({ silent: true })
+    ]);
+    ui.queueResumeBatchStatus.textContent = `成功 ${succeeded} · 失败 ${failed}`;
+    activateWorkbenchStage("resume");
+    setStatus(`“${queue.name}”简历生成完成：成功 ${succeeded}，失败 ${failed}`, failed > 0);
+  } catch (error) {
+    ui.queueResumeBatchStatus.textContent = error.message || String(error);
+    setStatus(error.message || String(error), true);
+  } finally {
+    state.queueBatchBusy = false;
+    ui.runQueueResumeWorkflow.disabled = false;
+  }
+}
+
+async function trustFilteredApplication(applicationId) {
+  const queue = getActiveApplicationQueue();
+  const application = state.applications.find((item) => Number(item.id) === Number(applicationId));
+  if (!queue?.id || !application?.id) {
+    return;
+  }
+  try {
+    await runtimeMessage({
+      type: "TRUST_APPLICATION_QUEUE_ITEM",
+      queueId: queue.id,
+      applicationId: application.id,
+      options: {
+        actor: "local-user",
+        reason: "用户在工作台取消风险过滤并添加信任"
+      }
+    });
+    const excludedDirections = parseDelimitedList(fields.excludedDirections.value);
+    await runtimeMessage({
+      type: "SCREEN_APPLICATION_BATCH",
+      options: {
+        queueId: queue.id,
+        applicationIds: [application.id],
+        mode: getSelectedAgentExecutionMode(),
+        limit: 1,
+        continueOnError: false,
+        userRules: { excludedDirections }
+      }
+    });
+    await Promise.all([
+      refreshApplicationDiagnostics({ silent: true }),
+      refreshScreeningDiagnostics({ silent: true })
+    ]);
+    setStatus(`已信任并重新评估：${application.title || "岗位"}`);
+  } catch (error) {
+    await refreshApplicationDiagnostics({ silent: true }).catch(() => {});
+    setStatus(error.message || String(error), true);
+  }
+}
+
+async function updateApplicationManualStatus(applicationId, manualStatus) {
+  try {
+    await runtimeMessage({
+      type: "UPDATE_MANUAL_APPLICATION_STATUS",
+      applicationId,
+      options: {
+        manualStatus,
+        actor: "local-user",
+        note: "用户在工作台手动更新联系/投递状态"
+      }
+    });
+    await refreshApplicationDiagnostics({ silent: true });
+    setStatus(`人工状态已更新为“${formatManualApplicationStatus(manualStatus)}”`);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    await refreshApplicationDiagnostics({ silent: true }).catch(() => {});
+  }
+}
+
+function openJobDetailDialog(applicationId) {
+  const application = state.applications.find((item) => Number(item.id) === Number(applicationId));
+  if (!application) {
+    return;
+  }
+  ui.jobDetailDialogTitle.textContent = application.title || "岗位完整信息";
+  ui.jobDetailMeta.replaceChildren();
+  appendKeyValue(ui.jobDetailMeta, "公司", application.company || "未记录");
+  appendKeyValue(ui.jobDetailMeta, "地点/薪资", [application.location, application.salary].filter(Boolean).join(" · ") || "未记录");
+  appendKeyValue(ui.jobDetailMeta, "人工状态", formatManualApplicationStatus(application.manualStatus));
+  ui.jobDetailDescription.textContent = application.description || "暂无完整职位描述";
+  ui.jobDetailScreening.replaceChildren();
+  appendKeyValue(ui.jobDetailScreening, "推荐", formatRecommendation(application.latestScreeningRecommendation));
+  appendKeyValue(ui.jobDetailScreening, "匹配", application.latestMatchScore === null ? "未评估" : `${formatScore(application.latestMatchScore)}/100`);
+  appendKeyValue(ui.jobDetailScreening, "风险", application.latestRiskScore === null ? "未评估" : `${formatScore(application.latestRiskScore)}/100`);
+  ui.jobDetailResume.replaceChildren();
+  appendKeyValue(ui.jobDetailResume, "状态", application.latestResumeVersionId ? formatResumeVersionStatus(application.latestResumeStatus) : "尚未生成");
+  appendKeyValue(ui.jobDetailResume, "文件", application.latestResumeFilePath || application.latestResumeErrorCode || "暂无");
+  const bossUrl = normalizeBossJobUrl(application.detailUrl);
+  ui.jobDetailBossLink.href = bossUrl || "#";
+  ui.jobDetailBossLink.setAttribute("aria-disabled", String(!bossUrl));
+  ui.jobDetailBossLink.classList.toggle("is-disabled", !bossUrl);
+  if (!ui.jobDetailDialog.open) {
+    ui.jobDetailDialog.showModal();
+  }
+}
+
+function openBossApplication(application) {
+  const bossUrl = normalizeBossJobUrl(application?.detailUrl);
+  if (!bossUrl) {
+    throw new Error("当前岗位没有可打开的 BOSS 详情地址");
+  }
+  chrome.tabs.create({ url: bossUrl });
+  setStatus(`已打开 ${application.title || "岗位"}，请人工完成打招呼或投递。`);
+}
+
+async function createApplicationQueueFromDialog(event) {
+  event.preventDefault();
+  const name = cleanUiText(ui.createQueueName.value);
+  if (!name) {
+    setStatus("请输入岗位队列名称", true);
+    ui.createQueueName.focus();
+    return;
+  }
+  try {
+    ui.createQueueForm.querySelector("button[type='submit']").disabled = true;
+    const result = await runtimeMessage({
+      type: "CREATE_APPLICATION_QUEUE",
+      queue: {
+        name,
+        description: cleanUiText(ui.createQueueDescription.value)
+      }
+    });
+    const queue = result.response?.queue;
+    if (!queue?.id) {
+      throw new Error("后端未返回新队列");
+    }
+    state.activeApplicationQueueId = Number(queue.id);
+    state.selectedApplicationIds.clear();
+    await runtimeMessage({
+      type: "SAVE_SETTINGS",
+      settings: { activeApplicationQueueId: queue.id }
+    });
+    closeCreateApplicationQueueDialog();
+    await refreshApplicationQueueScope();
+    setStatus(`已创建并切换到“${queue.name}”`);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    ui.createQueueForm.querySelector("button[type='submit']").disabled = false;
+  }
+}
+
+async function changeActiveApplicationQueue() {
+  const queueId = Number(ui.workspaceQueueSelect.value || 0);
+  if (!Number.isInteger(queueId) || queueId <= 0 || queueId === state.activeApplicationQueueId) {
+    return;
+  }
+  try {
+    state.activeApplicationQueueId = queueId;
+    state.selectedApplicationId = null;
+    state.selectedApplicationIds.clear();
+    await runtimeMessage({
+      type: "SAVE_SETTINGS",
+      settings: { activeApplicationQueueId: queueId }
+    });
+    await refreshApplicationQueueScope();
+    const queue = getActiveApplicationQueue();
+    setStatus(`已切换到“${queue?.name || "岗位队列"}”`);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  }
+}
+
+async function refreshApplicationQueueScope() {
+  const diagnostics = await loadApplicationDiagnostics();
+  renderApplicationDiagnostics(diagnostics);
+  const missing = await runtimeMessage({
+    type: "GET_MISSING_DESCRIPTIONS",
+    options: {
+      queueId: state.activeApplicationQueueId,
+      limit: 200,
+      minDescriptionLength: 80
+    }
+  });
+  renderMissingDescriptions(
+    missing.jobs || [],
+    missing.totalMissingDescriptions || 0
+  );
+}
+
+function toggleVisibleApplicationSelection() {
+  const shouldSelect = ui.workspaceSelectVisible.checked;
+  for (const applicationId of state.visibleApplicationIds) {
+    if (shouldSelect) {
+      state.selectedApplicationIds.add(applicationId);
+    } else {
+      state.selectedApplicationIds.delete(applicationId);
+    }
+  }
+  renderWorkbench();
+}
+
+function toggleApplicationSelection(applicationId, selected) {
+  const id = Number(applicationId);
+  if (selected) {
+    state.selectedApplicationIds.add(id);
+  } else {
+    state.selectedApplicationIds.delete(id);
+  }
+  updateApplicationSelectionControls();
+}
+
+function updateApplicationSelectionControls() {
+  const visibleIds = state.visibleApplicationIds;
+  const selectedVisibleCount = visibleIds.filter((id) => state.selectedApplicationIds.has(id)).length;
+  ui.workspaceSelectVisible.checked = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+  ui.workspaceSelectVisible.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visibleIds.length;
+  ui.workspaceSelectVisible.disabled = visibleIds.length === 0;
+  ui.workspaceSelectionCount.textContent = `已选 ${state.selectedApplicationIds.size}`;
+  ui.removeSelectedApplications.disabled = state.selectedApplicationIds.size === 0;
+}
+
+async function removeSelectedApplicationsFromQueue() {
+  const applicationIds = Array.from(state.selectedApplicationIds);
+  const queue = getActiveApplicationQueue();
+  if (!queue?.id || !applicationIds.length) {
+    return;
+  }
+  if (!window.confirm(`从“${queue.name}”移出已选 ${applicationIds.length} 个岗位？历史记录不会删除。`)) {
+    return;
+  }
+  try {
+    ui.removeSelectedApplications.disabled = true;
+    const result = await runtimeMessage({
+      type: "REMOVE_APPLICATION_QUEUE_ITEMS",
+      queueId: queue.id,
+      options: {
+        applicationIds,
+        removedBy: "options-workbench",
+        reason: "workbench_bulk_remove"
+      }
+    });
+    state.selectedApplicationIds.clear();
+    state.selectedApplicationId = null;
+    await refreshApplicationQueueScope();
+    setStatus(`已从当前队列移出 ${result.response?.removed || 0} 个岗位`);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    updateApplicationSelectionControls();
+  }
+}
+
+async function removeAllMissingDescriptionsFromQueue() {
+  const queue = getActiveApplicationQueue();
+  const total = Number(state.missingDescriptionTotal || 0);
+  if (!queue?.id || total <= 0) {
+    return;
+  }
+  if (!window.confirm(`从“${queue.name}”移出全部 ${total} 个待补 JD 岗位？再次采集时不会自动恢复。`)) {
+    return;
+  }
+  try {
+    ui.removeMissingDescriptions.disabled = true;
+    const result = await runtimeMessage({
+      type: "REMOVE_MISSING_DESCRIPTION_ITEMS",
+      queueId: queue.id,
+      options: {
+        minDescriptionLength: 80,
+        removedBy: "options-missing-jd",
+        reason: "missing_jd_bulk_remove"
+      }
+    });
+    state.selectedApplicationIds.clear();
+    await refreshApplicationQueueScope();
+    setStatus(`已移出 ${result.response?.removed || 0} 个待补 JD 岗位`);
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  }
+}
+
+function getActiveApplicationQueue() {
+  return state.applicationQueues.find((queue) => (
+    Number(queue.id) === Number(state.activeApplicationQueueId)
+  )) || null;
+}
+
 function updateRealGreetingContinueState() {
   const rationale = cleanUiText(ui.realGreetingConfirmRationale.value);
   ui.realGreetingContinue.disabled = !rationale || !ui.realGreetingConfirmAcknowledgement.checked;
@@ -515,6 +1057,11 @@ ui.refreshDiagnostics.addEventListener("click", () => refreshDiagnostics());
 ui.refreshWorkflow.addEventListener("click", () => refreshWorkflowDiagnostics());
 ui.refreshScreening.addEventListener("click", () => refreshScreeningDiagnostics());
 ui.refreshAgentQuality.addEventListener("click", () => refreshAgentQualityDiagnostics());
+ui.modelConfigForm.addEventListener("submit", saveBackendModelConfig);
+ui.testModelConfig.addEventListener("click", testBackendModelConfig);
+ui.clearModelApiKey.addEventListener("click", clearBackendModelApiKey);
+ui.startAgentShadowRun.addEventListener("click", startAgentShadowRun);
+ui.agentShadowReviewForm.addEventListener("submit", saveAgentShadowReview);
 ui.runRulesBatchScreening.addEventListener("click", runRulesBatchScreening);
 ui.runRiskGateRescreen.addEventListener("click", runRiskGateRescreen);
 ui.refreshCareerContext.addEventListener("click", () => refreshCareerContextDiagnostics());
@@ -531,6 +1078,8 @@ ui.profileDialogComposer.addEventListener("keydown", (event) => {
 });
 ui.generateCareerContext.addEventListener("click", () => generateCareerContext({ includeAnswers: false }));
 ui.generateCareerContextWithAnswers.addEventListener("click", () => generateCareerContext({ includeAnswers: true }));
+ui.viewCareerContext.addEventListener("click", viewSavedCareerContext);
+ui.importProfileResume.addEventListener("click", importProfileResumeFile);
 ui.generateProfileFactDrafts.addEventListener("click", generateProfileFactDraftsFromAnswers);
 ui.stageProfileAgentUpdate.addEventListener("click", stageProfileAgentUserUpdate);
 ui.clearProfileAgentUpdate.addEventListener("click", clearProfileAgentUserUpdate);
@@ -540,6 +1089,7 @@ ui.refreshResume.addEventListener("click", () => refreshResumeDiagnostics());
 ui.runSelectedResumeWorkflow.addEventListener("click", () => runResumeWorkflowForSelectedApplication());
 ui.resumeTemplateName.addEventListener("change", saveResumeTemplateSelection);
 fields.agentExecutionMode.addEventListener("change", saveAgentExecutionMode);
+fields.resumeOutputDir.addEventListener("change", saveResumeOutputDirectory);
 ui.prepareRulesResume.addEventListener("click", prepareRulesResume);
 ui.evaluateResumeFit.addEventListener("click", evaluateSelectedResumeFit);
 ui.verifyResumeClaims.addEventListener("click", verifySelectedResumeClaims);
@@ -569,6 +1119,7 @@ ui.approveResumeLocal.addEventListener("click", approveResumeLocal);
 ui.clearCache.addEventListener("click", clearCache);
 ui.requeueCurrentPage.addEventListener("click", requeueCurrentPageTasks);
 ui.cancelCurrentPage.addEventListener("click", cancelCurrentPageTasks);
+ui.removeMissingDescriptions.addEventListener("click", removeAllMissingDescriptionsFromQueue);
 clearResumeDetail();
 
 async function init() {
@@ -577,7 +1128,10 @@ async function init() {
     renderSettings(settings);
     await refreshResumeTemplates({ silent: true });
     await refreshDiagnostics({ silent: true });
+    await refreshProfileResumeSources({ silent: true });
+    await refreshBackendModelConfig({ silent: true });
     await refreshAgentQualityDiagnostics({ silent: true });
+    await refreshAgentShadowDiagnostics({ silent: true });
     await refreshRealActionDiagnostics({ silent: true });
   } catch (error) {
     setStatus(error.message || String(error), true);
@@ -607,7 +1161,9 @@ function readSettings() {
     crawlMaxJobs: fields.crawlMaxJobs.value,
     crawlDelayMs: fields.crawlDelayMs.value,
     agentExecutionMode: getSelectedAgentExecutionMode(),
+    activeApplicationQueueId: state.activeApplicationQueueId,
     resumeTemplateName: getSelectedResumeTemplateName(),
+    resumeOutputDir: cleanUiText(fields.resumeOutputDir.value),
     riskGateEnabled: fields.riskGateEnabled.checked,
     excludedDirections: parseDelimitedList(fields.excludedDirections.value)
   };
@@ -621,6 +1177,8 @@ function renderSettings(settings) {
   fields.maxCachedJobs.value = settings.maxCachedJobs || 500;
   fields.crawlMaxJobs.value = settings.crawlMaxJobs || 30;
   fields.crawlDelayMs.value = settings.crawlDelayMs || 1600;
+  fields.resumeOutputDir.value = settings.resumeOutputDir || "";
+  state.activeApplicationQueueId = Number(settings.activeApplicationQueueId || 0) || null;
   fields.agentExecutionMode.value = normalizeAgentExecutionMode(settings.agentExecutionMode || "hybrid");
   if (ui.resumeTemplateName && settings.resumeTemplateName) {
     ui.resumeTemplateName.dataset.pendingValue = settings.resumeTemplateName;
@@ -644,13 +1202,18 @@ function formatDelimitedList(value) {
 
 async function refreshDiagnostics(options = {}) {
   setStatus(options.silent ? "" : "正在刷新诊断");
-  const [applicationResult, cacheResult, qualityResult, eventsResult, taskResult, missingResult, pageResult, workflowResult, screeningResult, careerContextResult, profileDialogResult, resumeResult, greetingResult] = await Promise.allSettled([
-    loadApplicationDiagnostics(),
+  const [applicationResult] = await Promise.allSettled([
+    loadApplicationDiagnostics()
+  ]);
+  const [cacheResult, qualityResult, eventsResult, taskResult, missingResult, pageResult, workflowResult, screeningResult, careerContextResult, profileDialogResult, resumeResult, greetingResult] = await Promise.allSettled([
     runtimeMessage({ type: "GET_CACHE" }),
     runtimeMessage({ type: "GET_QUALITY" }),
     runtimeMessage({ type: "GET_EVENTS", limit: 8 }),
     runtimeMessage({ type: "GET_BROWSER_TASK_DIAGNOSTICS", limit: 8 }),
-    runtimeMessage({ type: "GET_MISSING_DESCRIPTIONS", limit: 8 }),
+    runtimeMessage({
+      type: "GET_MISSING_DESCRIPTIONS",
+      options: { queueId: state.activeApplicationQueueId, limit: 200, minDescriptionLength: 80 }
+    }),
     runtimeMessage({ type: "GET_LAST_BOSS_PAGE" }),
     loadWorkflowDiagnostics(),
     loadScreeningDiagnostics(),
@@ -734,11 +1297,32 @@ async function refreshDiagnostics(options = {}) {
 }
 
 async function loadApplicationDiagnostics() {
+  const queueResult = await runtimeMessage({
+    type: "GET_APPLICATION_QUEUES"
+  });
+  const queues = Array.isArray(queueResult.response?.queues) ? queueResult.response.queues : [];
+  const requestedQueue = queues.find((queue) => (
+    Number(queue.id) === Number(state.activeApplicationQueueId)
+  ));
+  const activeQueue = requestedQueue || queues.find((queue) => queue.isDefault) || queues[0] || null;
+  if (!activeQueue?.id) {
+    throw new Error("后端没有可用的岗位队列");
+  }
+  state.applicationQueues = queues;
+  state.activeApplicationQueueId = Number(activeQueue.id);
   const result = await runtimeMessage({
     type: "GET_APPLICATIONS",
-    options: { limit: 50 }
+    options: {
+      queueId: activeQueue.id,
+      limit: 500,
+      completeDescriptionOnly: true
+    }
   });
-  return result.response || {};
+  return {
+    ...(result.response || {}),
+    queues,
+    activeQueueId: Number(activeQueue.id)
+  };
 }
 
 async function refreshApplicationDiagnostics(options = {}) {
@@ -878,6 +1462,105 @@ async function runRiskGateRescreen() {
   } finally {
     ui.runRiskGateRescreen.disabled = false;
   }
+}
+
+async function refreshProfileResumeSources(options = {}) {
+  try {
+    const result = await runtimeMessage({ type: "GET_PROFILE_RESUME_SOURCES", options: { limit: 20 } });
+    const payload = result.response || {};
+    const sources = Array.isArray(payload.resumeSources) ? payload.resumeSources : [];
+    renderList(ui.profileResumeSources, sources, (source) => ({
+      title: source.fileName || `简历来源 #${source.id}`,
+      meta: [
+        String(source.sourceType || "").toUpperCase(),
+        `${source.textLength || 0} 字`,
+        source.createdAt ? formatTime(source.createdAt) : ""
+      ].filter(Boolean).join(" · ")
+    }), "暂无简历来源");
+    if (!options.silent) {
+      ui.profileResumeImportStatus.textContent = `已保存 ${payload.totalResumeSources || sources.length} 份简历来源`;
+    }
+    return payload;
+  } catch (error) {
+    ui.profileResumeImportStatus.textContent = error.message || String(error);
+    ui.profileResumeImportStatus.classList.add("warn");
+    if (!options.silent) {
+      setStatus(error.message || String(error), true);
+    }
+    return null;
+  }
+}
+
+async function importProfileResumeFile() {
+  const file = ui.profileResumeFile.files?.[0];
+  if (!file) {
+    setStatus("请先选择一份简历文件。", true);
+    return;
+  }
+  const extension = String(file.name || "").toLowerCase().match(/\.[a-z0-9]+$/)?.[0] || "";
+  if (!new Set([".docx", ".pdf", ".txt", ".md"]).has(extension)) {
+    setStatus("仅支持 DOCX、PDF、TXT 和 MD 简历。", true);
+    return;
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    setStatus("简历文件不能超过 8 MB。", true);
+    return;
+  }
+  try {
+    ui.importProfileResume.disabled = true;
+    ui.profileResumeImportStatus.classList.remove("warn");
+    ui.profileResumeImportStatus.textContent = `正在识别 ${file.name}`;
+    const contentBase64 = await readFileAsBase64(file);
+    const imported = await runtimeMessage({
+      type: "IMPORT_PROFILE_RESUME",
+      resume: {
+        fileName: file.name,
+        contentBase64,
+        metadata: {
+          source: "options-profile-upload",
+          size: file.size,
+          mimeType: file.type || ""
+        }
+      }
+    });
+    const resumeSource = imported.response?.resumeSource || {};
+    if (!resumeSource.id) {
+      throw new Error("后端未返回简历来源 ID");
+    }
+    const drafts = await runtimeMessage({
+      type: "CREATE_PROFILE_RESUME_DRAFTS",
+      resumeSourceId: resumeSource.id
+    });
+    await Promise.all([
+      refreshProfileResumeSources({ silent: true }),
+      refreshProfileFactDrafts({ silent: true })
+    ]);
+    ui.profileResumeImportStatus.textContent = `已识别 ${resumeSource.textLength || 0} 字，新增 ${drafts.response?.created || 0} 条待确认草稿`;
+    setStatus(`简历“${file.name}”已识别，请继续对话并确认事实草稿。`);
+  } catch (error) {
+    ui.profileResumeImportStatus.textContent = error.message || String(error);
+    ui.profileResumeImportStatus.classList.add("warn");
+    setStatus(error.message || String(error), true);
+  } finally {
+    ui.importProfileResume.disabled = false;
+  }
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const value = String(reader.result || "");
+      resolve(value.includes(",") ? value.slice(value.indexOf(",") + 1) : value);
+    });
+    reader.addEventListener("error", () => reject(reader.error || new Error("简历文件读取失败")));
+    reader.readAsDataURL(file);
+  });
+}
+
+function viewSavedCareerContext() {
+  ui.careerContextViewer.open = true;
+  ui.careerContextViewer.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function refreshCareerContextDiagnostics(options = {}) {
@@ -1485,6 +2168,14 @@ function getSelectedResumeTemplateName() {
   return ui.resumeTemplateName?.value || "resume-to-word-campus-product-v1";
 }
 
+function getResumeRenderOptions() {
+  const outputDir = cleanUiText(fields.resumeOutputDir?.value);
+  return {
+    templateName: getSelectedResumeTemplateName(),
+    ...(outputDir ? { outputDir } : {})
+  };
+}
+
 async function saveResumeTemplateSelection() {
   try {
     const savedSettings = await runtimeMessage({
@@ -1514,9 +2205,7 @@ async function prepareRulesResume() {
       options: {
         mode: "rules",
         renderDocx: true,
-        renderOptions: {
-          templateName: getSelectedResumeTemplateName()
-        },
+        renderOptions: getResumeRenderOptions(),
         screeningId: candidate.screeningId || ""
       }
     });
@@ -1556,9 +2245,7 @@ async function runResumeWorkflowForSelectedApplication(applicationId = null) {
         mode: getSelectedAgentExecutionMode(),
         renderDocx: true,
         maxRevisions: 1,
-        renderOptions: {
-          templateName: getSelectedResumeTemplateName()
-        },
+        renderOptions: getResumeRenderOptions(),
         userRules: {
           forceRescreen: false
         }
@@ -1873,6 +2560,130 @@ async function saveAgentExecutionMode() {
   }
 }
 
+async function saveResumeOutputDirectory() {
+  try {
+    const savedSettings = await runtimeMessage({
+      type: "SAVE_SETTINGS",
+      settings: readSettings()
+    });
+    renderSettings(savedSettings);
+    setStatus(savedSettings.resumeOutputDir
+      ? `DOCX 保存目录已更新：${savedSettings.resumeOutputDir}`
+      : "DOCX 将保存到后端默认目录");
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  }
+}
+
+async function refreshBackendModelConfig(options = {}) {
+  try {
+    const result = await runtimeMessage({ type: "GET_MODEL_CONFIG" });
+    renderBackendModelConfig(result.response || {});
+    return result.response || {};
+  } catch (error) {
+    state.modelConfig = null;
+    ui.modelConfigBadge.textContent = "不可用";
+    ui.modelConfigBadge.dataset.tone = "attention";
+    ui.modelConfigStatus.textContent = error.message || String(error);
+    ui.modelConfigStatus.classList.add("error");
+    if (!options.silent) {
+      setStatus(error.message || String(error), true);
+    }
+    return null;
+  }
+}
+
+function renderBackendModelConfig(payload = {}) {
+  const config = payload.config || {};
+  state.modelConfig = config;
+  ui.modelBaseUrl.value = config.baseUrl || "https://api.openai.com/v1";
+  ui.modelName.value = config.model || "";
+  ui.modelWireApi.value = config.wireApi === "chat" ? "chat" : "responses";
+  ui.modelApiKey.value = "";
+  ui.modelApiKey.placeholder = config.hasApiKey
+    ? "已配置，留空表示保留"
+    : "输入模型服务 API Key";
+  ui.modelReasoningEffort.value = config.reasoningEffort || "";
+  ui.modelTimeoutMs.value = Number(config.timeoutMs || 45000);
+  ui.modelMaxRetries.value = Number(config.maxRetries ?? 1);
+  ui.modelConfigBadge.textContent = config.configured ? "已配置" : "待配置";
+  ui.modelConfigBadge.dataset.tone = config.configured ? "complete" : "attention";
+  ui.modelConfigStatus.classList.remove("error");
+  ui.modelConfigStatus.textContent = config.configured
+    ? `${config.model} · ${config.wireApi === "chat" ? "Chat Completions" : "Responses API"} · ${config.source || "local"}`
+    : "请补全 Base URL、模型和 API Key；凭据只保存在后端本地文件。";
+  ui.clearModelApiKey.disabled = !config.hasApiKey;
+}
+
+function readBackendModelConfigForm(options = {}) {
+  return {
+    baseUrl: ui.modelBaseUrl.value,
+    model: ui.modelName.value,
+    wireApi: ui.modelWireApi.value,
+    apiKey: ui.modelApiKey.value,
+    reasoningEffort: ui.modelReasoningEffort.value,
+    timeoutMs: ui.modelTimeoutMs.value,
+    maxRetries: ui.modelMaxRetries.value,
+    clearApiKey: Boolean(options.clearApiKey)
+  };
+}
+
+async function persistBackendModelConfig(options = {}) {
+  const result = await runtimeMessage({
+    type: "SAVE_MODEL_CONFIG",
+    config: readBackendModelConfigForm(options)
+  });
+  renderBackendModelConfig(result.response || {});
+  return result.response || {};
+}
+
+async function saveBackendModelConfig(event) {
+  event?.preventDefault();
+  try {
+    ui.saveModelConfig.disabled = true;
+    await persistBackendModelConfig();
+    setStatus("模型服务配置已保存到后端本地文件");
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    ui.saveModelConfig.disabled = false;
+  }
+}
+
+async function testBackendModelConfig() {
+  try {
+    ui.testModelConfig.disabled = true;
+    ui.modelConfigStatus.textContent = "正在保存配置并测试模型连接";
+    await persistBackendModelConfig();
+    const result = await runtimeMessage({ type: "TEST_MODEL_CONFIG" });
+    const response = result.response || {};
+    renderBackendModelConfig(response);
+    ui.modelConfigStatus.textContent = `连接成功 · ${response.telemetry?.durationMs || 0} ms · ${response.telemetry?.attemptCount || 1} 次请求`;
+    setStatus("模型服务连接测试成功");
+  } catch (error) {
+    ui.modelConfigStatus.textContent = error.message || String(error);
+    ui.modelConfigStatus.classList.add("error");
+    setStatus(error.message || String(error), true);
+  } finally {
+    ui.testModelConfig.disabled = false;
+  }
+}
+
+async function clearBackendModelApiKey() {
+  if (!window.confirm("清除后端本地 API Key？后续模型 Agent 将不可用，直到重新配置。")) {
+    return;
+  }
+  try {
+    ui.clearModelApiKey.disabled = true;
+    await persistBackendModelConfig({ clearApiKey: true });
+    setStatus("后端本地 API Key 已清除");
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    ui.clearModelApiKey.disabled = !state.modelConfig?.hasApiKey;
+  }
+}
+
 async function refreshAgentQualityDiagnostics(options = {}) {
   try {
     const result = await runtimeMessage({
@@ -1911,6 +2722,207 @@ function renderAgentQuality(payload = {}) {
     latest ? `评测 #${latest.id}` : "暂无评测"
   ].join(" · ");
   ui.agentQualityStatus.classList.toggle("error", Boolean(latest && latest.status === "FAILED"));
+}
+
+async function refreshAgentShadowDiagnostics(options = {}) {
+  try {
+    const listed = await runtimeMessage({
+      type: "GET_AGENT_SHADOW_RUNS",
+      options: { limit: 10 }
+    });
+    const latest = listed.response?.runs?.[0] || null;
+    if (!latest) {
+      renderAgentShadow(null);
+      return;
+    }
+    const detail = await runtimeMessage({
+      type: "GET_AGENT_SHADOW_RUN",
+      runId: latest.id
+    });
+    renderAgentShadow(detail.response || null);
+  } catch (error) {
+    renderAgentShadow(null, error);
+    if (!options.silent) {
+      setStatus(error.message || String(error), true);
+    }
+  }
+}
+
+async function startAgentShadowRun() {
+  ui.startAgentShadowRun.disabled = true;
+  ui.agentShadowStatus.textContent = "正在创建 Shadow run";
+  ui.agentShadowStatus.classList.remove("error", "warn");
+  try {
+    const mode = getSelectedAgentExecutionMode();
+    const result = await runtimeMessage({
+      type: "START_AGENT_SHADOW_RUN",
+      options: {
+        mode,
+        limit: 20,
+        topK: 5,
+        samplesPerTopJob: 3,
+        requestDelayMs: mode === "rules" ? 0 : 2500
+      }
+    });
+    const runId = Number(result.response?.run?.id || 0);
+    if (!runId) {
+      throw new Error("Shadow run 未返回有效 ID");
+    }
+    const detail = await runtimeMessage({ type: "GET_AGENT_SHADOW_RUN", runId });
+    renderAgentShadow(detail.response || null);
+    setStatus(`Shadow run #${runId} 已进入队列`);
+  } catch (error) {
+    ui.startAgentShadowRun.disabled = false;
+    ui.agentShadowStatus.textContent = error.message || String(error);
+    ui.agentShadowStatus.classList.add("error");
+    setStatus(error.message || String(error), true);
+  }
+}
+
+async function saveAgentShadowReview(event) {
+  event.preventDefault();
+  const itemId = Number(ui.agentShadowReviewItem.value || 0);
+  if (!itemId) {
+    setStatus("请选择一个 Shadow 岗位", true);
+    return;
+  }
+  ui.saveAgentShadowReview.disabled = true;
+  try {
+    const result = await runtimeMessage({
+      type: "REVIEW_AGENT_SHADOW_ITEM",
+      itemId,
+      review: {
+        label: ui.agentShadowReviewLabel.value,
+        correctedRecommendation: ui.agentShadowCorrectedRecommendation.value,
+        reviewer: "local-user",
+        note: ui.agentShadowReviewNote.value.trim()
+      }
+    });
+    ui.agentShadowReviewNote.value = "";
+    await refreshAgentShadowDiagnostics({ silent: true });
+    setStatus(`Shadow 评审 #${result.response?.review?.id || ""} 已保存`.trim());
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    ui.saveAgentShadowReview.disabled = !Number(ui.agentShadowReviewItem.value || 0);
+  }
+}
+
+function renderAgentShadow(payload, error = null) {
+  if (state.agentShadowPollTimer) {
+    clearTimeout(state.agentShadowPollTimer);
+    state.agentShadowPollTimer = null;
+  }
+  if (error) {
+    state.agentShadowRun = null;
+    ui.agentShadowRunBadge.textContent = "读取失败";
+    ui.agentShadowProgress.textContent = "--";
+    ui.agentShadowSamples.textContent = "--";
+    ui.agentShadowTokens.textContent = "--";
+    ui.agentShadowFailures.textContent = "--";
+    ui.agentShadowStatus.textContent = error.message || String(error);
+    ui.agentShadowStatus.classList.add("error");
+    ui.agentShadowItems.textContent = "Shadow 数据不可用";
+    populateAgentShadowReviewItems([]);
+    ui.startAgentShadowRun.disabled = false;
+    return;
+  }
+  const run = payload?.run || null;
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  state.agentShadowRun = payload || null;
+  if (!run) {
+    ui.agentShadowRunBadge.textContent = "未运行";
+    ui.agentShadowProgress.textContent = "0/0";
+    ui.agentShadowSamples.textContent = "0";
+    ui.agentShadowTokens.textContent = "0";
+    ui.agentShadowFailures.textContent = "0";
+    ui.agentShadowStatus.textContent = "尚无 Shadow run";
+    ui.agentShadowStatus.classList.remove("error", "warn");
+    ui.agentShadowItems.textContent = "暂无 Shadow 结果";
+    populateAgentShadowReviewItems([]);
+    ui.startAgentShadowRun.disabled = false;
+    return;
+  }
+
+  const active = new Set(["QUEUED", "RUNNING"]).has(run.status);
+  const telemetry = run.telemetry || {};
+  const usage = telemetry.usage || {};
+  ui.agentShadowRunBadge.textContent = formatAgentShadowStatus(run.status);
+  ui.agentShadowProgress.textContent = `${Number(run.completedCount || 0)}/${Number(run.selectedCount || 0)}`;
+  ui.agentShadowSamples.textContent = Number(run.sampleCount || 0).toLocaleString("zh-CN");
+  ui.agentShadowTokens.textContent = Number(usage.totalTokens || 0).toLocaleString("zh-CN");
+  ui.agentShadowFailures.textContent = Number(telemetry.failedSampleCount ?? run.failedCount ?? 0).toLocaleString("zh-CN");
+  ui.agentShadowStatus.textContent = [
+    `Run #${run.id}`,
+    formatAgentExecutionMode(run.mode),
+    `${Number(run.modelInvocationCount || 0)} 次模型调用`,
+    run.errorCode || ""
+  ].filter(Boolean).join(" · ");
+  ui.agentShadowStatus.classList.toggle("error", run.status === "FAILED");
+  ui.agentShadowStatus.classList.toggle("warn", run.status === "PARTIAL");
+  ui.startAgentShadowRun.disabled = active;
+
+  renderList(ui.agentShadowItems, items.slice(0, 20), (item) => ({
+    title: `${item.rank ? `#${item.rank} ` : ""}${item.job?.title || "未命名岗位"} · ${item.job?.company || "未知公司"}`,
+    meta: [
+      item.averageMatchScore === null ? "无评分" : `均分 ${Number(item.averageMatchScore).toFixed(1)}`,
+      item.screeningScoreStddev === null ? "" : `σ ${Number(item.screeningScoreStddev).toFixed(2)}`,
+      `${item.successCount || 0}/${item.sampleCount || 0} 成功`,
+      formatScreeningRecommendation(item.recommendation),
+      item.latestReview ? formatAgentShadowReviewLabel(item.latestReview.label) : "待评审"
+    ].filter(Boolean).join(" · ")
+  }), active ? "正在等待首批结果" : "暂无可评审岗位");
+  populateAgentShadowReviewItems(active ? [] : items.filter((item) => item.successCount > 0));
+  if (active) {
+    state.agentShadowPollTimer = setTimeout(() => {
+      refreshAgentShadowDiagnostics({ silent: true });
+    }, 1500);
+  }
+}
+
+function populateAgentShadowReviewItems(items) {
+  const selected = Number(ui.agentShadowReviewItem.value || 0);
+  ui.agentShadowReviewItem.replaceChildren();
+  for (const item of items) {
+    const option = document.createElement("option");
+    option.value = String(item.id);
+    option.textContent = `${item.rank ? `#${item.rank} ` : ""}${item.job?.title || `岗位 ${item.applicationId}`}`;
+    ui.agentShadowReviewItem.appendChild(option);
+  }
+  if (items.some((item) => item.id === selected)) {
+    ui.agentShadowReviewItem.value = String(selected);
+  }
+  const disabled = items.length === 0;
+  ui.agentShadowReviewItem.disabled = disabled;
+  ui.saveAgentShadowReview.disabled = disabled;
+}
+
+function formatAgentShadowStatus(status) {
+  return ({
+    QUEUED: "排队中",
+    RUNNING: "运行中",
+    SUCCEEDED: "已完成",
+    PARTIAL: "部分完成",
+    FAILED: "失败"
+  })[status] || status || "未知";
+}
+
+function formatAgentShadowReviewLabel(label) {
+  return ({
+    CORRECT: "判断正确",
+    FALSE_POSITIVE: "误筛",
+    FALSE_NEGATIVE: "漏筛",
+    BAD_REASON: "理由错误",
+    RISK_MISSED: "遗漏风险"
+  })[label] || label || "待评审";
+}
+
+function formatScreeningRecommendation(value) {
+  return ({
+    auto_prepare: "可准备简历",
+    review_needed: "需复核",
+    skip: "跳过"
+  })[value] || value || "无推荐";
 }
 
 function formatAgentExecutionMode(mode) {
@@ -3171,12 +4183,15 @@ function renderMissingDescriptions(jobs, total, error = null) {
     ui.missingDescriptionCount.textContent = "--";
     ui.missingDescriptions.textContent = error.message || "待补 JD 队列不可用";
     ui.missingDescriptions.classList.add("warn");
+    ui.removeMissingDescriptions.disabled = true;
     return;
   }
 
   ui.missingDescriptions.classList.remove("warn");
   state.missingDescriptionTotal = Number(total || jobs.length || 0);
   ui.missingDescriptionCount.textContent = String(total || jobs.length);
+  ui.removeMissingDescriptions.disabled = state.missingDescriptionTotal === 0
+    || !state.activeApplicationQueueId;
   renderList(ui.missingDescriptions, jobs, (job) => ({
     title: job.title || "未命名岗位",
     meta: [job.company, job.salary, job.location, `${job.descriptionLength || 0} 字`].filter(Boolean).join(" · ")
@@ -3335,12 +4350,26 @@ function renderApplicationDiagnostics(payload, error = null) {
   if (error) {
     state.applications = [];
     state.totalApplications = 0;
+    state.selectedApplicationIds.clear();
     renderWorkbench();
     return;
   }
+  state.applicationQueues = Array.isArray(payload?.queues)
+    ? payload.queues
+    : state.applicationQueues;
+  state.activeApplicationQueueId = Number(
+    payload?.activeQueueId || payload?.queueId || state.activeApplicationQueueId || 0
+  ) || null;
   const applications = Array.isArray(payload?.applications) ? payload.applications : [];
   state.applications = applications;
   state.totalApplications = Number(payload?.totalApplications ?? applications.length);
+  const applicationIds = new Set(applications.map((item) => Number(item.id)).filter(Boolean));
+  for (const selectedId of state.selectedApplicationIds) {
+    if (!applicationIds.has(selectedId)) {
+      state.selectedApplicationIds.delete(selectedId);
+    }
+  }
+  renderApplicationQueueSelect();
   const selectedExists = applications.some((item) => Number(item.id) === Number(state.selectedApplicationId));
   if (!selectedExists) {
     const preferred = applications.find((item) => !new Set(["SUBMITTED", "SKIPPED"]).has(item.status)) || applications[0];
@@ -3352,47 +4381,54 @@ function renderApplicationDiagnostics(payload, error = null) {
   renderWorkbench();
 }
 
+function renderApplicationQueueSelect() {
+  ui.workspaceQueueSelect.replaceChildren();
+  for (const queue of state.applicationQueues) {
+    const option = document.createElement("option");
+    option.value = String(queue.id);
+    option.textContent = `${queue.name} (${queue.completeApplicationCount || 0})`;
+    ui.workspaceQueueSelect.appendChild(option);
+  }
+  ui.workspaceQueueSelect.value = String(state.activeApplicationQueueId || "");
+  ui.workspaceQueueSelect.disabled = state.applicationQueues.length === 0;
+  const activeQueue = getActiveApplicationQueue();
+  ui.queueTitle.textContent = activeQueue?.name || "岗位队列";
+  ui.deleteApplicationQueue.disabled = !activeQueue || activeQueue.isDefault;
+  ui.deleteApplicationQueue.title = activeQueue?.isDefault ? "默认队列必须保留" : "删除当前意向岗位队列";
+}
+
 function renderWorkbench() {
   if (!ui.workspaceApplications) {
     return;
   }
   const applications = Array.isArray(state.applications) ? state.applications : [];
-  const attentionStatuses = new Set(["NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]);
-  const completeStatuses = new Set(["SUBMITTED", "SKIPPED"]);
-  const filter = ui.workspaceFilter.value || "active";
-  const visible = applications.filter((application) => {
-    if (filter === "attention") {
-      return attentionStatuses.has(application.status);
-    }
-    if (filter === "active") {
-      return !completeStatuses.has(application.status);
-    }
-    return true;
-  });
+  const stage = state.workbenchStageFilter || "collected";
+  const filter = ui.workspaceFilter.value || "all";
+  const manualFilter = ui.workspaceManualFilter.value || "all";
+  const visible = applications.filter((application) => (
+    applicationMatchesWorkbenchStage(application, stage)
+    && (filter !== "attention" || applicationNeedsAttention(application, stage))
+    && (stage !== "manual" || manualFilter === "all" || application.manualStatus === manualFilter)
+  ));
+  state.visibleApplicationIds = visible.map((application) => Number(application.id)).filter(Boolean);
   if (visible.length && !visible.some((item) => Number(item.id) === Number(state.selectedApplicationId))) {
     state.selectedApplicationId = visible[0].id;
     state.selectedExecutionPackageApplicationId = visible[0].id;
+  } else if (!visible.length) {
+    state.selectedApplicationId = null;
   }
 
-  const actionableCount = applications.filter((application) => !resolveWorkbenchNextAction(application).disabled).length;
-  const attentionApplicationIds = new Set(
-    applications
-      .filter((application) => attentionStatuses.has(application.status))
-      .map((application) => Number(application.id))
-      .filter(Boolean)
-  );
-  const workflowErrors = Array.isArray(state.workflowErrors) ? state.workflowErrors : [];
-  for (const error of workflowErrors) {
-    if (Number(error.applicationId || 0)) {
-      attentionApplicationIds.add(Number(error.applicationId));
-    }
+  const screeningPassed = applications.filter((item) => item.latestScreeningRecommendation === "auto_prepare").length;
+  const resumeSucceeded = applications.filter((item) => Boolean(item.latestResumeFilePath)).length;
+  const resumeFailed = applications.filter((item) => Boolean(item.latestResumeErrorCode) && !item.latestResumeFilePath).length;
+  const applied = applications.filter((item) => item.manualStatus === "APPLIED").length;
+  ui.workspaceApplicationCount.textContent = String(applications.length);
+  ui.workspaceActionCount.textContent = String(screeningPassed);
+  ui.workspaceReadyCount.textContent = String(resumeSucceeded);
+  ui.workspaceErrorCount.textContent = String(applied);
+  if (!state.queueBatchBusy) {
+    ui.queueResumeBatchStatus.textContent = `成功 ${resumeSucceeded} · 失败 ${resumeFailed}`;
   }
-  const unscopedWorkflowErrorCount = workflowErrors.filter((error) => !Number(error.applicationId || 0)).length;
-  const browserFailureCount = Number(state.browserTaskCounts?.failed || 0);
-  ui.workspaceApplicationCount.textContent = String(state.totalApplications || applications.length);
-  ui.workspaceActionCount.textContent = String(applications.filter((item) => !completeStatuses.has(item.status)).length);
-  ui.workspaceReadyCount.textContent = String(actionableCount);
-  ui.workspaceErrorCount.textContent = String(attentionApplicationIds.size + unscopedWorkflowErrorCount + browserFailureCount);
 
   ui.workspaceApplications.replaceChildren();
   ui.workspaceEmpty.hidden = visible.length > 0;
@@ -3412,11 +4448,24 @@ function renderWorkbench() {
 
     const jobCell = document.createElement("td");
     jobCell.className = "job-cell";
+    const jobLayout = document.createElement("div");
+    jobLayout.className = "job-cell-layout";
+    const select = document.createElement("input");
+    select.className = "application-select";
+    select.type = "checkbox";
+    select.setAttribute("aria-label", `选择 ${application.title || "岗位"}`);
+    select.checked = state.selectedApplicationIds.has(Number(application.id));
+    select.addEventListener("click", (event) => event.stopPropagation());
+    select.addEventListener("change", () => toggleApplicationSelection(application.id, select.checked));
+    const jobText = document.createElement("div");
+    jobText.className = "job-cell-text";
     const title = document.createElement("strong");
     title.textContent = application.title || "未命名岗位";
     const company = document.createElement("span");
     company.textContent = [application.company || "未知公司", application.location, application.salary].filter(Boolean).join(" · ");
-    jobCell.append(title, company);
+    jobText.append(title, company);
+    jobLayout.append(select, jobText);
+    jobCell.append(jobLayout);
 
     const statusCell = document.createElement("td");
     const status = document.createElement("span");
@@ -3427,29 +4476,99 @@ function renderWorkbench() {
 
     const scoreCell = document.createElement("td");
     const screening = getScreeningForApplication(application.id);
-    scoreCell.className = screening ? "match-score" : "match-score muted";
-    scoreCell.textContent = screening ? String(Math.round(Number(screening.matchScore || 0))) : "--";
+    const matchScore = screening?.matchScore ?? application.latestMatchScore;
+    const hasMatchScore = matchScore !== null && matchScore !== undefined && Number.isFinite(Number(matchScore));
+    scoreCell.className = hasMatchScore ? "match-score" : "match-score muted";
+    scoreCell.textContent = hasMatchScore ? String(Math.round(Number(matchScore))) : "--";
 
-    const updatedCell = document.createElement("td");
-    updatedCell.className = "table-secondary";
-    updatedCell.textContent = application.updatedAt ? formatTime(application.updatedAt) : "--";
-    row.append(jobCell, statusCell, scoreCell, updatedCell);
+    const manualCell = document.createElement("td");
+    const manualSelect = document.createElement("select");
+    manualSelect.className = "manual-status-select";
+    manualSelect.setAttribute("aria-label", `${application.title || "岗位"}人工状态`);
+    for (const [value, label] of [["NOT_CONTACTED", "未联系"], ["GREETED", "已打招呼"], ["APPLIED", "已投递"]]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      manualSelect.appendChild(option);
+    }
+    manualSelect.value = application.manualStatus || "NOT_CONTACTED";
+    manualSelect.disabled = !application.latestResumeFilePath;
+    manualSelect.addEventListener("click", (event) => event.stopPropagation());
+    manualSelect.addEventListener("change", (event) => {
+      event.stopPropagation();
+      updateApplicationManualStatus(application.id, manualSelect.value);
+    });
+    manualCell.appendChild(manualSelect);
+
+    const actionCell = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+    actions.appendChild(createWorkbenchRowButton("更多", () => openJobDetailDialog(application.id)));
+    if (application.status === "SKIPPED" && !application.trusted) {
+      actions.appendChild(createWorkbenchRowButton("信任", () => trustFilteredApplication(application.id), "secondary"));
+    }
+    if (application.latestResumeFilePath && normalizeBossJobUrl(application.detailUrl)) {
+      actions.appendChild(createWorkbenchRowButton("打开", () => openBossApplication(application), "primary"));
+    }
+    actionCell.appendChild(actions);
+    row.append(jobCell, statusCell, scoreCell, manualCell, actionCell);
     ui.workspaceApplications.appendChild(row);
   }
+  updateApplicationSelectionControls();
   renderWorkbenchSelection();
+}
+
+function applicationMatchesWorkbenchStage(application, stage) {
+  if (stage === "screened") {
+    return Boolean(application.latestScreeningId) || application.status === "SKIPPED";
+  }
+  if (stage === "resume") {
+    return Boolean(application.latestResumeVersionId || application.latestResumeErrorCode);
+  }
+  if (stage === "manual") {
+    return Boolean(application.latestResumeFilePath);
+  }
+  return application.descriptionLength >= 80;
+}
+
+function applicationNeedsAttention(application, stage) {
+  const errorStatus = new Set(["NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED"]);
+  if (stage === "screened") {
+    return application.latestScreeningRecommendation !== "auto_prepare" || errorStatus.has(application.status);
+  }
+  if (stage === "resume") {
+    return Boolean(application.latestResumeErrorCode) || (!application.latestResumeFilePath && errorStatus.has(application.status));
+  }
+  if (stage === "manual") {
+    return application.manualStatus === "NOT_CONTACTED";
+  }
+  return application.status === "SKIPPED" || errorStatus.has(application.status);
+}
+
+function createWorkbenchRowButton(label, onClick, variant = "secondary") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `${variant} row-action`;
+  button.textContent = label;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    onClick();
+  });
+  return button;
 }
 
 function renderWorkbenchSelection() {
   const application = getSelectedWorkbenchApplication();
   if (!application) {
     ui.nextActionTitle.textContent = "选择一个岗位";
-    ui.workspaceSelectedCompany.textContent = "岗位状态会决定下一步操作";
+    ui.workspaceSelectedCompany.textContent = "查看岗位、筛选和简历信息";
     ui.workspaceSelectedStatus.textContent = "未选择";
     ui.workspaceSelectedStatus.dataset.tone = "complete";
     ui.workspaceSelectedMeta.textContent = "--";
-    ui.workspaceActionHint.textContent = "从左侧岗位队列选择一项。";
+    ui.workspaceActionHint.textContent = "从左侧岗位列表选择一项。";
     ui.workspaceNextAction.textContent = "选择一个岗位";
     ui.workspaceNextAction.disabled = true;
+    ui.workspaceViewDetail.disabled = true;
     renderWorkbenchStageTrack(0);
     return;
   }
@@ -3459,18 +4578,21 @@ function renderWorkbenchSelection() {
   ui.workspaceSelectedCompany.textContent = [application.company, application.location, application.salary].filter(Boolean).join(" · ") || "公司信息未记录";
   ui.workspaceSelectedStatus.textContent = formatApplicationStatus(application.status);
   ui.workspaceSelectedStatus.dataset.tone = getApplicationStatusTone(application.status);
-  ui.workspaceSelectedMeta.textContent = screening
-    ? `匹配 ${formatScore(screening.matchScore)} · 风险 ${formatScore(screening.riskScore)}`
+  const matchScore = screening?.matchScore ?? application.latestMatchScore;
+  const riskScore = screening?.riskScore ?? application.latestRiskScore;
+  ui.workspaceSelectedMeta.textContent = matchScore !== null && matchScore !== undefined
+    ? `匹配 ${formatScore(matchScore)} · 风险 ${formatScore(riskScore)}`
     : `${application.descriptionLength || 0} 字 JD`;
   ui.workspaceActionHint.textContent = action.hint;
   ui.workspaceNextAction.textContent = state.workbenchBusy ? "处理中..." : action.label;
   ui.workspaceNextAction.dataset.action = action.type;
   ui.workspaceNextAction.disabled = state.workbenchBusy || action.disabled;
-  renderWorkbenchStageTrack(getApplicationStage(application.status));
+  ui.workspaceViewDetail.disabled = false;
+  renderWorkbenchStageTrack(getWorkbenchPipelineStage(application));
 }
 
 function renderWorkbenchStageTrack(currentStage) {
-  const labels = ["JD", "评估", "简历", "审核", "沟通"];
+  const labels = ["JD", "筛选", "简历", "人工"];
   ui.workspaceStageTrack.replaceChildren();
   labels.forEach((label, index) => {
     const step = document.createElement("span");
@@ -3494,10 +4616,6 @@ function selectWorkbenchApplication(applicationId) {
   state.selectedExecutionPackageApplicationId = id;
   state.latestSubmissionPageResult = null;
   renderWorkbench();
-  const selected = getSelectedWorkbenchApplication();
-  if (selected?.status === "GREETING_READY" && !getGreetingMessageForApplication(id)) {
-    refreshGreetingDraftForApplication(id).catch(() => {});
-  }
 }
 
 function getSelectedWorkbenchApplication() {
@@ -3505,11 +4623,32 @@ function getSelectedWorkbenchApplication() {
 }
 
 function getScreeningForApplication(applicationId) {
-  return state.screenings.find((item) => Number(item.applicationId) === Number(applicationId)) || null;
+  const screening = state.screenings.find((item) => Number(item.applicationId) === Number(applicationId));
+  if (screening) {
+    return screening;
+  }
+  const application = state.applications.find((item) => Number(item.id) === Number(applicationId));
+  return application?.latestScreeningId ? {
+    id: application.latestScreeningId,
+    applicationId: application.id,
+    matchScore: application.latestMatchScore,
+    riskScore: application.latestRiskScore,
+    recommendation: application.latestScreeningRecommendation
+  } : null;
 }
 
 function getResumeVersionForApplication(applicationId) {
-  return state.resumeVersions.find((item) => Number(item.applicationId) === Number(applicationId)) || null;
+  const version = state.resumeVersions.find((item) => Number(item.applicationId) === Number(applicationId));
+  if (version) {
+    return version;
+  }
+  const application = state.applications.find((item) => Number(item.id) === Number(applicationId));
+  return application?.latestResumeVersionId ? {
+    id: application.latestResumeVersionId,
+    applicationId: application.id,
+    status: application.latestResumeStatus,
+    filePath: application.latestResumeFilePath
+  } : null;
 }
 
 function getGreetingMessageForApplication(applicationId) {
@@ -3539,43 +4678,22 @@ async function refreshGreetingDraftForApplication(applicationId) {
 }
 
 function resolveWorkbenchNextAction(application) {
-  const status = application?.status || "";
-  if (status === "DETAIL_CAPTURED") {
+  if (!application) {
+    return { type: "NONE", label: "选择一个岗位", hint: "先选择岗位查看下一步。", disabled: true };
+  }
+  if (application.status === "SKIPPED" && !application.trusted) {
+    return { type: "TRUST", label: "取消过滤并信任", hint: "绕过当前意向的方向门禁后重新评估，不会直接判定岗位匹配。", disabled: false };
+  }
+  if (!application.latestScreeningId) {
     return { type: "SCREEN", label: "评估岗位", hint: "运行风险门禁和岗位匹配评分。", disabled: false };
   }
-  if (status === "SHORTLISTED") {
-    return { type: "GENERATE_RESUME", label: "生成定制简历", hint: "按当前 JD 生成 DOCX，并完成适配度和真实性检查。", disabled: false };
+  if (application.latestScreeningRecommendation === "auto_prepare" && !application.latestResumeVersionId) {
+    return { type: "GENERATE_RESUME", label: "生成定制简历", hint: "按当前 JD 生成并审核本地 DOCX。", disabled: false };
   }
-  if (["RESUME_DRAFTED", "RESUME_AUDITED"].includes(status)) {
-    return { type: "REVIEW_RESUME", label: "查看并审批", hint: "检查定制简历、证据映射和审核结果。", disabled: false };
+  if (application.latestResumeFilePath) {
+    return { type: "OPEN_BOSS", label: "打开岗位页面", hint: "系统只导航到岗位；打招呼、上传和投递由用户完成。", disabled: !normalizeBossJobUrl(application.detailUrl) };
   }
-  if (status === "GREETING_READY") {
-    return getGreetingMessageForApplication(application.id)
-      ? { type: "SEND_GREETING", label: "发送一次", hint: "打开双重确认，仅对当前岗位发送一次。", disabled: false }
-      : { type: "PREPARE_GREETING", label: "准备打招呼", hint: "生成当前岗位的打招呼草稿和 dry-run 任务。", disabled: false };
-  }
-  if (status === "RESUME_UNLOCKED") {
-    return { type: "PREPARE_EXECUTION", label: "准备投递复核", hint: "生成本地执行包和投递前检查清单。", disabled: false };
-  }
-  if (status === "SUBMISSION_READY") {
-    return { type: "REVIEW_EXECUTION", label: "查看投递清单", hint: "进入高级诊断复核执行包与页面证据。", disabled: false };
-  }
-  if (["NEEDS_USER_REVIEW", "NEEDS_MANUAL_ACTION", "FAILED", "SCORED"].includes(status)) {
-    return { type: "REVIEW_ISSUE", label: status === "SCORED" ? "查看评分" : "查看并处理", hint: application.statusReason || "查看错误日志和岗位时间线后决定如何继续。", disabled: false };
-  }
-  if (status === "LIST_CAPTURED") {
-    return { type: "WAIT_FOR_JD", label: "等待补齐 JD", hint: "该岗位需要先在 BOSS 页面加载出完整职位描述。", disabled: true };
-  }
-  if (["GREETING_SENT", "CHAT_OPENED"].includes(status)) {
-    return { type: "WAIT_FOR_REPLY", label: "等待沟通", hint: "打招呼已发送，等待对方回复或简历入口解锁。", disabled: true };
-  }
-  if (status === "SUBMITTED") {
-    return { type: "COMPLETE", label: "已完成投递", hint: "该岗位已记录为完成投递。", disabled: true };
-  }
-  if (status === "SKIPPED") {
-    return { type: "COMPLETE", label: "已跳过", hint: application.statusReason || "该岗位已被规则或人工决定排除。", disabled: true };
-  }
-  return { type: "NONE", label: "暂无可用操作", hint: application.statusReason || "当前状态没有自动操作。", disabled: true };
+  return { type: "DETAIL", label: "查看完整信息", hint: application.statusReason || "查看筛选、简历或失败详情。", disabled: false };
 }
 
 async function runWorkbenchNextAction() {
@@ -3588,13 +4706,20 @@ async function runWorkbenchNextAction() {
   renderWorkbenchSelection();
   try {
     if (action.type === "SCREEN") {
+      const queue = getActiveApplicationQueue();
       const result = await runtimeMessage({
         type: "SCREEN_APPLICATION_BATCH",
         options: {
+          queueId: queue?.id,
           applicationIds: [application.id],
-          mode: "rules",
+          mode: getSelectedAgentExecutionMode(),
           limit: 1,
-          continueOnError: false
+          continueOnError: false,
+          userRules: {
+            excludedDirections: fields.riskGateEnabled.checked
+              ? parseDelimitedList(fields.excludedDirections.value)
+              : []
+          }
         }
       });
       await Promise.all([
@@ -3610,18 +4735,15 @@ async function runWorkbenchNextAction() {
     } else if (action.type === "GENERATE_RESUME") {
       await runResumeWorkflowForSelectedApplication(application.id);
       await refreshApplicationDiagnostics({ silent: true });
+    } else if (action.type === "TRUST") {
+      await trustFilteredApplication(application.id);
+    } else if (action.type === "OPEN_BOSS") {
+      openBossApplication(application);
+    } else if (action.type === "DETAIL") {
+      openJobDetailDialog(application.id);
     } else if (action.type === "REVIEW_RESUME") {
       await openResumeReviewForApplication(application.id);
-    } else if (action.type === "PREPARE_GREETING") {
-      await prepareGreetingDryRun(application.id);
       await refreshApplicationDiagnostics({ silent: true });
-    } else if (action.type === "SEND_GREETING") {
-      openRealGreetingDialog(application);
-    } else if (action.type === "PREPARE_EXECUTION") {
-      await prepareExecutionPackageForSelectedApplication(application.id);
-      await refreshApplicationDiagnostics({ silent: true });
-    } else if (action.type === "REVIEW_EXECUTION" || action.type === "REVIEW_ISSUE") {
-      await openAdvancedDiagnosticsForApplication(application.id);
     }
   } catch (error) {
     setStatus(error.message || String(error), true);
@@ -3782,20 +4904,17 @@ function getApplicationStatusTone(value) {
   return "complete";
 }
 
-function getApplicationStage(value) {
-  if (["LIST_CAPTURED"].includes(value)) {
-    return 0;
-  }
-  if (["DETAIL_CAPTURED", "SCORED", "SHORTLISTED", "NEEDS_USER_REVIEW", "FAILED"].includes(value)) {
-    return 1;
-  }
-  if (["RESUME_DRAFTED"].includes(value)) {
-    return 2;
-  }
-  if (["RESUME_AUDITED"].includes(value)) {
+function getWorkbenchPipelineStage(application = {}) {
+  if (application.manualStatus === "GREETED" || application.manualStatus === "APPLIED") {
     return 3;
   }
-  return 4;
+  if (application.latestResumeVersionId || application.latestResumeFilePath) {
+    return 2;
+  }
+  if (application.latestScreeningId || application.status === "SKIPPED") {
+    return 1;
+  }
+  return 0;
 }
 
 function renderScreeningDiagnostics(diagnostics, error = null) {
@@ -5093,6 +6212,27 @@ function formatRecommendation(value) {
     skip: "跳过"
   };
   return labels[value] || value || "未建议";
+}
+
+function formatManualApplicationStatus(value) {
+  const labels = {
+    NOT_CONTACTED: "未联系",
+    GREETED: "已打招呼",
+    APPLIED: "已投递"
+  };
+  return labels[value] || "未联系";
+}
+
+function normalizeBossJobUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol !== "https:" || !/(^|\.)zhipin\.com$/i.test(url.hostname)) {
+      return "";
+    }
+    return url.toString();
+  } catch {
+    return "";
+  }
 }
 
 function formatAgentRunStatus(value) {

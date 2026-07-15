@@ -36,6 +36,10 @@ async function main() {
       fullPage: true
     });
 
+    await page.locator("#workspaceTab").click();
+    await page.locator('[data-workbench-stage="resume"]').click();
+    await page.waitForFunction(() => document.querySelector("#agentExecutionMode")?.getBoundingClientRect().width > 0);
+    const resumeStage = await inspectSettings(page);
     await page.locator("#agentExecutionMode").selectOption("auto");
     await page.waitForFunction(() => window.__bossFindWorkspaceSmoke.calls.some((call) => call.type === "SAVE_SETTINGS"));
     const savedMode = await page.locator("#agentExecutionMode").inputValue();
@@ -48,8 +52,11 @@ async function main() {
     });
     const calls = await page.evaluate(() => window.__bossFindWorkspaceSmoke.calls);
     const checks = {
-      agentQualityIsInSettings: desktop.settingsVisible && desktop.qualityVisible,
-      hybridModeLoadsFromSettings: desktop.mode === "hybrid",
+      advancedQualityPanelStaysHiddenFromSettings: desktop.settingsVisible && !desktop.qualityVisible,
+      executionModeLivesInResumeStage: resumeStage.workspaceVisible
+        && resumeStage.activeStage === "resume"
+        && resumeStage.modeVisible,
+      hybridModeLoadsFromSettings: resumeStage.mode === "hybrid",
       qualityMetricsRender: desktop.invocations === "12"
         && desktop.tokens.includes("3")
         && desktop.latency === "1450 ms"
@@ -72,6 +79,7 @@ async function main() {
       ok,
       checks,
       desktop,
+      resumeStage,
       mobile,
       savedMode,
       screenshots: [
@@ -93,7 +101,10 @@ function inspectSettings(page) {
     const inside = (rect) => !rect || (rect.left >= -1 && rect.right <= viewportWidth + 1);
     return {
       settingsVisible: !document.querySelector("#settingsPanel")?.hidden,
+      workspaceVisible: !document.querySelector("#workspacePanel")?.hidden,
+      activeStage: document.querySelector(".pipeline-stat.is-active")?.dataset.workbenchStage || "",
       qualityVisible: Boolean(quality && quality.width > 0 && quality.height > 0),
+      modeVisible: Boolean(mode && mode.width > 0 && mode.height > 0),
       mode: document.querySelector("#agentExecutionMode")?.value || "",
       invocations: document.querySelector("#agentQualityInvocations")?.textContent || "",
       tokens: document.querySelector("#agentQualityTokens")?.textContent || "",

@@ -15,7 +15,7 @@ function main() {
   const serverJs = read("server/src/server.js");
   const profileServiceJs = read("server/src/services/profile-service.js");
   const packageJson = read("package.json");
-  const readme = read("README.md");
+  const readme = read("README.zh-CN.md");
   const workflowDoc = read("docs/03_AGENT_WORKFLOW.md");
   const planDoc = read("docs/04_DEVELOPMENT_PLAN.md");
 
@@ -63,7 +63,7 @@ function main() {
       && optionsJs.includes("careerContextPreview")
       && optionsJs.includes("truncateText(context.markdown"),
     optionsSupportsQuestionAnswers: optionsHtml.includes("ProfileAgent 追问回答")
-      && optionsHtml.includes("带回答重新生成")
+      && optionsHtml.includes("根据回答重新整理")
       && optionsJs.includes("readCareerContextAnswers")
       && optionsJs.includes("renderCareerContextAnswerForm")
       && optionsJs.includes("includeAnswers")

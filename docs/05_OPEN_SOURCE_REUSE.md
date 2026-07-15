@@ -13,7 +13,7 @@
 
 结论：GitHub 上有若干相关项目，npm 没有发现成熟、直接适配 BOSS 闭环的包。JoB_Find 应复用成熟通用库，参考相关项目思路，但不直接复制许可证不兼容项目代码。
 
-当前最新路线已经调整为：先做 M1 BrowserExecutor 技术选型 POC，再决定 M2 SQLite 和后续 Agent 层。下面早期关于 Tampermonkey/FastAPI 的 MVP 建议仅保留为历史调研背景；当前可运行原型是 Chrome MV3 Extension + Node 本地后端，M1 首选验证 Firecrawl，LocalPlaywright 作为复杂动作兜底。
+M1-M17 已完成技术选型和主流程收敛。当前运行时是 Chrome MV3 Extension + Node.js 24 本地后端 + SQLite v18 + LangGraph；Firecrawl 和 Local Playwright 的早期 POC 仅保留为选型证据，不再是普通用户主执行器候选。
 
 ## 2. 候选项目
 
@@ -153,10 +153,10 @@
 
 ### 3.0 BrowserExecutor
 
-- Firecrawl：M1 首选验证，重点是 profile、interact、岗位详情采集、打招呼 dry-run、投递入口检测。
-- @mendable/firecrawl-js：官方 Node SDK，许可证 MIT。POC 阶段暂用 REST 直连，稳定后可换 SDK。
-- Playwright：文件上传、复杂本地浏览器控制、Firecrawl 不适合时的兜底。当前 npm `playwright` 版本 1.61.1，许可证 Apache-2.0，已作为 devDependency 引入。
-- Chrome Extension Manifest V3：当前已实现原型，继续作为 fallback 和页面状态读取工具。
+- Chrome Extension Manifest V3：当前 BOSS 登录页和完整 JD 采集的唯一主路径。
+- Firecrawl：只保留公开或静态页面 scrape 辅助候选，不承载 BOSS 登录态交互。
+- @mendable/firecrawl-js：官方 Node SDK，MIT；当前主流程未引入，避免为未验证的辅助路径增加运行时依赖。
+- Playwright：用于扩展 UI 回归和隔离 POC，不控制用户日常 BOSS 会话，不执行上传或投递。
 - 不采用 patchright/undetected 类方案，因为其定位是规避检测，不符合本项目停止线。
 
 ### 3.1 后端
@@ -341,16 +341,17 @@ M9.5 投递准备本地复核决策复用检查：
 
 ### 3.3 文档生成
 
-- python-docx：基础 DOCX 操作。
-- docxtpl：模板填充。
-- LibreOffice headless：DOCX 到 PDF。
-- pypdf：PDF 页数检查。
+- docx 9.7.1：当前直接依赖，用于固定模板注册表和 DOCX 生成，许可证 MIT。
+- mammoth 1.12.0：当前用于 DOCX 文本提取，许可证 BSD-2-Clause。
+- unpdf 1.6.2：当前用于 PDF 文本提取，许可证 MIT。
+- LibreOffice headless：仅作为可选 PDF/页数诊断候选，不是当前运行时硬依赖。
 
 ### 3.4 浏览器
 
-- Tampermonkey：MVP。
-- Chrome Extension Manifest V3：稳定版。
-- Playwright：测试或可选自动化，不作为 MVP 首选。
+- Chrome Extension Manifest V3：当前稳定版采集和工作台入口。
+- Native Messaging：只用于受限后端启动器，不用于 BOSS 页面动作。
+- Playwright：测试和隔离 POC。
+- Tampermonkey：历史原型思路，不再维护为产品入口。
 
 ### 3.5 导出
 
@@ -361,25 +362,37 @@ M9.5 投递准备本地复核决策复用检查：
 
 ### 4.1 MVP 选择
 
-历史建议曾考虑采用：
+当前已采用：
 
-```text
-Tampermonkey + FastAPI + SQLite + OpenAI-compatible LLM + DOCX/PDF Renderer
-```
+~~~text
+Chrome MV3 Extension
++ Node.js 24 standard HTTP server
++ node:sqlite / schema v18
++ @langchain/langgraph
++ openai + zod
++ docx + mammoth + unpdf
++ restricted Native Messaging Host packaged with @yao-pkg/pkg
+~~~
 
-原因：
-
-当前不再把它作为立即实施路线，原因是仓库已经有 Chrome MV3 + Node 原型，且用户现在明确要求先跑通 Firecrawl/BrowserExecutor 技术选型。后续若 Chrome MV3 维护成本过高，Tampermonkey 仍可作为轻量 fallback 思路。
+这套组合复用了成熟的模型传输、Schema 校验、图编排、文档处理和可执行文件打包能力，岗位去重、队列作用域、证据门禁和状态所有权仍由本项目实现。
 
 ### 4.2 暂不采用
 
-暂不采用完整 Playwright 全自动控制作为主路线。
+不采用完整 Playwright 或远程浏览器全自动控制作为主路线。
 
 原因：
 
 - 登录态、验证码、风控和页面变化维护成本高。
 - 对开源用户的环境要求更高。
 - 容易偏离合规边界。
+
+不采用 Firecrawl 作为登录态主执行器。
+
+原因：
+
+- profile/scrape 可用不等于 BOSS interact 稳定。
+- 无法替代用户当前 Chrome 中已登录、按岗位激活后才刷新的详情 DOM。
+- 当前产品只需读取和导航，不需要远程执行打招呼、上传或投递。
 
 暂不采用纯浏览器端 LLM 调用。
 
@@ -946,6 +959,18 @@ Selected integration:
 - Reuse the M13 anonymous fixture for both deterministic CI and repeated live-model runs.
 - Keep real-model evaluation outside CI because it requires credentials, external availability, time, and token spend.
 
+### M16.1 human feedback and Shadow review
+
+Candidates checked on 2026-07-13:
+
+- `argilla-io/argilla`: LLM/data feedback collaboration, Apache-2.0, 5k+ GitHub stars. Rejected because it requires a separate Python service and data model.
+- `HumanSignal/label-studio`: general annotation platform, Apache-2.0, 27k+ stars. Rejected as too broad and operationally heavy for one local job-review workflow.
+- `langfuse/langfuse`: LLM observability, evaluation, and feedback, 31k+ stars. Rejected because it adds an external service and a second runtime data store.
+- `comet-ml/opik`: Agent tracing and evaluation, Apache-2.0, 20k+ stars. Rejected for the same deployment and data-ownership cost.
+- `promptfoo/promptfoo`: MIT, 23k+ stars, mature declarative prompt/Agent evaluation. Rejected as the core Shadow runner because application state, deterministic risk gates, confirmed-fact ownership, and evidence-bound recommendations remain project-specific.
+
+Selected integration: reuse the common pattern of versioned inputs, per-sample outcomes, human labels, and failure-case promotion without adding a runtime dependency. M16.1 stores this contract in the existing Node/SQLite backend and renders it in options advanced diagnostics. A non-`CORRECT` review becomes a local promotion candidate; anonymization and fixed-dataset edits remain explicit later steps.
+
 Provider finding:
 
 - The local credential file selected `gpt-5.5/responses`, but the provider returned 502 for HTTP Responses and 426 for WebSocket upgrades.
@@ -971,3 +996,41 @@ Sources checked:
 - [LangChain.js](https://github.com/langchain-ai/langchainjs)
 - [LangChain OpenAI npm](https://www.npmjs.com/package/@langchain/openai)
 - [ws](https://github.com/websockets/ws)
+
+## M17 Native Host and runtime onboarding reuse check
+
+Candidates were rechecked on GitHub/npm on 2026-07-14:
+
+- [yao-pkg/pkg](https://github.com/yao-pkg/pkg): active MIT fork, npm @yao-pkg/pkg 6.21.0, designed to package a Node entrypoint into one executable. Selected.
+- [vercel/pkg](https://github.com/vercel/pkg): mature and widely used but archived. Rejected in favor of the maintained fork.
+- [nexe](https://github.com/nexe/nexe): MIT executable packager, but the current npm release is a 5.0.0 beta and its source-build/runtime download path adds more Windows toolchain risk for this project.
+- A custom PowerShell or batch launcher: minimal dependency count, but it would require Node to be installed correctly for every user and would make quoting, process ownership and arbitrary-command prevention harder to standardize.
+- Electron/Tauri: capable desktop shells, but far beyond the needs of a two-command Native Messaging Host and would add packaging and update surface.
+- Firecrawl: unrelated to local process startup and unable to replace the current Chrome login tab; rejected for this responsibility.
+
+Selected integration:
+
+- Install @yao-pkg/pkg as a development dependency and keep native-host/index.js as a small protocol adapter.
+- Build one Windows executable through scripts/build-native-host.js.
+- Register a per-user Chrome/Edge Native Messaging manifest through scripts/install-native-host.ps1.
+- Restrict messages to STATUS and START_BACKEND; do not expose shell, path, argument or environment forwarding.
+- Resolve and launch only the fixed repository server/src/server.js entrypoint.
+- Keep API keys in the backend configuration; the Native Host never receives or returns them.
+
+The initial package build could not fetch its runtime through the default path. Instead of compiling Node from source or replacing the packager, the build used the exact official yao-pkg/pkg-fetch v3.6 Windows asset node-v22.23.1-win-x64, verified with SHA-256 588055f6dd40513c16ecf705f9db5e4744eb8b9074e4979246a306b2d7315d1d, and preseeded it in the local pkg cache. This is a reproducible build-time workaround; the downloaded runtime is not application data and is not committed.
+
+Why a hand-written launcher was rejected:
+
+- The Native Messaging protocol requires length-prefixed JSON over stdio, lifecycle handling and deterministic output.
+- A packaged Node process lets the project test the exact protocol implementation without requiring an interactive shell.
+- A fixed command allowlist sharply reduces the security surface compared with a generic launcher.
+
+Validation:
+
+~~~powershell
+npm run native:build
+npm run m17:native-host:smoke
+npm run m17:popup-runtime:smoke
+~~~
+
+The host is only runtime onboarding. It does not read BOSS pages, own browser login state, generate resumes, or execute greeting/upload/application actions.

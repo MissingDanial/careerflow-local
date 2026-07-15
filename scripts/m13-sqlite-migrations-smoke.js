@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -19,10 +20,14 @@ function main() {
     const upgrade = runUpgradeScenario(path.join(rootDir, "upgrade"));
     const bootstrap = runCurrentVersionBootstrapScenario(path.join(rootDir, "bootstrap"));
     const recovery = runRecoveryScenario(path.join(rootDir, "recovery"));
+    const lineEndings = runLineEndingPortabilityScenario(path.join(rootDir, "line-endings"));
     const checks = {
       upgradesVersionSevenToCurrent: upgrade.finalVersion === SCHEMA_VERSION
         && upgrade.currentVersion === 7
-        && upgrade.appliedVersions.join(",") === "8,9,10,11,12,13,14,15",
+        && upgrade.appliedVersions.join(",") === Array.from(
+          { length: SCHEMA_VERSION - 7 },
+          (_, index) => index + 8
+        ).join(","),
       createsPreMigrationBackup: upgrade.backupCreated
         && upgrade.backupExists
         && upgrade.backupVersion === 7,
@@ -46,7 +51,15 @@ function main() {
         && upgrade.hasProfileContextVersions
         && upgrade.hasProfileEntityRevisions
         && upgrade.hasAgentRunModelTelemetry
-        && upgrade.hasAgentEvaluationRuns,
+        && upgrade.hasAgentEvaluationRuns
+        && upgrade.hasAgentShadowRuns
+        && upgrade.hasAgentShadowItems
+        && upgrade.hasAgentShadowSamples
+        && upgrade.hasAgentShadowReviews
+        && upgrade.hasApplicationQueues
+        && upgrade.hasApplicationQueueItems
+        && upgrade.hasManualApplicationStatus
+        && upgrade.hasQueueTrustMarker,
       bootstrapsHistoryForCurrentLegacyDatabase: bootstrap.currentVersion === SCHEMA_VERSION
         && bootstrap.finalVersion === SCHEMA_VERSION
         && bootstrap.appliedCount === 0
@@ -66,7 +79,12 @@ function main() {
         && !recovery.hasPartialTable
         && !recovery.hasMigrationHistory,
       failureKeepsBackupForInspection: recovery.backupExists
-        && recovery.backupVersion === 11
+        && recovery.backupVersion === 11,
+      acceptsPortableLineEndingChecksums: lineEndings.reopenedVersion === SCHEMA_VERSION
+        && lineEndings.storedLfChecksum !== lineEndings.legacyCrlfChecksum,
+      acceptsLegacyLineEndingChecksums: lineEndings.acceptedLegacyCrlfChecksum,
+      rejectsSemanticMigrationChanges: lineEndings.semanticErrorCode === "SQLITE_MIGRATION_CHECKSUM_MISMATCH"
+        && lineEndings.semanticErrorVersion === SCHEMA_VERSION
     };
 
     console.log(JSON.stringify({
@@ -119,7 +137,15 @@ function runUpgradeScenario(dataDir) {
       hasProfileContextVersions: tableExists(store.database, "profile_context_versions"),
       hasProfileEntityRevisions: tableExists(store.database, "profile_entity_revisions"),
       hasAgentRunModelTelemetry: columnExists(store.database, "agent_runs", "model_telemetry_json"),
-      hasAgentEvaluationRuns: tableExists(store.database, "agent_evaluation_runs")
+      hasAgentEvaluationRuns: tableExists(store.database, "agent_evaluation_runs"),
+      hasAgentShadowRuns: tableExists(store.database, "agent_shadow_runs"),
+      hasAgentShadowItems: tableExists(store.database, "agent_shadow_items"),
+      hasAgentShadowSamples: tableExists(store.database, "agent_shadow_samples"),
+      hasAgentShadowReviews: tableExists(store.database, "agent_shadow_reviews"),
+      hasApplicationQueues: tableExists(store.database, "application_queues"),
+      hasApplicationQueueItems: tableExists(store.database, "application_queue_items"),
+      hasManualApplicationStatus: columnExists(store.database, "applications", "manual_status"),
+      hasQueueTrustMarker: columnExists(store.database, "application_queue_items", "trusted_at")
     };
   } finally {
     store.close();
@@ -195,6 +221,97 @@ function runRecoveryScenario(dataDir) {
   } finally {
     restored.close();
   }
+}
+
+function runLineEndingPortabilityScenario(rootDir) {
+  const dataDir = path.join(rootDir, "data");
+  const lfMigrationsDir = path.join(rootDir, "migrations-lf");
+  const crlfMigrationsDir = path.join(rootDir, "migrations-crlf");
+  const changedMigrationsDir = path.join(rootDir, "migrations-changed");
+  fs.mkdirSync(dataDir, { recursive: true });
+  writeMigrationVariant(lfMigrationsDir, "\n");
+  writeMigrationVariant(crlfMigrationsDir, "\r\n");
+
+  const initialStore = createJobStore({ dataDir, migrationsDir: lfMigrationsDir });
+  let storedLfChecksum;
+  try {
+    storedLfChecksum = initialStore.database.prepare(`
+      SELECT checksum FROM schema_migrations WHERE version = 1
+    `).get().checksum;
+  } finally {
+    initialStore.close();
+  }
+
+  const firstMigration = fs.readdirSync(crlfMigrationsDir)
+    .find((fileName) => fileName.startsWith("001_"));
+  const legacyCrlfChecksum = checksum(fs.readFileSync(
+    path.join(crlfMigrationsDir, firstMigration),
+    "utf8"
+  ));
+  const database = new DatabaseSync(path.join(dataDir, "boss_find.sqlite3"));
+  try {
+    database.prepare(`
+      UPDATE schema_migrations SET checksum = ? WHERE version = 1
+    `).run(legacyCrlfChecksum);
+  } finally {
+    database.close();
+  }
+
+  const reopenedStore = createJobStore({ dataDir, migrationsDir: crlfMigrationsDir });
+  let reopenedVersion;
+  let acceptedLegacyCrlfChecksum;
+  try {
+    reopenedVersion = readUserVersion(reopenedStore.database);
+    acceptedLegacyCrlfChecksum = reopenedStore.database.prepare(`
+      SELECT checksum FROM schema_migrations WHERE version = 1
+    `).get().checksum === legacyCrlfChecksum;
+  } finally {
+    reopenedStore.close();
+  }
+
+  fs.cpSync(lfMigrationsDir, changedMigrationsDir, { recursive: true });
+  const latestMigration = fs.readdirSync(changedMigrationsDir)
+    .find((fileName) => fileName.startsWith(`${String(SCHEMA_VERSION).padStart(3, "0")}_`));
+  fs.appendFileSync(
+    path.join(changedMigrationsDir, latestMigration),
+    "\nCREATE TABLE checksum_semantic_change (id INTEGER PRIMARY KEY);\n",
+    "utf8"
+  );
+  let semanticFailure;
+  try {
+    createJobStore({ dataDir, migrationsDir: changedMigrationsDir });
+  } catch (error) {
+    semanticFailure = error;
+  }
+  if (!semanticFailure) {
+    throw new Error("Expected a semantic migration change to fail checksum validation.");
+  }
+
+  return {
+    storedLfChecksum,
+    legacyCrlfChecksum,
+    reopenedVersion,
+    acceptedLegacyCrlfChecksum,
+    semanticErrorCode: semanticFailure.code,
+    semanticErrorVersion: semanticFailure.version
+  };
+}
+
+function writeMigrationVariant(targetDir, lineEnding) {
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const fileName of fs.readdirSync(MIGRATIONS_DIR)) {
+    if (!fileName.endsWith(".sql")) {
+      continue;
+    }
+    const source = fs.readFileSync(path.join(MIGRATIONS_DIR, fileName), "utf8");
+    const normalized = source.replace(/\r\n?|\n/g, "\n");
+    const variant = lineEnding === "\n" ? normalized : normalized.replace(/\n/g, lineEnding);
+    fs.writeFileSync(path.join(targetDir, fileName), variant, "utf8");
+  }
+}
+
+function checksum(sql) {
+  return crypto.createHash("sha256").update(sql.trim(), "utf8").digest("hex");
 }
 
 function createLegacyDatabase(dbPath, version) {
