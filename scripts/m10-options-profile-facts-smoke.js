@@ -14,7 +14,6 @@ function main() {
   const backgroundJs = read("extension/src/background.js");
   const serverJs = read("server/src/server.js");
   const packageJson = read("package.json");
-  const readme = read("README.zh-CN.md");
   const planDoc = read("docs/04_DEVELOPMENT_PLAN.md");
 
   const backgroundFactSlice = sliceSource(
@@ -92,9 +91,8 @@ function main() {
       && packageJson.includes("m10:options-profile-facts:smoke"),
     packageRunsUiSmoke: packageJson.includes("m10-options-profile-facts-ui-smoke.js")
       && packageJson.includes("m10:options-profile-facts-ui:smoke"),
-    docsMentionOptionsFactDrafts: readme.includes("M10.2f Profile Fact Confirmation")
-      && readme.includes("settings page")
-      && planDoc.includes("M10.2f Profile Fact Confirmation")
+    docsMentionOptionsFactDrafts: planDoc.includes("M10.2f Profile Fact Confirmation")
+      && planDoc.includes("settings page")
       && planDoc.includes("ProfileAgent settings UI")
   };
 

@@ -176,7 +176,6 @@ function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
   const orchestratorJs = read("server/src/workflow-orchestrator.js");
-  const readme = read("README.zh-CN.md");
   const docsWorkflow = read("docs/03_AGENT_WORKFLOW.md");
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
   const docsReuse = read("docs/05_OPEN_SOURCE_REUSE.md");
@@ -195,8 +194,7 @@ function runWiringChecks() {
       packageRunsM10SmokeAndCheck: packageJson.includes("m10-workflow-orchestrator-smoke.js")
         && packageJson.includes("m10:workflow-orchestrator:smoke")
         && packageJson.includes("check:syntax"),
-      docsRecordM10: readme.includes("M10.1")
-        && docsWorkflow.includes("M10.1")
+      docsRecordM10: docsWorkflow.includes("M10.1")
         && docsPlan.includes("M10.1")
         && docsReuse.includes("M10.1")
         && docsBoss.includes("M10.1")

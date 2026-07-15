@@ -150,7 +150,6 @@ function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
   const migrationSql = read("server/migrations/008_workflow_observability.sql");
-  const readme = read("README.zh-CN.md");
   const docsWorkflow = read("docs/03_AGENT_WORKFLOW.md");
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
   const docsReuse = read("docs/05_OPEN_SOURCE_REUSE.md");
@@ -165,8 +164,7 @@ function runWiringChecks() {
         && storeJs.includes("recordWorkflowEvent"),
       packageRunsM10ObservabilitySmokeAndCheck: packageJson.includes("m10-observability-smoke.js")
         && packageJson.includes("m10:observability:smoke"),
-      docsRecordM10Observability: readme.includes("M10.2b")
-        && docsWorkflow.includes("M10.2b")
+      docsRecordM10Observability: docsWorkflow.includes("M10.2b")
         && docsPlan.includes("M10.2b")
         && docsReuse.includes("M10.2b")
     }

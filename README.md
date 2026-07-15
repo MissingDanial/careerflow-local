@@ -4,85 +4,34 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-CareerFlow Local is a local-first job application workbench for BOSS Zhipin. It combines a Chrome/Edge MV3 extension, a Node.js backend, SQLite persistence, a persistent candidate profile, and an evidence-gated LangGraph resume workflow.
+CareerFlow Local is a local-first BOSS Zhipin job application workbench. It collects complete job descriptions from the user's signed-in browser, organizes jobs into intent queues, maintains a reusable candidate profile, and runs an evidence-gated Agent workflow that produces tailored DOCX resumes.
 
-The current product path is:
+> Current boundary: the project prepares and audits applications locally. Greeting, resume upload, confirmation, and final submission remain user actions.
 
-```text
-Collect complete JDs from the signed-in BOSS page
--> organize jobs into intent queues
--> reject unwanted directions with a risk gate
--> score job/profile fit
--> generate a tailored DOCX resume
--> verify every resume claim and render result
--> let the user contact and apply manually
-```
+## What Works Today
 
-The extension UI is currently in Simplified Chinese. This README includes the Chinese labels used in the UI so an English reader can still complete the setup and first workflow.
-
-## Project Status
-
-The repository is a working local prototype, not a hosted service.
-
-Available today:
-
-- Capture currently rendered job cards from a signed-in BOSS job list.
-- Open visible job details sequentially to complete missing descriptions and sync them to SQLite.
-- Maintain separate job-intent queues, such as Product and Algorithm, while globally deduplicating jobs.
-- Upload a resume and maintain a reusable, versioned career profile through ProfileAgent conversations and confirmed fact drafts.
-- Run ScreeningAgent, ResumeAgent, ResumeFitEvaluator, ClaimVerifier, ResumeRevisionAgent, and AuditAgent through one traceable LangGraph workflow.
-- Generate a two-page-oriented DOCX resume, run render QA, and keep claim-to-source mappings.
-- Cache a completed semantic workflow and route only resume generation/revision to a model while deterministic quality gates remain local.
-- Record manual greeting/application progress without claiming that BOSS actions succeeded automatically.
-
-Deliberate boundaries:
-
-- The project does not bypass login, CAPTCHA, security checks, or platform rate limits.
-- Real resume upload and application submission remain disabled.
-- A single-job real greeting canary exists for internal testing but is disabled by default and is not part of the normal user path.
-- Collection depends on the DOM that BOSS has rendered for the signed-in user. Selector changes or security pages can pause the workflow.
-- API keys and local career data are not committed, but JD/profile content used by a model is sent to the model provider configured by the user.
-
-## Architecture
-
-```mermaid
-flowchart LR
-    B["Signed-in BOSS page"] --> E["Chrome / Edge MV3 extension"]
-    E --> S["Local Node.js backend"]
-    S --> D["SQLite + local files"]
-    D --> P["Persistent candidate profile"]
-    D --> W["LangGraph resume workflow"]
-    W --> Q["Fit + Claim + Audit gates"]
-    Q --> R["Local DOCX output"]
-    R --> U["Manual contact and application"]
-```
-
-Main runtime components:
-
-| Path | Responsibility |
+| Area | Current capability |
 | --- | --- |
-| `extension/` | BOSS page capture, queue controls, workbench, profile and settings UI |
-| `server/src/server.js` | Local HTTP API on `127.0.0.1:8787` |
-| `server/src/sqlite-store.js` | SQLite persistence and workflow records |
-| `server/src/resume-workflow-graph.js` | LangGraph orchestration, caching and bounded revision |
-| `native-host/` | Allowlisted local backend launcher for the browser extension |
-| `.agents/skills/career-retrospective-to-job/` | Profile interview and persistent career-context rules |
-| `.agents/skills/resume-to-word/` | Evidence-bound two-page DOCX resume rules |
-| `docs/` | Product, architecture, workflow and BOSS platform decisions |
+| Job collection | Capture rendered BOSS job cards, open visible details sequentially, complete missing JDs, and sync them to SQLite |
+| Intent queues | Keep Product, Algorithm, or other queues separate while globally deduplicating jobs and application history |
+| Candidate profile | Import DOCX/PDF/TXT/Markdown resumes, hold ProfileAgent conversations, and persist only user-confirmed facts |
+| Agent workflow | Apply a risk gate, score fit, generate a tailored resume, verify JD coverage and claims, revise when evidence allows, and audit the result |
+| Resume output | Generate a two-page-oriented DOCX with template controls, render QA, source mappings, and version history |
+| Application tracking | Open the selected BOSS page and record manual contact/application progress without claiming an unverified platform action |
 
-## Requirements
-
-- Node.js **24 or newer**. The backend uses the built-in `node:sqlite` API.
-- npm, included with Node.js.
-- Chrome or Edge with Developer mode enabled.
-- A BOSS Zhipin account that the user signs into manually.
-- Windows for the packaged Native Messaging launcher.
-- macOS/Linux can run the backend manually with `npm run server`; the provided Native Host installer is Windows-specific.
-- An OpenAI-compatible model endpoint is optional for collection and rule-only checks, but required for ProfileAgent dialogue and the default model-backed resume generation path.
+The project does not bypass login, CAPTCHA, security checks, rate limits, or platform permissions. Collection pauses when BOSS requires user verification. The default UI does not perform real resume upload or final submission; a historical single-job greeting canary remains disabled and is not part of the normal workflow.
 
 ## 10-Minute Quick Start
 
-### 1. Clone and install
+### 1. Install prerequisites
+
+- Node.js **24 or newer** (`node:sqlite` is required)
+- npm
+- Chrome or Edge with Developer mode enabled
+- A BOSS Zhipin account that the user signs into manually
+- Windows for the packaged Native Messaging launcher; other systems can start the backend manually
+
+### 2. Clone and install
 
 ```powershell
 git clone https://github.com/MissingDanial/careerflow-local.git
@@ -91,45 +40,39 @@ npm ci
 node --version
 ```
 
-The Node version must report `v24` or newer.
+### 3. Load the browser extension
 
-### 2. Load the unpacked extension
-
-Chrome:
-
-1. Open `chrome://extensions/`.
+1. Open `chrome://extensions/` or `edge://extensions/`.
 2. Enable **Developer mode**.
-3. Choose **Load unpacked**.
-4. Select this repository's `extension` directory.
-5. Keep the page open until the Native Host is installed.
+3. Select **Load unpacked**.
+4. Choose this repository's `extension` directory.
+5. Keep the extension page open until the optional Native Host is installed.
 
-Edge uses the same flow at `edge://extensions/`.
+The extension UI is currently in Simplified Chinese.
 
-### 3. Start the local backend
+### 4. Start the local backend
 
-#### Windows: install the one-click launcher
-
-Load the unpacked extension first, then run:
+Windows users can install the one-click launcher after loading the extension:
 
 ```powershell
 npm run native:install
 ```
 
-The installer builds the fixed Native Host, discovers the unpacked extension ID, registers it for the current Windows user, and creates a local backend token. Reload the extension after installation. The popup button `启动后端` means **Start backend**.
+Reload the extension after installation. The popup button `启动后端` starts the allowlisted local backend.
 
-If automatic extension-ID discovery fails, copy the 32-character ID from the extensions page and run:
+If extension-ID discovery fails, copy the 32-character ID from the extensions page and run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-native-host.ps1 -ExtensionId <extension-id> -Browser Chrome
 ```
 
-#### Any supported OS: run the backend manually
+Manual startup works on every supported system:
 
 ```powershell
 npm run server
 ```
 
-Keep that terminal open. Verify the backend in another terminal:
+Keep that terminal open and verify the service:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8787/health
@@ -141,144 +84,163 @@ Expected response:
 {"ok":true,"service":"boss-find-backend"}
 ```
 
-### 4. Configure a model
+### 5. Configure a model
 
-Open the extension, click the gear icon, then open `设置` (**Settings**) -> `基础模型服务` (**Base model provider**).
+Collection and rule-only checks can run without a model. ProfileAgent dialogue and the default tailored-resume path require an OpenAI-compatible endpoint.
 
-Enter:
+Open the extension gear icon, then go to `设置` -> `基础模型服务`. Enter the Base URL, model, Responses or Chat Completions protocol, and API key. Save the configuration and run the connection test.
 
-- Base URL, for example `https://api.openai.com/v1`
-- Model name
-- Wire API: Responses or Chat Completions
-- API key
-- Optional reasoning effort, timeout and retry values
+Credentials are backend-owned and stored only in the ignored local file:
 
-Choose `保存配置` (**Save**) and then `测试连接` (**Test connection**).
+```text
+server/data/model-provider.local.json
+```
 
-The API key is written only to the ignored local file `server/data/model-provider.local.json`. It is not stored in extension settings, API responses, logs, or Git.
-
-To use the tested M18 speed routing defaults, create the ignored local overlay before configuring the provider:
+For the recommended M18 routing defaults, create the ignored local overlay:
 
 ```powershell
 Copy-Item boss-model.example.json boss-model.local.json
 ```
 
-On macOS/Linux, use `cp boss-model.example.json boss-model.local.json`.
+Change the example model names if the configured provider exposes different models.
 
-This route uses a model for ResumeAgent and ResumeRevisionAgent, while Screening, Fit, Claim, and Audit remain deterministic. Update the model names in the local overlay if your provider does not expose the example models.
+## First Complete Workflow
 
-### 5. Run the first workflow
+1. Open `个人经历` in the workbench, upload a resume, and confirm the extracted facts. Use ProfileAgent dialogue to add or correct career evidence.
+2. Sign in to BOSS manually, open a filtered job list, select an intent queue in the extension popup, and click `开始岗位信息采集`.
+3. Keep the BOSS tab visible while the extension opens rendered jobs and completes their JDs. Use `暂停` or `重试` when the page requires attention.
+4. Open `Boss Find 工作台` and process the selected queue through its four stages: complete JD, screening, tailored resume, and manual contact/application.
+5. Review the final Agent checks and DOCX before opening the BOSS job page for manual execution.
 
-1. Open `个人经历` (**Profile**) in the workbench.
-2. Upload a DOCX, PDF, TXT, or Markdown resume.
-3. Review and confirm extracted facts. Use ProfileAgent dialogue when a model is configured.
-4. Open and sign in to `https://www.zhipin.com/`, then navigate to a filtered job list.
-5. In the popup, select the target intent queue and click `开始岗位信息采集` (**Start collection**).
-6. Leave the BOSS list tab visible while job details are completed. Use `暂停` (**Pause**) or `重试` (**Retry**) when needed.
-7. Open `Boss Find 工作台` (**Boss Find workbench**).
-8. Process the four stages: complete JDs, screening, tailored resumes, and manual contact/application.
+Generated resumes are written to `server/data/generated_resumes/` unless another output directory is selected.
 
-The generated resumes are stored under `server/data/generated_resumes/` unless another output directory is selected in the workbench.
+## Agent Workflow
 
-## Everyday Workflow
+ProfileAgent is a persistent upstream profile builder. It runs only when the user imports evidence or edits the profile; it is not reset or called again for every job. Each job workflow freezes the confirmed profile, JD, options, and model configuration before entering LangGraph.
 
-### Candidate profile
+```mermaid
+flowchart TD
+    subgraph PROFILE["Persistent profile - user initiated"]
+        SOURCE["Resume, project evidence, and dialogue"] --> PROFILE_AGENT["ProfileAgent"]
+        PROFILE_AGENT --> DRAFTS["Pending fact drafts and follow-up questions"]
+        DRAFTS --> CONFIRM{"User confirms the facts?"}
+        CONFIRM -->|Yes| PROFILE_DB[("Confirmed profile and versioned career context")]
+        CONFIRM -->|Revise or reject| PROFILE_AGENT
+    end
 
-ProfileAgent is an upstream profile builder, not a per-job node. Confirmed profile facts and the generated `career_agent_context.md` persist across job workflows. Reopen ProfileAgent only when the user's history changes or the context becomes stale.
+    subgraph COLLECT["Signed-in BOSS collection"]
+        BOSS["Filtered BOSS job list"] --> EXTENSION["Chrome or Edge extension"]
+        EXTENSION --> JOB_DB[("Intent queues and complete JDs")]
+    end
 
-Default local context path:
+    PROFILE_DB --> SNAPSHOT["Freeze profile, JD, options, and model routes"]
+    JOB_DB --> SNAPSHOT
 
-```text
-server/data/career_context/career_agent_context.md
+    subgraph JOB_GRAPH["Per-job LangGraph quality loop"]
+        SNAPSHOT --> RISK{"JobRiskGate: excluded direction?"}
+        RISK -->|Blocked| SKIP["Skip or user review"]
+        RISK -->|Pass| SCREENING["ScreeningAgent"]
+        SCREENING --> DECISION{"Shortlist?"}
+        DECISION -->|No| SKIP
+        DECISION -->|Yes| RESUME["ResumeAgent"]
+        RESUME --> FIT["ResumeFitEvaluator"]
+        FIT --> CLAIM["ClaimVerifier"]
+        CLAIM --> REVISION_GATE{"Evidence-backed revision needed?"}
+        REVISION_GATE -->|Yes, revisions remain| REVISION["ResumeRevisionAgent"]
+        REVISION --> FIT
+        REVISION_GATE -->|Hard blocker or limit reached| REVIEW["Needs user review"]
+        REVISION_GATE -->|No blocker| RENDER["DocumentRenderer and Render QA"]
+        RENDER --> AUDIT["AuditAgent"]
+        AUDIT --> AUDIT_RESULT{"Approved?"}
+        AUDIT_RESULT -->|No| REVIEW
+        AUDIT_RESULT -->|Yes| DOCX["Local tailored DOCX"]
+    end
+
+    DOCX --> MANUAL["User contacts, uploads, confirms, and submits manually"]
 ```
 
-### Job collection and queues
+### Responsibility and control
 
-- Jobs are globally deduplicated by stable BOSS identifiers and detail URLs.
-- Queue membership is separate, so one job can appear in multiple intent queues without duplicating the application history.
-- Removing a job from a queue is a soft removal; recapturing the same page does not silently restore it.
-- The extension automatically skips jobs whose complete JD already exists locally.
+| Component | Responsibility | Hard boundary |
+| --- | --- | --- |
+| ProfileAgent | Turn uploaded evidence and dialogue into a reusable career profile | New facts remain pending until user confirmation |
+| JobRiskGate | Reject excluded directions before spending matching calls | A model cannot override a deterministic block |
+| ScreeningAgent | Score job/profile fit and recommend shortlist, review, or skip | Cannot trigger a BOSS action |
+| ResumeAgent | Select confirmed evidence and write a JD-tailored resume | Cannot invent experience, metrics, or skills |
+| ResumeFitEvaluator | Check visible resume evidence against JD requirements | Covered/weak results require exact resume evidence |
+| ClaimVerifier | Map every claim to confirmed sources | Unsupported claims block approval |
+| ResumeRevisionAgent | Create a new version when confirmed evidence can repair a problem | Bounded retries; old versions are never overwritten |
+| DocumentRenderer | Generate DOCX and run render/page/section QA | Render failures remain blockers |
+| AuditAgent | Combine fit, claim, render, and policy evidence into the final decision | Model output cannot weaken deterministic gates |
 
-### Risk gate and screening
+The recommended M18 route uses a model only for ResumeAgent and ResumeRevisionAgent. Screening, Fit, Claim, and Audit remain deterministic by default. Per-Agent routes and `rules`, `llm`, `hybrid`, or `auto` modes can be changed in local settings.
 
-Users can enable excluded directions such as sales or livestreaming. A blocked direction is rejected before model scoring. Jobs can be explicitly trusted and re-screened from the selected queue when a false positive is confirmed.
-
-### Tailored resume workflow
+## Architecture and Local Data
 
 ```text
-ScreeningAgent
--> ResumeAgent
--> ResumeFitEvaluator
--> ClaimVerifier
--> ResumeRevisionAgent (only when evidence-bound work is possible)
--> Render QA
--> AuditAgent
+Signed-in BOSS page
+  -> Chrome/Edge MV3 extension
+  -> Node.js backend on 127.0.0.1:8787
+  -> SQLite, local profile, workflow traces, and DOCX files
 ```
 
-The default template hides standalone summary and skill sections. A required skill can be surfaced inside a project only when both a confirmed profile skill and a related project fact support it. Hidden fields do not count toward fit, and a rejected revision cannot bypass a blocker.
+| Path | Purpose |
+| --- | --- |
+| `extension/` | Collection popup, queue workbench, profile, settings, and diagnostics UI |
+| `server/src/server.js` | Local HTTP API |
+| `server/src/resume-workflow-graph.js` | LangGraph orchestration, bounded revision, telemetry, and cache integration |
+| `server/src/sqlite-store.js` | SQLite persistence and workflow records |
+| `native-host/` | Allowlisted local backend launcher |
+| `.agents/skills/career-retrospective-to-job/` | Profile interview, fact-boundary, and persistent career-context rules |
+| `.agents/skills/resume-to-word/` | Evidence-bound two-page DOCX resume rules |
+| `docs/` | Product, architecture, Agent, milestone, and BOSS platform decisions |
 
-### Manual application
-
-The workbench opens the selected BOSS job page and records manual progress. The user remains responsible for greeting, resume upload, confirmation, and submission. This is intentional: the project does not claim a successful platform action without readback evidence.
-
-## Local Data and Privacy
-
-The default data directory is `server/data/`, which is ignored by Git except for `.gitkeep`.
+All runtime data lives under ignored local paths:
 
 | Local path | Contents |
 | --- | --- |
-| `server/data/boss_find.sqlite3` | Jobs, queues, profile facts, Agent runs and workflow events |
-| `server/data/model-provider.local.json` | Backend-owned provider credentials and settings |
+| `server/data/boss_find.sqlite3` | Jobs, queues, profiles, Agent runs, and workflow events |
+| `server/data/model-provider.local.json` | Model credentials and provider settings |
 | `server/data/career_context/` | Versioned career context |
-| `server/data/generated_resumes/` | Generated DOCX resumes |
-| `server/data/execution_packages/` | Manual execution-package archives |
+| `server/data/generated_resumes/` | Generated DOCX files |
+| `server/data/execution_packages/` | Manual execution packages |
 | `server/data/logs/` | Native backend logs |
 
-Also ignored: `.env`, `gpt5.5.txt`, `boss-model.local.json`, databases, DOCX/PDF files, logs, and local evaluation output.
+API keys are not stored in extension settings, API responses, logs, or Git. When a model is enabled, the relevant JD and confirmed profile content is sent to the provider selected by the user.
 
-Before publishing a fork, run:
+## Quality Evidence
 
-```powershell
-git status --short --ignored
-npm run m13:repository-baseline:smoke
-```
+- Formal M16 evaluation: **27** complete samples, **75/75** model nodes successful, and **11/11** quality gates passed.
+- Claim support rate: **96.68%**; unsupported claims: **0**.
+- Current repository checks: **131** JavaScript files and **73** smoke scripts in CI.
+- M18 local benchmark on one fixed profile/JD: GPT-5.5 resume-only routing completed in **44.3 s** with one model call; repeated semantic inputs can return from workflow cache with zero model calls.
 
-## Model Quality and Latency
+These are engineering quality and latency measurements, not evidence of improved interview or application conversion.
 
-The formal M16 quality evaluation used 27 complete samples. All 75 model-backed nodes succeeded and all 11 quality gates passed. Claim support was 96.68%, unsupported claims were zero, and the run recorded model latency/token telemetry. These engineering metrics do not prove real application conversion.
+## Troubleshooting
 
-The M18 local comparison used the same confirmed profile and JD:
+| Symptom | Check first |
+| --- | --- |
+| Native Host unavailable | Load the extension before `npm run native:install`, pass the extension ID explicitly if needed, then reload the extension |
+| Backend does not start | Confirm Node 24+, run `npm run server`, check port `8787`, then open `http://127.0.0.1:8787/health` |
+| Model test fails | Verify Base URL, protocol, model name, timeout, and provider compatibility; inspect sanitized workflow errors |
+| Collection pauses | Complete login/CAPTCHA/security verification manually, keep the list visible, load more cards, then click Retry |
+| A refreshed job is skipped | Complete jobs are skipped by extension cache and backend identifiers; SQLite upsert is the final deduplication layer |
 
-| Route | Total time | Model calls | Revisions | Fit | Claims | Audit |
-| --- | ---: | ---: | ---: | --- | --- | --- |
-| GPT-5.5 Responses for Resume only; deterministic gates | 44.3 s | 1 | 0 | 67, no blocker | 54/54 supported | approve |
-| GPT-5.4-mini Chat for Resume/Revision; deterministic gates | 48.7 s | 2 | 1 | 62, no blocker | 54/54 supported | approve |
+Do not attempt to bypass BOSS security controls when diagnosing collection failures.
 
-The GPT-5.5 resume prompt was reduced from 8,157 to 4,561 input tokens. A repeated deterministic smoke run resolves from the semantic workflow cache with zero model calls. Results depend on the provider, model, JD, profile and local machine.
-
-## Development and Validation
-
-Install dependencies with the lockfile:
+## Development
 
 ```powershell
 npm ci
-```
-
-Useful checks:
-
-```powershell
 npm run check
-npm run test:profile
 npm run test:agents
 npm run test:extension
 npm run test:workflow
-npm run m18:agent-latency:smoke
 npm run test:ci
 ```
 
-The current CI tier covers 131 JavaScript files and 73 smoke scripts. GitHub Actions runs on Node.js 24 and installs Playwright Chromium for extension UI checks.
-
-Run a development backend with a separate data directory when testing manually:
+Use a separate data directory for manual development:
 
 ```powershell
 $env:BOSS_DATA_DIR = Join-Path $PWD '.local-dev-data'
@@ -286,73 +248,18 @@ $env:PORT = '8788'
 npm run server
 ```
 
-## Troubleshooting
+Before publishing a fork, run `git status --short --ignored` and `npm run m13:repository-baseline:smoke` to verify that credentials, databases, generated resumes, logs, and evaluation outputs remain untracked.
 
-### The popup says the Native Host is unavailable
-
-1. Confirm the unpacked extension was loaded before `npm run native:install`.
-2. Rerun the installer with the extension ID explicitly.
-3. Reload the extension from `chrome://extensions/` or `edge://extensions/`.
-4. Check `server/data/native-host/host-config.json` and `server/data/logs/`.
-
-### The backend does not start
-
-- Run `node --version`; Node 24+ is required.
-- Run `npm run server` directly to expose the startup error.
-- Check whether another process already uses `127.0.0.1:8787`.
-- Verify `http://127.0.0.1:8787/health` before debugging the extension.
-
-### The model connection test fails
-
-- Confirm the Base URL includes the provider's required `/v1` path.
-- Confirm the selected wire API is supported by that model.
-- Increase timeout for slow reasoning models.
-- Keep model names provider-specific; the example overlay is not a guarantee that every provider exposes those names.
-- Inspect sanitized Agent telemetry and workflow errors in Advanced diagnostics. Full API keys are intentionally never returned.
-
-### Collection pauses or no more JDs appear
-
-- Resolve login, CAPTCHA, or security checks manually, then click Retry.
-- Keep the job list tab active long enough for BOSS lazy loading.
-- Scroll the list to load more cards when the visible set is exhausted.
-- Review recent collection errors for selector drift.
-- Do not try to bypass platform security controls.
-
-### A job is skipped after refresh
-
-This is usually expected. Complete jobs are skipped using local extension cache plus backend keys, and SQLite upsert remains the final deduplication layer.
-
-## Repository Documentation
+## Detailed Documentation
 
 - [Product requirements](docs/01_PRD.md)
 - [Technical architecture](docs/02_TECH_ARCHITECTURE.md)
-- [Agent workflow](docs/03_AGENT_WORKFLOW.md)
-- [Development plan](docs/04_DEVELOPMENT_PLAN.md)
+- [Agent workflow and error handling](docs/03_AGENT_WORKFLOW.md)
+- [Development plan and milestone history](docs/04_DEVELOPMENT_PLAN.md)
 - [Open-source reuse decisions](docs/05_OPEN_SOURCE_REUSE.md)
 - [BOSS platform constraints](docs/06_BOSS_PLATFORM_LOGIC.md)
 - [Browser executor POC](docs/07_BROWSER_EXECUTOR_POC.md)
 - [Firecrawl decision](docs/08_FIRECRAWL_DECISION.md)
-
-The detailed documents are currently written in Chinese. Start with this README for the runnable path and use the Chinese README for the full milestone history.
-
-## Milestone Map
-
-- **M13.1-M13.5**: repository CI, SQLite migrations, immutable workflow inputs, transition invariants, and deterministic evaluation.
-- **M14.1**: default-off real greeting canary with one-time authorization and readback requirements.
-- **M15.1**: persistent ProfileAgent conversation memory and confirm-before-write profile updates.
-- **M16 / M16.1**: real-model quality evaluation and read-only Shadow review.
-- **M17 / M17.1**: intent queues, Native Host startup, model settings, four-stage workbench, and manual application tracking.
-- **M18**: semantic workflow cache, per-Agent model routing, prompt compaction, final-only DOCX rendering, and no-op revision removal.
-
-## Contributing
-
-Keep changes local-first and evidence-bound:
-
-- Do not add code that bypasses BOSS authentication, CAPTCHA, or security checks.
-- Do not persist raw API keys in extension storage, logs, fixtures, or tracked files.
-- Do not let model output weaken deterministic risk, claim, fit, render, or transition gates.
-- Add a focused smoke test for behavior changes and run `npm run test:ci` before publishing.
-- Preserve SQLite migration ordering and backward compatibility.
 
 ## License
 

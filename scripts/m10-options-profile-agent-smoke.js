@@ -15,7 +15,6 @@ function main() {
   const serverJs = read("server/src/server.js");
   const profileServiceJs = read("server/src/services/profile-service.js");
   const packageJson = read("package.json");
-  const readme = read("README.zh-CN.md");
   const workflowDoc = read("docs/03_AGENT_WORKFLOW.md");
   const planDoc = read("docs/04_DEVELOPMENT_PLAN.md");
 
@@ -103,8 +102,7 @@ function main() {
       && optionsCss.includes(".answer-row"),
     packageRunsThisSmoke: packageJson.includes("m10-options-profile-agent-smoke.js")
       && packageJson.includes("m10:options-profile-agent:smoke"),
-    docsMentionOptionsEntry: readme.includes("M10.2e")
-      && workflowDoc.includes("M10.2e")
+    docsMentionOptionsEntry: workflowDoc.includes("M10.2e")
       && planDoc.includes("M10.2e")
   };
 

@@ -247,7 +247,6 @@ function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const profileServiceJs = read("server/src/services/profile-service.js");
   const profileAgentJs = read("server/src/profile-agent.js");
-  const readme = read("README.zh-CN.md");
   const docsWorkflow = read("docs/03_AGENT_WORKFLOW.md");
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
   return {
@@ -261,8 +260,7 @@ function runWiringChecks() {
         && profileAgentJs.includes("readCareerContextFile")
         && profileAgentJs.includes("expression-risk")
         && profileServiceJs.includes("pendingFactsRemainPending"),
-      docsRecordProfileAgentPersistence: readme.includes("M10.2d")
-        && docsWorkflow.includes("M10.2d")
+      docsRecordProfileAgentPersistence: docsWorkflow.includes("M10.2d")
         && docsPlan.includes("M10.2d")
     }
   };

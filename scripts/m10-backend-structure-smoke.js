@@ -13,7 +13,6 @@ function main() {
   const resumeWorkflowServiceJs = read("server/src/services/resume-workflow-service.js");
   const serverUtilsJs = read("server/src/server-utils.js");
   const packageJson = read("package.json");
-  const readme = read("README.zh-CN.md");
   const planDoc = read("docs/04_DEVELOPMENT_PLAN.md");
 
   const checks = {
@@ -45,8 +44,7 @@ function main() {
     packageChecksNewFiles: packageJson.includes("check:syntax")
       && packageJson.includes("m10-backend-structure-smoke.js")
       && packageJson.includes("m10:backend-structure:smoke"),
-    docsMentionStructure: readme.includes("M10.5 Backend Service Structure")
-      && planDoc.includes("M10.5 Backend Service Structure")
+    docsMentionStructure: planDoc.includes("M10.5 Backend Service Structure")
   };
 
   const ok = Object.values(checks).every(Boolean);

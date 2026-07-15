@@ -118,7 +118,6 @@ function runWiringChecks() {
   const backgroundJs = read("extension/src/background.js");
   const optionsJs = read("extension/src/options.js");
   const packageJson = read("package.json");
-  const readme = read("README.zh-CN.md");
   const docsWorkflow = read("docs/03_AGENT_WORKFLOW.md");
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
   const docsReuse = read("docs/05_OPEN_SOURCE_REUSE.md");
@@ -142,8 +141,7 @@ function runWiringChecks() {
         && optionsJs.includes("formatSubmissionReadinessReview"),
       packageRunsThisSmoke: packageJson.includes("m9-submission-readiness-review-smoke.js")
         && packageJson.includes("m9:submission-readiness-review:smoke"),
-      docsRecordM95Boundary: readme.includes("M9.5")
-        && docsWorkflow.includes("M9.5")
+      docsRecordM95Boundary: docsWorkflow.includes("M9.5")
         && docsPlan.includes("M9.5")
         && docsReuse.includes("M9.5")
         && docsBoss.includes("M9.5")

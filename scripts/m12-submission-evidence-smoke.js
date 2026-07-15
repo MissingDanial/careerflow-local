@@ -144,7 +144,6 @@ function runWiringChecks() {
   const contentJs = read("extension/src/content.js");
   const optionsHtml = read("extension/src/options.html");
   const optionsJs = read("extension/src/options.js");
-  const readme = read("README.zh-CN.md");
   const docsWorkflow = read("docs/03_AGENT_WORKFLOW.md");
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
   const docsReuse = read("docs/05_OPEN_SOURCE_REUSE.md");
@@ -175,9 +174,8 @@ function runWiringChecks() {
         && optionsJs.includes("renderSubmissionEvidenceDetail"),
       packageRunsM12SmokeAndCheck: packageJson.includes("m12-submission-evidence-smoke.js")
         && packageJson.includes("m12:submission-evidence:smoke"),
-      docsRecordM12Boundary: readme.includes("M12.1")
-        && readme.includes("M12.2")
-        && docsWorkflow.includes("M12.1")
+      docsRecordM12Boundary: docsWorkflow.includes("M12.1")
+        && docsWorkflow.includes("M12.2")
         && docsPlan.includes("M12.2")
         && docsReuse.includes("M12")
         && docsBoss.includes("SUBMISSION_EVIDENCE_RECORDED")

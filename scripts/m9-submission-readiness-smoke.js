@@ -107,7 +107,6 @@ function runWiringChecks() {
   const optionsJs = read("extension/src/options.js");
   const storeJs = read("server/src/sqlite-store.js");
   const packageJson = read("package.json");
-  const readme = read("README.zh-CN.md");
   const docsWorkflow = read("docs/03_AGENT_WORKFLOW.md");
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
   const docsReuse = read("docs/05_OPEN_SOURCE_REUSE.md");
@@ -124,8 +123,7 @@ function runWiringChecks() {
         && optionsJs.includes("RESOLVE_SUBMISSION_BLOCKER"),
       packageRunsThisSmoke: packageJson.includes("m9-submission-readiness-smoke.js")
         && packageJson.includes("m9:submission-readiness:smoke"),
-      docsRecordM93Boundary: readme.includes("submissionReadiness")
-        && docsWorkflow.includes("submissionReadiness")
+      docsRecordM93Boundary: docsWorkflow.includes("submissionReadiness")
         && docsPlan.includes("submissionReadiness")
         && docsReuse.includes("submissionReadiness")
         && docsBoss.includes("submissionReadiness")

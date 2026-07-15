@@ -285,7 +285,6 @@ function runWiringChecks() {
   const backgroundJs = read("extension/src/background.js");
   const optionsHtml = read("extension/src/options.html");
   const optionsJs = read("extension/src/options.js");
-  const readme = read("README.zh-CN.md");
   const docsWorkflow = read("docs/03_AGENT_WORKFLOW.md");
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
   const docsReuse = read("docs/05_OPEN_SOURCE_REUSE.md");
@@ -332,8 +331,7 @@ function runWiringChecks() {
       packageRunsM11SmokeAndCheck: packageJson.includes("m11-execution-package-smoke.js")
         && packageJson.includes("m11:execution-package:smoke")
         && packageJson.includes("check:syntax"),
-      docsRecordM115: readme.includes("M11.5")
-        && docsWorkflow.includes("M11.5")
+      docsRecordM115: docsWorkflow.includes("M11.5")
         && docsPlan.includes("M11.5")
         && docsReuse.includes("M11.5")
         && docsBoss.includes("M11.5")

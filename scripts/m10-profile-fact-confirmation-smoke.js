@@ -171,7 +171,6 @@ function runWiringChecks() {
   const profileServiceJs = read("server/src/services/profile-service.js");
   const storeJs = read("server/src/sqlite-store.js");
   const packageJson = read("package.json");
-  const readme = read("README.zh-CN.md");
   const planDoc = read("docs/04_DEVELOPMENT_PLAN.md");
   return {
     checks: {
@@ -184,8 +183,7 @@ function runWiringChecks() {
         && storeJs.includes("createProfileFactDraftsFromResumeSource"),
       packageRunsThisSmoke: packageJson.includes("m10-profile-fact-confirmation-smoke.js")
         && packageJson.includes("m10:profile-facts:smoke"),
-      docsMentionM102f: readme.includes("M10.2f Profile Fact Confirmation")
-        && planDoc.includes("M10.2f Profile Fact Confirmation")
+      docsMentionM102f: planDoc.includes("M10.2f Profile Fact Confirmation")
     }
   };
 }

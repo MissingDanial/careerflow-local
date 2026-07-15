@@ -150,7 +150,6 @@ function runWiringChecks() {
   const optionsJs = read("extension/src/options.js");
   const storeJs = read("server/src/sqlite-store.js");
   const packageJson = read("package.json");
-  const readme = read("README.zh-CN.md");
   const docsWorkflow = read("docs/03_AGENT_WORKFLOW.md");
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
   const docsReuse = read("docs/05_OPEN_SOURCE_REUSE.md");
@@ -175,8 +174,7 @@ function runWiringChecks() {
         && storeJs.includes("submitted: false"),
       packageRunsThisSmoke: packageJson.includes("m9-submit-application-dry-run-smoke.js")
         && packageJson.includes("m9:submit-application-dry-run:smoke"),
-      docsRecordM92Boundary: readme.includes("SUBMIT_APPLICATION")
-        && docsWorkflow.includes("SUBMIT_APPLICATION")
+      docsRecordM92Boundary: docsWorkflow.includes("SUBMIT_APPLICATION")
         && docsPlan.includes("SUBMIT_APPLICATION")
         && docsReuse.includes("SUBMIT_APPLICATION")
         && docsBoss.includes("SUBMIT_APPLICATION")
