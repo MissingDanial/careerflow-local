@@ -176,7 +176,7 @@ function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const storeJs = read("server/src/sqlite-store.js");
   const orchestratorJs = read("server/src/workflow-orchestrator.js");
-  const readme = read("README.md");
+  const readme = read("README.zh-CN.md");
   const docsWorkflow = read("docs/03_AGENT_WORKFLOW.md");
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
   const docsReuse = read("docs/05_OPEN_SOURCE_REUSE.md");

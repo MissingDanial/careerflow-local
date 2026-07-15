@@ -15,7 +15,7 @@ function main() {
   const serverJs = read("server/src/server.js");
   const profileServiceJs = read("server/src/services/profile-service.js");
   const packageJson = read("package.json");
-  const readme = read("README.md");
+  const readme = read("README.zh-CN.md");
   const workflowDoc = read("docs/03_AGENT_WORKFLOW.md");
   const planDoc = read("docs/04_DEVELOPMENT_PLAN.md");
 

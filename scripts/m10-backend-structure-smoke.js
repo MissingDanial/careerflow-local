@@ -13,7 +13,7 @@ function main() {
   const resumeWorkflowServiceJs = read("server/src/services/resume-workflow-service.js");
   const serverUtilsJs = read("server/src/server-utils.js");
   const packageJson = read("package.json");
-  const readme = read("README.md");
+  const readme = read("README.zh-CN.md");
   const planDoc = read("docs/04_DEVELOPMENT_PLAN.md");
 
   const checks = {

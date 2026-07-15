@@ -247,7 +247,7 @@ function runWiringChecks() {
   const serverJs = read("server/src/server.js");
   const profileServiceJs = read("server/src/services/profile-service.js");
   const profileAgentJs = read("server/src/profile-agent.js");
-  const readme = read("README.md");
+  const readme = read("README.zh-CN.md");
   const docsWorkflow = read("docs/03_AGENT_WORKFLOW.md");
   const docsPlan = read("docs/04_DEVELOPMENT_PLAN.md");
   return {

@@ -12,6 +12,7 @@ const sqliteStoreSource = readText("server/src/sqlite-store.js");
 const ciWorkflowSource = readText(".github/workflows/ci.yml");
 const developmentPlan = readText("docs/04_DEVELOPMENT_PLAN.md");
 const readme = readText("README.md");
+const readmeZh = readText("README.zh-CN.md");
 
 main();
 
@@ -19,6 +20,7 @@ function main() {
   const requiredPaths = [
     ".gitignore",
     "README.md",
+    "README.zh-CN.md",
     "boss-model.example.json",
     "package-lock.json",
     "extension/manifest.json",
@@ -180,7 +182,20 @@ function main() {
     readmeUsesCurrentMilestone: readme.includes("M13.1")
       && readme.includes("M14.1")
       && readme.includes("M16.1")
-      && readme.includes("npm run test:ci")
+      && readme.includes("M18")
+      && readme.includes("npm run test:ci"),
+    readmeLanguageNavigation: readme.includes("[简体中文](README.zh-CN.md)")
+      && readmeZh.includes("[English](README.md)"),
+    readmeQuickStartContract: readme.includes("## 10-Minute Quick Start")
+      && readme.includes("npm ci")
+      && readme.includes("chrome://extensions/")
+      && readme.includes("npm run native:install")
+      && readme.includes("npm run server")
+      && readme.includes("http://127.0.0.1:8787/health")
+      && readme.includes("server/data/model-provider.local.json"),
+    chineseReadmeKeepsDetailedOnboarding: readmeZh.includes("## 10 分钟开始使用")
+      && readmeZh.includes("npm run native:install")
+      && readmeZh.includes("M10.5 Backend Service Structure")
   };
 
   console.log(JSON.stringify({
