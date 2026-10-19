@@ -179,44 +179,35 @@ function main() {
       && developmentPlan.includes("### M13.4 application 状态迁移收敛")
       && developmentPlan.includes("### M13.5 Agent 评测集")
       && developmentPlan.includes("m13:agent-evaluation:smoke"),
-    readmeKeepsVerifiedStatus: readme.includes("Formal M16 evaluation")
-      && readme.includes("M18 local benchmark")
-      && readme.includes("npm run test:ci")
-      && readmeZh.includes("M16 正式评测")
-      && readmeZh.includes("M18 固定画像/JD 本地基准"),
+    readmeKeepsDevelopmentCommands: [readme, readmeZh].every((text) =>
+      text.includes("npm run check") && text.includes("npm run test:ci")),
     readmeLanguageNavigation: readme.includes("[简体中文](README.zh-CN.md)")
       && readmeZh.includes("[English](README.md)"),
-    readmeQuickStartContract: readme.includes("## 10-Minute Quick Start")
+    readmeQuickStartContract: readme.includes("## Quick Start")
       && readme.includes("npm ci")
       && readme.includes("chrome://extensions/")
       && readme.includes("npm run native:install")
       && readme.includes("npm run server")
       && readme.includes("http://127.0.0.1:8787/health")
-      && readme.includes("server/data/model-provider.local.json"),
-    chineseReadmeProvidesOnboarding: readmeZh.includes("## 10 分钟开始使用")
+      && readme.includes("server/data/")
+      && readme.includes("model-provider.local.json"),
+    chineseReadmeProvidesOnboarding: readmeZh.includes("## 快速开始")
+      && readmeZh.includes("npm ci")
+      && readmeZh.includes("chrome://extensions/")
+      && readmeZh.includes("npm run server")
+      && readmeZh.includes("http://127.0.0.1:8787/health")
       && readmeZh.includes("npm run native:install")
-      && readmeZh.includes("## 第一次完整使用")
-      && readmeZh.includes("server/data/model-provider.local.json"),
-    readmeAgentFlowContract: readme.includes("## Agent Workflow")
-      && readmeZh.includes("## Agent 处理流程")
-      && [
-        "ProfileAgent",
-        "JobRiskGate",
-        "ScreeningAgent",
-        "ResumeAgent",
-        "ResumeFitEvaluator",
-        "ClaimVerifier",
-        "ResumeRevisionAgent",
-        "DocumentRenderer",
-        "AuditAgent",
-        "REVISION --> FIT"
-      ].every((marker) => readme.includes(marker) && readmeZh.includes(marker)),
-    readmeDelegatesMilestoneHistory: readme.includes("[Development plan and milestone history](docs/04_DEVELOPMENT_PLAN.md)")
-      && readmeZh.includes("[开发计划和里程碑历史](docs/04_DEVELOPMENT_PLAN.md)")
+      && readmeZh.includes("## 使用流程")
+      && readmeZh.includes("server/data/")
+      && readmeZh.includes("model-provider.local.json"),
+    readmeLinksAgentDetails: readme.includes("](docs/03_AGENT_WORKFLOW.md)")
+      && readmeZh.includes("](docs/03_AGENT_WORKFLOW.md)"),
+    readmeDelegatesMilestoneHistory: readme.includes("](docs/04_DEVELOPMENT_PLAN.md)")
+      && readmeZh.includes("](docs/04_DEVELOPMENT_PLAN.md)")
       && !/^## M\d/m.test(readme)
       && !/^## M\d/m.test(readmeZh),
-    readmeStaysFocused: readme.split(/\r?\n/).length <= 300
-      && readmeZh.split(/\r?\n/).length <= 300
+    readmeStaysFocused: readme.split(/\r?\n/).length <= 120
+      && readmeZh.split(/\r?\n/).length <= 120
   };
 
   console.log(JSON.stringify({
